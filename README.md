@@ -143,6 +143,10 @@ waid/
 - **Search across briefs**, status filters, drag-to-reorder, archive view.
 - A richer markdown editor (CodeMirror / Tiptap / Milkdown).
 - A dedicated borderless "spotlight" window for quick capture.
+- **Sanitize the bundled seed briefs** in `briefs/` into generic samples. They
+  currently hold real project data (these get baked into the binary via
+  `include_str!` in `commands.rs` and seeded into `~/WAID/briefs` on first run),
+  so a fresh install should seed neutral placeholder content instead.
 
 Mobile/web versions and any auth/multi-user/sync are explicitly **not** planned —
 WAID is single-user, local, desktop-only by design.

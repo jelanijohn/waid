@@ -31,9 +31,52 @@ class ProjectStore {
   loading = $state(false);
   error = $state<string | null>(null);
 
+  /** Sidebar search query (matched against name/description/tags/body). */
+  query = $state("");
+  /** Active status filter, or null for "all". Archived is hidden unless picked. */
+  statusFilter = $state<string | null>(null);
+
   /** The currently selected brief, or null. */
   get selected(): Brief | null {
     return this.briefs.find((b) => b.path === this.selectedPath) ?? null;
+  }
+
+  /** Distinct statuses present in the data, for the filter pills. Known
+   *  statuses come first in a fixed order; any custom ones follow, sorted. */
+  get statuses(): string[] {
+    const rank = (s: string) =>
+      ["active", "paused", "blocked", "archived"].indexOf(s.toLowerCase());
+    const byLower = new Map<string, string>(); // lowercased → original spelling
+    for (const b of this.briefs) {
+      const s = (b.status ?? "").trim();
+      if (s && !byLower.has(s.toLowerCase())) byLower.set(s.toLowerCase(), s);
+    }
+    return [...byLower.values()].sort((a, b) => {
+      const ra = rank(a), rb = rank(b);
+      if (ra !== rb) return (ra === -1 ? 99 : ra) - (rb === -1 ? 99 : rb);
+      return a.localeCompare(b);
+    });
+  }
+
+  /** Briefs shown in the sidebar after applying search + status filter.
+   *  With no status filter, archived briefs are hidden; selecting the
+   *  "archived" pill is what surfaces them (the archive view). */
+  get filtered(): Brief[] {
+    const q = this.query.trim().toLowerCase();
+    const status = this.statusFilter?.toLowerCase() ?? null;
+    return this.briefs.filter((b) => {
+      const s = (b.status ?? "").toLowerCase();
+      if (status) {
+        if (s !== status) return false;
+      } else if (s === "archived") {
+        return false;
+      }
+      if (!q) return true;
+      const hay = [b.name, b.description ?? "", b.tags.join(" "), b.body]
+        .join("\n")
+        .toLowerCase();
+      return hay.includes(q);
+    });
   }
 
   /** Index from normalised note name → brief, for resolving `[[wikilinks]]`. */

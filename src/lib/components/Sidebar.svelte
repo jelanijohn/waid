@@ -10,10 +10,26 @@
   let dark = $state(false);
   let creating = $state(false);
   let newName = $state("");
+  let searchEl = $state<HTMLInputElement>();
 
   onMount(() => {
     dark = initTheme();
+
+    // ⌘/Ctrl+F focuses the brief search box.
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        searchEl?.focus();
+        searchEl?.select();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   });
+
+  function toggleStatus(status: string) {
+    projects.statusFilter = projects.statusFilter === status ? null : status;
+  }
 
   function toggleTheme() {
     dark = !dark;
@@ -73,6 +89,37 @@
     </button>
   </header>
 
+  <!-- Search + status filters -->
+  {#if projects.briefs.length > 0}
+    <div class="border-b border-slate-200 px-3 py-2 dark:border-slate-800">
+      <input
+        bind:this={searchEl}
+        class="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:ring-2 focus:ring-sky-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+        placeholder="Search projects… (⌘/Ctrl+F)"
+        type="search"
+        bind:value={projects.query}
+        onkeydown={(e) => {
+          if (e.key === "Escape") projects.query = "";
+        }}
+      />
+      {#if projects.statuses.length > 1}
+        <div class="mt-2 flex flex-wrap gap-1">
+          {#each projects.statuses as status (status)}
+            <button
+              class="rounded-full px-2 py-0.5 text-xs font-medium capitalize transition-colors {projects.statusFilter ===
+              status
+                ? 'bg-sky-600 text-white'
+                : 'bg-slate-200 text-slate-600 hover:bg-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'}"
+              onclick={() => toggleStatus(status)}
+            >
+              {status}
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  {/if}
+
   <!-- Project list -->
   <nav class="flex-1 overflow-y-auto p-2">
     {#if projects.loading && projects.briefs.length === 0}
@@ -83,9 +130,11 @@
       <p class="px-2 py-3 text-sm text-slate-500">
         No briefs yet. Create one below.
       </p>
+    {:else if projects.filtered.length === 0}
+      <p class="px-2 py-3 text-sm text-slate-500">No matching projects.</p>
     {/if}
 
-    {#each projects.briefs as brief (brief.path)}
+    {#each projects.filtered as brief (brief.path)}
       <button
         class="mb-1 w-full rounded-lg px-3 py-2 text-left transition-colors {brief.path ===
         projects.selectedPath

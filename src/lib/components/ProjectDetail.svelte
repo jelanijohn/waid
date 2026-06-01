@@ -11,6 +11,7 @@
   // This component is mounted under {#key brief.path}, so local state resets
   // automatically when the selection changes — no effects needed.
   let editing = $state(false);
+  // svelte-ignore state_referenced_locally -- intentional: {#key brief.path} remounts this component, re-seeding draft from the new brief.
   let draft = $state(brief.raw);
   let saving = $state(false);
 

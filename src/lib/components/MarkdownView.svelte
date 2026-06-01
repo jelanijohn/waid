@@ -22,6 +22,6 @@
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-<div class="markdown text-slate-700 dark:text-slate-300" onclick={onClick}>
+<div class="markdown" onclick={onClick}>
   {@html html}
 </div>

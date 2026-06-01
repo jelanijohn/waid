@@ -2,6 +2,7 @@
   import { projects } from "$lib/stores/projects.svelte";
   import { toasts } from "$lib/stores/toasts.svelte";
   import { appendCapture } from "$lib/tauri";
+  import Icon from "./Icon.svelte";
 
   let { open, onclose }: { open: boolean; onclose: () => void } = $props();
 
@@ -13,8 +14,7 @@
   let wasOpen = $state(false);
   $effect(() => {
     if (open && !wasOpen) {
-      targetPath =
-        projects.selectedPath ?? projects.briefs[0]?.path ?? "";
+      targetPath = projects.selectedPath ?? projects.briefs[0]?.path ?? "";
       note = "";
     }
     wasOpen = open;
@@ -30,7 +30,7 @@
     try {
       const updated = await appendCapture(targetPath, text);
       projects.upsert(updated);
-      toasts.success("Captured");
+      toasts.push("Captured 🎉", "success");
       note = "";
       onclose();
     } catch (e) {
@@ -49,7 +49,8 @@
 {#if open}
   <!-- Backdrop -->
   <div
-    class="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-32"
+    class="anim-fade fixed inset-0 z-50 flex items-start justify-center"
+    style="background: rgba(10,20,40,0.45); padding-top: 16vh;"
     role="presentation"
     onclick={(e) => {
       if (e.target === e.currentTarget) onclose();
@@ -57,15 +58,17 @@
   >
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
-      class="w-full max-w-lg rounded-xl bg-white p-4 shadow-2xl dark:bg-slate-800"
+      class="anim-pop w-[min(92%,520px)] rounded-[14px] border p-4 shadow-[0_24px_60px_rgba(10,20,40,0.4)]"
+      style="background: var(--bg); border-color: var(--border);"
       onkeydown={onKeydown}
     >
-      <div class="mb-3 flex items-center justify-between">
-        <h3 class="text-sm font-semibold text-slate-900 dark:text-slate-100">
-          Quick capture
+      <div class="mb-3 flex items-center justify-between gap-3">
+        <h3 class="flex items-center gap-[7px] text-[14px] font-semibold text-[var(--fg)]">
+          <Icon name="bolt" size={16} fill={1} /> Quick capture
         </h3>
         <select
-          class="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200"
+          class="rounded-lg border px-2 py-1 text-[12px] text-[var(--fg)] outline-none"
+          style="background: var(--input-bg); border-color: var(--border);"
           bind:value={targetPath}
         >
           {#each projects.briefs as b (b.path)}
@@ -76,16 +79,17 @@
 
       <!-- svelte-ignore a11y_autofocus -->
       <textarea
-        class="h-28 w-full resize-none rounded-lg border border-slate-300 bg-white p-3 text-sm text-slate-800 outline-none focus:ring-2 focus:ring-sky-500 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100"
+        class="h-[110px] w-full resize-none rounded-[10px] border p-[11px] text-[13px] text-[var(--fg)] outline-none placeholder:text-[var(--fg3)] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
+        style="background: var(--input-bg); border-color: var(--border);"
         placeholder="A thought just hit me…"
         bind:value={note}
         autofocus
       ></textarea>
 
       <div class="mt-3 flex items-center justify-between">
-        <span class="text-[11px] text-slate-400">⌘/Ctrl+Enter to save · Esc to close</span>
+        <span class="text-[11px] text-[var(--fg3)]">⌘/Ctrl+Enter to save · Esc to close</span>
         <button
-          class="rounded-md bg-sky-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50"
+          class="inline-flex h-[30px] items-center rounded-lg bg-[var(--accent)] px-4 text-[12.5px] font-medium text-white transition-[filter] hover:brightness-[1.06] disabled:opacity-50"
           onclick={submit}
           disabled={saving}
         >

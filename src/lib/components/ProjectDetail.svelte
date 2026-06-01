@@ -4,7 +4,9 @@
   import { toasts } from "$lib/stores/toasts.svelte";
   import { openExternal, fireWebhook } from "$lib/tauri";
   import { relativeTime } from "$lib/time";
+  import { statusColor } from "$lib/status";
   import MarkdownView from "./MarkdownView.svelte";
+  import Icon from "./Icon.svelte";
 
   let { brief }: { brief: Brief } = $props();
 
@@ -26,6 +28,16 @@
       ? " WSL needs a URL handler — install wslu so wslview forwards links to Windows."
       : "",
   );
+
+  // Pick a Material glyph for a launch link based on its label.
+  function iconForLink(label: string): string {
+    const l = label.toLowerCase();
+    if (l.includes("github")) return "code";
+    if (l.includes("docs") || l.includes("tauri")) return "menu_book";
+    if (l.includes("obsidian")) return "hub";
+    if (l.includes("claude")) return "auto_awesome";
+    return "north_east";
+  }
 
   async function openInObsidian() {
     if (!obsidianUri) return;
@@ -85,129 +97,150 @@
   }
 </script>
 
-<div class="flex h-screen flex-col">
+<div class="flex h-screen flex-col bg-[var(--bg)] text-[var(--fg)]">
   <!-- Header -->
-  <header class="border-b border-slate-200 px-8 py-5 dark:border-slate-800">
-    <div class="flex items-start justify-between gap-4">
-      <div class="min-w-0">
-        <h2 class="truncate text-2xl font-semibold text-slate-900 dark:text-slate-100">
-          {brief.name}
-        </h2>
-        {#if brief.description}
-          <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            {brief.description}
-          </p>
-        {/if}
-      </div>
-      <div class="flex shrink-0 items-center gap-2">
-        {#if editing}
-          <button
-            class="rounded-md px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
-            onclick={cancel}
-            disabled={saving}
-          >
-            Cancel
-          </button>
-          <button
-            class="rounded-md bg-sky-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50"
-            onclick={save}
-            disabled={saving}
-          >
-            {saving ? "Saving…" : "Save"}
-          </button>
-        {:else}
-          {#if obsidianUri}
+  <header
+    class="relative overflow-hidden border-b"
+    style="border-color: var(--border); padding: var(--pad-y) var(--pad-x) 16px;"
+  >
+    <!-- Faint diagonal accent wash -->
+    <div
+      class="pointer-events-none absolute inset-0"
+      style="background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 9%, transparent), transparent 55%);"
+    ></div>
+
+    <div class="relative">
+      <!-- Title row -->
+      <div class="flex items-start justify-between gap-4">
+        <div class="min-w-0">
+          <div class="flex items-center gap-[9px]">
+            {#if brief.status}
+              <span class="sdot h-2 w-2" style="--sc: {statusColor(brief.status)};"></span>
+            {/if}
+            <h2 class="truncate font-bold tracking-[-0.02em] text-[var(--fg)]" style="font-size: var(--title-size);">
+              {brief.name}
+            </h2>
+          </div>
+          {#if brief.description}
+            <p class="mt-[5px] max-w-[62ch] text-[13.5px] leading-[1.5] text-[var(--fg2)]">
+              {brief.description}
+            </p>
+          {/if}
+        </div>
+
+        <div class="flex shrink-0 gap-2">
+          {#if editing}
             <button
-              class="inline-flex items-center gap-1.5 rounded-md border border-violet-300 px-3 py-1.5 text-sm font-medium text-violet-700 hover:bg-violet-50 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/10"
-              title="Open this brief in Obsidian"
-              onclick={openInObsidian}
+              class="inline-flex h-[30px] items-center gap-[5px] rounded-lg border bg-[var(--bg)] px-3 text-[12.5px] font-medium text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)] disabled:opacity-50"
+              style="border-color: var(--border);"
+              onclick={cancel}
+              disabled={saving}
             >
-              Open in Obsidian ↗
+              Cancel
+            </button>
+            <button
+              class="inline-flex h-[30px] items-center gap-[5px] rounded-lg border border-transparent bg-[var(--accent)] px-3 text-[12.5px] font-medium text-white transition-[filter] hover:brightness-[1.06] disabled:opacity-50"
+              onclick={save}
+              disabled={saving}
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+          {:else}
+            {#if obsidianUri}
+              <button
+                class="inline-flex h-[30px] items-center gap-[5px] rounded-lg border bg-[var(--bg)] px-3 text-[12.5px] font-medium text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)]"
+                style="border-color: var(--border);"
+                title="Open this brief in Obsidian"
+                onclick={openInObsidian}
+              >
+                <Icon name="hub" size={14} /> Obsidian
+              </button>
+            {/if}
+            <button
+              class="inline-flex h-[30px] items-center gap-[5px] rounded-lg border bg-[var(--bg)] px-3 text-[12.5px] font-medium text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)]"
+              style="border-color: var(--border);"
+              onclick={() => {
+                draft = brief.raw;
+                editing = true;
+              }}
+            >
+              <Icon name="edit" size={14} /> Edit
             </button>
           {/if}
-          <button
-            class="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-            onclick={() => {
-              draft = brief.raw;
-              editing = true;
-            }}
-          >
-            Edit
-          </button>
-        {/if}
+        </div>
       </div>
-    </div>
 
-    <!-- Tags + meta -->
-    <div class="mt-3 flex flex-wrap items-center gap-2">
-      {#each brief.tags as tag (tag)}
-        <span
-          class="rounded-md bg-slate-100 px-2 py-0.5 text-xs text-slate-600 dark:bg-slate-800 dark:text-slate-300"
-        >
-          #{tag}
+      <!-- Tags + opened -->
+      <div class="mt-[14px] flex flex-wrap items-center gap-[7px]">
+        {#each brief.tags as tag (tag)}
+          <span class="rounded-md bg-[var(--chip-bg)] px-2 py-[2px] text-[11.5px] text-[var(--fg2)]">#{tag}</span>
+        {/each}
+        <span class="ml-[2px] inline-flex items-center gap-1 text-[11.5px] text-[var(--fg3)]">
+          <Icon name="schedule" size={13} /> Opened {relativeTime(brief.lastOpened)}
         </span>
-      {/each}
-      <span class="text-xs text-slate-400 dark:text-slate-500">
-        Opened {relativeTime(brief.lastOpened)}
-      </span>
-    </div>
-
-    <!-- Action buttons: links + webhooks -->
-    {#if brief.links.length || brief.webhooks.length}
-      <div class="mt-4 flex flex-wrap gap-2">
-        {#each brief.links as link (link.url + link.label)}
-          <button
-            class="inline-flex items-center gap-1 rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white"
-            onclick={() => openLink(link.url)}
-          >
-            {link.label || link.url} ↗
-          </button>
-        {/each}
-        {#each brief.webhooks as hook (hook.url + hook.label)}
-          <button
-            class="inline-flex items-center gap-1 rounded-md border border-amber-400 bg-amber-50 px-3 py-1.5 text-sm font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20"
-            title={`${hook.method} ${hook.url}`}
-            onclick={() => fire(hook)}
-          >
-            ⚡ {hook.label || hook.url}
-            <span class="text-[10px] opacity-70">{hook.method}</span>
-          </button>
-        {/each}
       </div>
-    {/if}
+
+      <!-- Launch row: links + webhooks -->
+      {#if brief.links.length || brief.webhooks.length}
+        <div class="mt-4 flex flex-wrap gap-2">
+          {#each brief.links as link (link.url + link.label)}
+            <button
+              class="inline-flex h-[30px] items-center gap-[6px] rounded-lg border px-[11px] text-[12px] font-medium transition-[filter] hover:brightness-[1.08]"
+              style="background: var(--launch-bg); color: var(--launch-fg); border-color: var(--launch-bd);"
+              onclick={() => openLink(link.url)}
+            >
+              <Icon name={iconForLink(link.label || link.url)} size={15} />
+              {link.label || link.url}
+              <Icon name="north_east" size={12} class="opacity-50" />
+            </button>
+          {/each}
+          {#each brief.webhooks as hook (hook.url + hook.label)}
+            <button
+              class="inline-flex h-[30px] items-center gap-[6px] rounded-lg border px-[11px] text-[12px] font-medium transition-[filter] hover:brightness-[1.08]"
+              style="background: var(--hook-bg); color: var(--hook-fg); border-color: var(--hook-bd);"
+              title={`${hook.method} ${hook.url}`}
+              onclick={() => fire(hook)}
+            >
+              <Icon name="bolt" size={15} fill={1} />
+              {hook.label || hook.url}
+              <span class="text-[9px] font-bold uppercase opacity-70">{hook.method}</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
   </header>
 
   <!-- Body: rendered view or editor -->
-  <div class="flex-1 overflow-y-auto px-8 py-6">
+  <div class="scroll-thin flex-1 overflow-y-auto" style="padding: var(--body-y) var(--pad-x);">
     {#if editing}
       <!-- svelte-ignore a11y_autofocus -->
       <textarea
-        class="h-full min-h-[60vh] w-full resize-none rounded-lg border border-slate-300 bg-white p-4 font-mono text-sm leading-relaxed text-slate-800 outline-none focus:ring-2 focus:ring-sky-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+        class="h-full min-h-[56vh] w-full resize-none rounded-[10px] border p-4 font-mono text-[12.5px] leading-[1.65] text-[var(--fg-body)] outline-none focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
+        style="background: var(--input-bg); border-color: var(--border);"
         bind:value={draft}
         onkeydown={onEditorKeydown}
         spellcheck="false"
         autofocus
       ></textarea>
-      <p class="mt-2 text-xs text-slate-400">
+      <p class="mt-2 text-[11px] text-[var(--fg3)]">
         Editing the raw file (frontmatter + markdown). ⌘/Ctrl+S to save.
       </p>
     {:else}
       <MarkdownView source={brief.body} />
 
       {#if backlinks.length}
-        <section class="mt-10 border-t border-slate-200 pt-4 dark:border-slate-800">
-          <h3
-            class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500"
-          >
+        <section class="mt-[30px] border-t pt-[18px]" style="border-color: var(--border);">
+          <h3 class="mb-[10px] text-[10.5px] font-semibold uppercase tracking-[0.08em] text-[var(--fg3)]">
             Linked from
           </h3>
-          <div class="flex flex-wrap gap-2">
+          <div class="flex flex-wrap gap-[7px]">
             {#each backlinks as link (link.path)}
               <button
-                class="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                class="inline-flex items-center gap-[5px] rounded-[7px] bg-[var(--chip-bg)] px-[10px] py-1 text-[11.5px] font-medium text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)]"
                 onclick={() => projects.select(link.path)}
               >
-                {link.name}
+                <Icon name="subdirectory_arrow_right" size={13} /> {link.name}
               </button>
             {/each}
           </div>
@@ -217,8 +250,10 @@
   </div>
 
   <footer
-    class="border-t border-slate-200 px-8 py-2 text-[11px] text-slate-400 dark:border-slate-800 dark:text-slate-500"
+    class="flex gap-[14px] border-t font-mono text-[10.5px] text-[var(--fg3)]"
+    style="border-color: var(--border); padding: 7px var(--pad-x);"
   >
-    {brief.path}
+    <span class="truncate">{brief.path}</span>
+    <span class="ml-auto shrink-0">⌘K capture · ⌘S save · ⌘F search</span>
   </footer>
 </div>

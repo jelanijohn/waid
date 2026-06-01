@@ -1,14 +1,95 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;450;500;600;700&family=Nunito:wght@600;700;800&family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20,400,0..1,0&display=swap");
 @import "tailwindcss";
 
 /* Class-based dark mode: toggle by adding/removing `dark` on <html>. */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* =========================================================================
+ * Tidewater theme tokens.
+ * Driven by CSS variables so light/dark, accent, and density all live in one
+ * place. `--accent` is overridable per-tree (set on the app shell), and the
+ * derived tokens (`--hover`, `--link`, …) resolve it lazily, so changing the
+ * accent recolors everything that references it.
+ * ========================================================================= */
 :root {
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    Helvetica, Arial, sans-serif;
+  --accent: #1e88e5; /* What's Next blue seed (overridable on the shell) */
+  --wn-brand-green: #40a87e; /* the "W" mark, fixed */
+
+  /* status / rock priority palette (shared across light + dark) */
+  --status-active: #81c784;
+  --status-paused: #ffb74d;
+  --status-blocked: #e57373;
+  --status-archived: #bdbdbd;
+
+  /* density (comfortable default; `.dense` tightens the detail pane) */
+  --pad-y: 22px;
+  --pad-x: 30px;
+  --body-y: 24px;
+  --title-size: 24px;
+  --md-size: 14px;
+
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+/* LIGHT */
+:root {
+  --bg: #ffffff;
+  --bar-bg: #ffffff;
+  --side-bg: #f5f8fd;
+  --border: #e4ebf4;
+  --hover: color-mix(in srgb, var(--accent) 7%, transparent);
+  --input-bg: #ffffff;
+  --chip-bg: #eaf1fb;
+  --fg: #1c2330;
+  --fg-body: #3a4150;
+  --fg2: #5e6675;
+  --fg3: #9aa2b1;
+  --code-bg: #eef2f8;
+  --code-fg: #334155;
+  --launch-bg: #1c2330;
+  --launch-fg: #ffffff;
+  --launch-bd: transparent;
+  --hook-bg: #fff6e8;
+  --hook-fg: #b45309;
+  --hook-bd: #fcd9a0;
+  --link: var(--accent);
+  --link-ul: color-mix(in srgb, var(--accent) 35%, transparent);
+  --quote-bar: color-mix(in srgb, var(--accent) 45%, #cdd8e6);
+  --quote-bg: #f5f8fd;
+  --sel-bg: #ffffff;
+  --sel-ring: var(--border);
+}
+
+/* DARK — applied under .dark on <html> */
+.dark {
+  --bg: #0f1722;
+  --bar-bg: #122031;
+  --side-bg: #0c1320;
+  --border: #1e2d40;
+  --hover: color-mix(in srgb, var(--accent) 14%, transparent);
+  --input-bg: #0f1b2b;
+  --chip-bg: #15243a;
+  --fg: #e9eff7;
+  --fg-body: #bfcad9;
+  --fg2: #8794a6;
+  --fg3: #5a6678;
+  --code-bg: #15243a;
+  --code-fg: #bfcad9;
+  --launch-bg: #e9eff7;
+  --launch-fg: #0f1722;
+  --launch-bd: transparent;
+  --hook-bg: rgba(255, 183, 77, 0.12);
+  --hook-fg: #f0b860;
+  --hook-bd: rgba(255, 183, 77, 0.3);
+  --link: color-mix(in srgb, var(--accent) 75%, #fff);
+  --link-ul: color-mix(in srgb, var(--accent) 50%, transparent);
+  --quote-bar: var(--accent);
+  --quote-bg: color-mix(in srgb, var(--accent) 8%, transparent);
+  --sel-bg: color-mix(in srgb, var(--accent) 10%, transparent);
+  --sel-ring: transparent;
 }
 
 html,
@@ -16,134 +97,224 @@ body {
   height: 100%;
 }
 
-/* Rendered-markdown styling. Kept lightweight and utilitarian — no typography
-   plugin so we stay dependency-light. Tweak here to restyle every brief. */
+/* Density: tightens the detail pane (applied on the app shell in +page). */
+.dense {
+  --pad-y: 16px;
+  --pad-x: 24px;
+  --body-y: 18px;
+  --title-size: 21px;
+  --md-size: 13px;
+}
+
+/* Material Symbols Rounded glyph span (see Icon.svelte). */
+.msym {
+  font-family: "Material Symbols Rounded";
+  font-weight: normal;
+  font-style: normal;
+  line-height: 1;
+  display: inline-block;
+  vertical-align: middle;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* =========================================================================
+ * Status pill / dot / rock helpers.
+ * Each element sets `--sc` (its status color) inline; these rules derive the
+ * tinted fill + text from it, with a different mix in dark mode.
+ * ========================================================================= */
+.pill {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 999px;
+  text-transform: capitalize;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--sc) 20%, transparent);
+  color: color-mix(in srgb, var(--sc) 74%, #000);
+}
+.dark .pill {
+  background: color-mix(in srgb, var(--sc) 26%, transparent);
+  color: var(--sc);
+}
+.sdot {
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--sc);
+}
+
+/* =========================================================================
+ * Custom scrollbars (sidebar list + detail body).
+ * ========================================================================= */
+.scroll-thin::-webkit-scrollbar {
+  width: 9px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--fg3) 40%, transparent);
+  border-radius: 9px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+/* =========================================================================
+ * Rendered-markdown styling (Tidewater). Applied to MarkdownView's container.
+ * Tweak here to restyle every brief.
+ * ========================================================================= */
 .markdown {
-  line-height: 1.65;
+  font-size: var(--md-size);
+  line-height: 1.7;
+  color: var(--fg-body);
+  max-width: 66ch;
   word-wrap: break-word;
 }
 .markdown > :first-child {
   margin-top: 0;
 }
+.markdown p {
+  margin: 0 0 14px;
+}
+.markdown strong {
+  font-weight: 600;
+  color: var(--fg);
+}
+.markdown em {
+  font-style: italic;
+}
 .markdown h1,
 .markdown h2,
 .markdown h3,
 .markdown h4 {
+  font-size: 13px;
   font-weight: 600;
-  line-height: 1.25;
-  margin: 1.4em 0 0.5em;
+  color: var(--fg);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 26px 0 10px;
 }
 .markdown h1 {
-  font-size: 1.6rem;
-}
-.markdown h2 {
-  font-size: 1.3rem;
-  border-bottom: 1px solid var(--color-slate-200);
-  padding-bottom: 0.25em;
-}
-:where(.dark) .markdown h2 {
-  border-color: var(--color-slate-700);
-}
-.markdown h3 {
-  font-size: 1.1rem;
-}
-.markdown p,
-.markdown ul,
-.markdown ol,
-.markdown blockquote,
-.markdown pre,
-.markdown table {
-  margin: 0.75em 0;
+  font-size: 15px;
 }
 .markdown ul,
 .markdown ol {
-  padding-left: 1.5em;
+  margin: 0 0 14px;
+  padding-left: 18px;
 }
 .markdown ul {
-  list-style: disc;
+  list-style: none;
 }
 .markdown ol {
   list-style: decimal;
 }
-.markdown a {
-  color: var(--color-sky-600);
-  text-decoration: underline;
+.markdown li {
+  position: relative;
+  margin: 0 0 7px;
 }
-:where(.dark) .markdown a {
-  color: var(--color-sky-400);
-}
-/* Obsidian-style wikilinks: resolved ones read like internal links, dangling
-   ones are muted + dashed to signal they point nowhere yet. */
-.markdown a.wikilink {
-  color: var(--color-violet-600);
-  text-decoration: none;
-  cursor: pointer;
-  border-bottom: 1px solid var(--color-violet-300);
-}
-.markdown a.wikilink:hover {
-  border-bottom-color: var(--color-violet-600);
-}
-:where(.dark) .markdown a.wikilink {
-  color: var(--color-violet-400);
-  border-bottom-color: var(--color-violet-500);
-}
-.markdown a.wikilink-missing {
-  color: var(--color-slate-400);
-  border-bottom-style: dashed;
-  border-bottom-color: var(--color-slate-300);
-  cursor: default;
-}
-:where(.dark) .markdown a.wikilink-missing {
-  color: var(--color-slate-500);
-  border-bottom-color: var(--color-slate-600);
+.markdown ul > li::before {
+  content: "";
+  position: absolute;
+  left: -14px;
+  top: 0.62em;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
 }
 .markdown code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.875em;
-  background: var(--color-slate-100);
-  padding: 0.15em 0.35em;
-  border-radius: 0.25rem;
-}
-:where(.dark) .markdown code {
-  background: var(--color-slate-800);
+  font-size: 0.84em;
+  background: var(--code-bg);
+  color: var(--code-fg);
+  padding: 1px 5px;
+  border-radius: 5px;
 }
 .markdown pre {
-  background: var(--color-slate-100);
+  background: var(--code-bg);
+  color: var(--code-fg);
   padding: 0.9em 1em;
-  border-radius: 0.5rem;
+  border-radius: 10px;
   overflow-x: auto;
-}
-:where(.dark) .markdown pre {
-  background: var(--color-slate-800);
+  margin: 0 0 14px;
 }
 .markdown pre code {
   background: transparent;
   padding: 0;
 }
+.markdown a {
+  color: var(--link);
+  text-decoration: none;
+  border-bottom: 1px solid var(--link-ul);
+  cursor: pointer;
+}
+.markdown a:hover {
+  border-bottom-color: var(--link);
+}
+/* Obsidian-style wikilinks: resolved ones read like internal links, dangling
+   ones are muted + dashed and non-interactive. */
+.markdown a.wikilink {
+  color: var(--link);
+  border-bottom: 1px solid var(--link-ul);
+}
+.markdown a.wikilink:hover {
+  border-bottom-color: var(--link);
+}
+.markdown a.wikilink-missing {
+  color: var(--fg3);
+  border-bottom-style: dashed;
+  border-bottom-color: var(--fg3);
+  cursor: default;
+}
 .markdown blockquote {
-  border-left: 3px solid var(--color-slate-300);
-  padding-left: 1em;
-  color: var(--color-slate-500);
+  margin: 0 0 16px;
+  padding: 10px 16px;
+  border-left: 3px solid var(--quote-bar);
+  background: var(--quote-bg);
+  color: var(--fg2);
+  font-style: italic;
+  border-radius: 0 8px 8px 0;
 }
 .markdown hr {
   border: none;
-  border-top: 1px solid var(--color-slate-200);
+  border-top: 1px solid var(--border);
   margin: 1.5em 0;
-}
-:where(.dark) .markdown hr {
-  border-color: var(--color-slate-700);
 }
 .markdown table {
   border-collapse: collapse;
   width: 100%;
+  margin: 0 0 14px;
 }
 .markdown th,
 .markdown td {
-  border: 1px solid var(--color-slate-300);
+  border: 1px solid var(--border);
   padding: 0.4em 0.6em;
   text-align: left;
 }
-:where(.dark) .markdown th,
-:where(.dark) .markdown td {
-  border-color: var(--color-slate-700);
+
+/* =========================================================================
+ * Entrance animations (modal + toasts).
+ * ========================================================================= */
+@keyframes tw-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes tw-pop {
+  from {
+    transform: translateY(-8px) scale(0.98);
+    opacity: 0;
+  }
+}
+@keyframes tw-toast {
+  from {
+    transform: translateY(8px) scale(0.96);
+    opacity: 0;
+  }
+}
+.anim-fade {
+  animation: tw-fade 140ms ease;
+}
+.anim-pop {
+  animation: tw-pop 180ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.anim-toast {
+  animation: tw-toast 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
 }

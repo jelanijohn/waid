@@ -4,11 +4,12 @@
 //! markdown body. We deliberately keep the format standard so the files remain
 //! portable and openable in any editor — and, down the road, an Obsidian vault.
 //!
-//! TODO(obsidian): The briefs directory is just a flat folder today. To back
-//! WAID with an Obsidian vault instead, swap the directory resolution in
-//! `briefs_dir()` for the vault path (and respect Obsidian's `.obsidian/`
-//! folder by skipping it in `list_briefs`). Nothing else in the format needs to
-//! change — frontmatter + markdown is already Obsidian-native.
+//! Obsidian: the briefs directory can be (a subfolder of) an Obsidian vault.
+//! `list_briefs` walks subdirectories recursively and skips dot-entries, so
+//! Obsidian's `.obsidian/` (and `.trash/`, `.git/`, …) never show up as briefs.
+//! `get_vault_info` walks up to the nearest `.obsidian/` so the frontend can
+//! offer "Open in Obsidian" deep links. The format needs nothing special —
+//! frontmatter + markdown (incl. `[[wikilinks]]`) is already Obsidian-native.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -256,26 +257,43 @@ fn dir_is_empty(dir: &Path) -> bool {
     }
 }
 
+// --- Obsidian vault detection ---------------------------------------------
+
+/// What the frontend needs to offer "Open in Obsidian". When the briefs dir is
+/// (inside) a vault, `root` is the vault folder and `name` its basename — the
+/// pieces of an `obsidian://open?vault=<name>&file=<relative path>` deep link.
+#[derive(Debug, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultInfo {
+    pub is_vault: bool,
+    pub name: Option<String>,
+    pub root: Option<String>,
+}
+
+/// Find the nearest enclosing Obsidian vault by walking up from `start` looking
+/// for an `.obsidian/` directory. Returns the vault root and its folder name.
+fn resolve_vault(start: &Path) -> Option<(PathBuf, String)> {
+    let mut current = Some(start);
+    while let Some(dir) = current {
+        if dir.join(".obsidian").is_dir() {
+            let name = dir.file_name()?.to_string_lossy().to_string();
+            return Some((dir.to_path_buf(), name));
+        }
+        current = dir.parent();
+    }
+    None
+}
+
 // --- Commands -------------------------------------------------------------
 
-/// List every `.md` brief in the configured directory, parsed and sorted by
-/// most-recently-opened (then name).
+/// List every `.md` brief under the configured directory, parsed and sorted by
+/// most-recently-opened (then name). Recurses into subfolders (Obsidian vaults
+/// nest notes) while skipping dot-entries like `.obsidian/`, `.trash/`, `.git/`.
 #[tauri::command]
 pub fn list_briefs(app: AppHandle) -> Result<Vec<Brief>, String> {
     let dir = briefs_dir(&app)?;
     let mut briefs: Vec<Brief> = Vec::new();
-
-    for entry in fs::read_dir(&dir).map_err(|e| format!("could not read briefs dir: {e}"))? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("md") {
-            continue;
-        }
-        match fs::read_to_string(&path) {
-            Ok(raw) => briefs.push(parse_brief(&path, raw)),
-            Err(e) => eprintln!("WAID: skipping {}: {e}", path.display()),
-        }
-    }
+    collect_briefs(&dir, &mut briefs)?;
 
     briefs.sort_by(|a, b| {
         b.last_opened
@@ -284,6 +302,30 @@ pub fn list_briefs(app: AppHandle) -> Result<Vec<Brief>, String> {
     });
 
     Ok(briefs)
+}
+
+/// Recursively gather `.md` briefs under `dir`, skipping hidden entries (any
+/// file or folder whose name starts with `.`). Unreadable files are skipped
+/// with a warning rather than failing the whole listing.
+fn collect_briefs(dir: &Path, out: &mut Vec<Brief>) -> Result<(), String> {
+    for entry in fs::read_dir(dir).map_err(|e| format!("could not read {}: {e}", dir.display()))? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|e| e.to_string())?;
+        if file_type.is_dir() {
+            collect_briefs(&path, out)?;
+        } else if path.extension().and_then(|s| s.to_str()) == Some("md") {
+            match fs::read_to_string(&path) {
+                Ok(raw) => out.push(parse_brief(&path, raw)),
+                Err(e) => eprintln!("WAID: skipping {}: {e}", path.display()),
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Read and parse a single brief by absolute path.
@@ -414,6 +456,37 @@ pub fn get_briefs_dir(app: AppHandle) -> Result<String, String> {
     Ok(briefs_dir(&app)?.to_string_lossy().to_string())
 }
 
+/// Best-effort detection of a WSL environment. Used only to tailor the
+/// "couldn't open URL" hint — WSL can't reach the Windows host without a URL
+/// handler like `wslview` (from the `wslu` package).
+#[tauri::command]
+pub fn is_wsl() -> bool {
+    if std::env::var_os("WSL_DISTRO_NAME").is_some() || std::env::var_os("WSL_INTEROP").is_some() {
+        return true;
+    }
+    fs::read_to_string("/proc/sys/kernel/osrelease")
+        .map(|s| {
+            let s = s.to_lowercase();
+            s.contains("microsoft") || s.contains("wsl")
+        })
+        .unwrap_or(false)
+}
+
+/// Report whether the active briefs directory sits inside an Obsidian vault,
+/// and if so the vault's name + root path (used to build deep links).
+#[tauri::command]
+pub fn get_vault_info(app: AppHandle) -> Result<VaultInfo, String> {
+    let dir = briefs_dir(&app)?;
+    Ok(match resolve_vault(&dir) {
+        Some((root, name)) => VaultInfo {
+            is_vault: true,
+            name: Some(name),
+            root: Some(root.to_string_lossy().to_string()),
+        },
+        None => VaultInfo::default(),
+    })
+}
+
 /// Point WAID at a different briefs directory and persist the choice.
 #[tauri::command]
 pub fn set_briefs_dir(app: AppHandle, dir: String) -> Result<String, String> {
@@ -508,5 +581,52 @@ mod tests {
         assert_eq!(slugify("What's Next?"), "what-s-next");
         assert_eq!(slugify("  Sample Research  "), "sample-research");
         assert_eq!(slugify("SampleApp"), "sampleapp");
+    }
+
+    /// Make a unique scratch directory under the system temp dir for a test.
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let base = std::env::temp_dir().join(format!("waid-test-{}-{}", tag, std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        base
+    }
+
+    #[test]
+    fn collect_briefs_recurses_and_skips_dot_dirs() {
+        let root = scratch_dir("collect");
+        fs::write(root.join("top.md"), "---\nname: Top\n---\nbody").unwrap();
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::write(root.join("sub").join("nested.md"), "---\nname: Nested\n---\nbody").unwrap();
+        // Things that must NOT be picked up.
+        fs::create_dir_all(root.join(".obsidian")).unwrap();
+        fs::write(root.join(".obsidian").join("app.md"), "should be skipped").unwrap();
+        fs::write(root.join("notes.txt"), "not markdown").unwrap();
+
+        let mut out = Vec::new();
+        collect_briefs(&root, &mut out).unwrap();
+        let mut names: Vec<_> = out.iter().map(|b| b.name.clone()).collect();
+        names.sort();
+        assert_eq!(names, vec!["Nested", "Top"]);
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn resolve_vault_walks_up_to_dot_obsidian() {
+        let root = scratch_dir("vault");
+        fs::create_dir_all(root.join(".obsidian")).unwrap();
+        let briefs = root.join("Projects").join("briefs");
+        fs::create_dir_all(&briefs).unwrap();
+
+        let (found_root, name) = resolve_vault(&briefs).expect("should find the vault");
+        assert_eq!(found_root, root);
+        assert_eq!(name, root.file_name().unwrap().to_string_lossy());
+
+        // A plain folder with no vault above it resolves to None.
+        let plain = scratch_dir("plain");
+        assert!(resolve_vault(&plain).is_none());
+
+        fs::remove_dir_all(&root).unwrap();
+        fs::remove_dir_all(&plain).unwrap();
     }
 }

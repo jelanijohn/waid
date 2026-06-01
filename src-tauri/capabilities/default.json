@@ -10,6 +10,10 @@
     "core:window:allow-set-focus",
     "core:window:allow-unminimize",
     "opener:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "obsidian://*" }]
+    },
     "dialog:default",
     "global-shortcut:default"
   ]

@@ -39,7 +39,7 @@ Two halves talking over Tauri's `invoke` bridge:
 
 **SvelteKit frontend** (`src/`) — Svelte 5 runes, SPA mode (`adapter-static`, `ssr = false` in `+layout.ts`). Tailwind v4 via the Vite plugin.
 - `lib/tauri.ts` is the **only** place that names backend commands / channels — thin typed wrappers around `invoke` and the dialog/opener plugins. Components and stores call these, never `invoke` directly. Keep new commands behind a wrapper here.
-- `lib/stores/projects.svelte.ts` (`ProjectStore`, a runes class) is the single source of truth for the brief list, selection, and briefs dir. `select()` stamps `last_opened` via `touch_brief` then `upsert`s in place; `upsert` deliberately does **not** reorder the list (sort order comes from the backend on full `load()`).
+- `lib/stores/projects.svelte.ts` (`ProjectStore`, a runes class) is the single source of truth for the brief list, selection, briefs dir, and `vault` info. `select()` stamps `last_opened` via `touch_brief` then `upsert`s in place; `upsert` deliberately does **not** reorder the list (sort order comes from the backend on full `load()`). Obsidian wiring lives here too and is **purely frontend** (computed from the loaded brief list): `resolveWikilink` / `nameIndex` map `[[targets]]` to briefs, `backlinksFor` scans bodies, `obsidianUri` builds the `obsidian://open` deep link from `vault` + path. The only backend dependency is `get_vault_info`.
 - `lib/types.ts` mirrors the Rust `Brief`/`Link`/`Webhook` structs — keep the two in sync when changing the data shape (Rust serializes `camelCase`).
 - `routes/+page.svelte` is the two-pane shell (`Sidebar` + `ProjectDetail`) and wires quick-capture: an in-window ⌘/Ctrl+K listener plus a `waid://quick-capture` event emitted from Rust when the global Ctrl+Shift+Space hotkey fires.
 
@@ -47,8 +47,10 @@ Two halves talking over Tauri's `invoke` bridge:
 
 The repo's `briefs/*.md` are **seed templates**, not runtime data. They're baked into the binary via `include_str!` (`SEED_BRIEFS` in `commands.rs`). At runtime the app reads from the configured **briefs directory** — default `~/WAID/briefs`, overridable via `set_briefs_dir` (persisted to the app config dir's `settings.json`). On first run, if that directory is empty, the seeds are copied in. Editing the repo's `briefs/` folder does **not** affect a running app unless its briefs dir is pointed there. (The seeds are generic `sample-*.md` placeholders, safe to ship.)
 
+`list_briefs` walks the directory **recursively** and skips dot-entries (`.obsidian/`, `.trash/`, `.git/`, …), so the briefs dir can be an Obsidian vault or any subfolder of one. `get_vault_info` walks up from the briefs dir to the nearest `.obsidian/` and returns `{ isVault, name, root }` for building deep links.
+
 ## Conventions
 
 - New backend functionality = a `#[tauri::command]` in `commands.rs` + an entry in the `generate_handler!` list in `lib.rs` + a typed wrapper in `lib/tauri.ts`.
 - Frontend uses 2-space indent, double quotes, Svelte 5 runes (`$state`/`$derived`/`$props`). Stores that hold reactive state use the `.svelte.ts` extension.
-- The brief format is intentionally standard frontmatter + markdown (Obsidian-native). There's a planned `TODO(obsidian)` in `commands.rs` to back the briefs dir with an Obsidian vault — don't introduce a proprietary format.
+- The brief format is intentionally standard frontmatter + markdown (Obsidian-native), and the briefs dir can be an Obsidian vault — don't introduce a proprietary format or anything that breaks opening the files directly in Obsidian.

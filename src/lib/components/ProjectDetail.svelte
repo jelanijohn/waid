@@ -14,6 +14,29 @@
   let draft = $state(brief.raw);
   let saving = $state(false);
 
+  // Obsidian deep link (null unless the briefs dir is inside a vault).
+  let obsidianUri = $derived(projects.obsidianUri(brief));
+  // Briefs that wikilink to this one.
+  let backlinks = $derived(projects.backlinksFor(brief.path));
+
+  // WSL can't reach the Windows host without a URL handler; hint at the fix.
+  let wslHint = $derived(
+    projects.isWsl
+      ? " WSL needs a URL handler — install wslu so wslview forwards links to Windows."
+      : "",
+  );
+
+  async function openInObsidian() {
+    if (!obsidianUri) return;
+    try {
+      await openExternal(obsidianUri);
+    } catch (e) {
+      toasts.error(
+        `Could not open Obsidian (${e}). Make sure Obsidian is installed and this vault is open in it.${wslHint}`,
+      );
+    }
+  }
+
   async function save() {
     saving = true;
     try {
@@ -36,7 +59,7 @@
     try {
       await openExternal(url);
     } catch (e) {
-      toasts.error(`Could not open link: ${e}`);
+      toasts.error(`Could not open link (${e}).${wslHint}`);
     }
   }
 
@@ -92,6 +115,15 @@
             {saving ? "Saving…" : "Save"}
           </button>
         {:else}
+          {#if obsidianUri}
+            <button
+              class="inline-flex items-center gap-1.5 rounded-md border border-violet-300 px-3 py-1.5 text-sm font-medium text-violet-700 hover:bg-violet-50 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/10"
+              title="Open this brief in Obsidian"
+              onclick={openInObsidian}
+            >
+              Open in Obsidian ↗
+            </button>
+          {/if}
           <button
             class="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
             onclick={() => {
@@ -160,6 +192,26 @@
       </p>
     {:else}
       <MarkdownView source={brief.body} />
+
+      {#if backlinks.length}
+        <section class="mt-10 border-t border-slate-200 pt-4 dark:border-slate-800">
+          <h3
+            class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500"
+          >
+            Linked from
+          </h3>
+          <div class="flex flex-wrap gap-2">
+            {#each backlinks as link (link.path)}
+              <button
+                class="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                onclick={() => projects.select(link.path)}
+              >
+                {link.name}
+              </button>
+            {/each}
+          </div>
+        </section>
+      {/if}
     {/if}
   </div>
 

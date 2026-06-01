@@ -72,6 +72,31 @@ body {
 :where(.dark) .markdown a {
   color: var(--color-sky-400);
 }
+/* Obsidian-style wikilinks: resolved ones read like internal links, dangling
+   ones are muted + dashed to signal they point nowhere yet. */
+.markdown a.wikilink {
+  color: var(--color-violet-600);
+  text-decoration: none;
+  cursor: pointer;
+  border-bottom: 1px solid var(--color-violet-300);
+}
+.markdown a.wikilink:hover {
+  border-bottom-color: var(--color-violet-600);
+}
+:where(.dark) .markdown a.wikilink {
+  color: var(--color-violet-400);
+  border-bottom-color: var(--color-violet-500);
+}
+.markdown a.wikilink-missing {
+  color: var(--color-slate-400);
+  border-bottom-style: dashed;
+  border-bottom-color: var(--color-slate-300);
+  cursor: default;
+}
+:where(.dark) .markdown a.wikilink-missing {
+  color: var(--color-slate-500);
+  border-bottom-color: var(--color-slate-600);
+}
 .markdown code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.875em;

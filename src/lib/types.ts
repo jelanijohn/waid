@@ -35,3 +35,12 @@ export interface WebhookResult {
   ok: boolean;
   body: string;
 }
+
+/** Whether the briefs dir lives in an Obsidian vault (see get_vault_info). */
+export interface VaultInfo {
+  isVault: boolean;
+  /** Vault folder name — the `vault` param of an obsidian:// deep link. */
+  name?: string | null;
+  /** Absolute path of the vault root (the folder containing `.obsidian/`). */
+  root?: string | null;
+}

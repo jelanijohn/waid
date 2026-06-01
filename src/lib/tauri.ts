@@ -4,7 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import type { Brief, WebhookResult } from "./types";
+import type { Brief, VaultInfo, WebhookResult } from "./types";
 
 export const listBriefs = () => invoke<Brief[]>("list_briefs");
 
@@ -27,6 +27,10 @@ export const fireWebhook = (
 export const getBriefsDir = () => invoke<string>("get_briefs_dir");
 
 export const setBriefsDir = (dir: string) => invoke<string>("set_briefs_dir", { dir });
+
+export const getVaultInfo = () => invoke<VaultInfo>("get_vault_info");
+
+export const isWsl = () => invoke<boolean>("is_wsl");
 
 export const createBrief = (name: string) => invoke<Brief>("create_brief", { name });
 

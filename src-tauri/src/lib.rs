@@ -57,6 +57,8 @@ pub fn run() {
             commands::fire_webhook,
             commands::get_briefs_dir,
             commands::set_briefs_dir,
+            commands::get_vault_info,
+            commands::is_wsl,
             commands::create_brief,
         ])
         .run(tauri::generate_context!())

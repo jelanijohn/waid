@@ -1,17 +1,33 @@
 // Central project (brief) state, Svelte 5 runes flavour.
 
-import type { Brief } from "$lib/types";
+import type { Brief, VaultInfo } from "$lib/types";
 import {
   listBriefs,
   getBriefsDir,
+  getVaultInfo,
+  isWsl as isWslCmd,
   touchBrief,
   saveBrief as saveBriefCmd,
 } from "$lib/tauri";
+
+/** Normalise a wikilink target / note name for case-insensitive matching. */
+function normalizeTarget(target: string): string {
+  // Drop any `#heading` / `|alias` and surrounding whitespace, then lowercase.
+  return target.split(/[#|]/)[0].trim().toLowerCase();
+}
+
+/** A brief's filename without the `.md` extension (its Obsidian note name). */
+function stem(brief: Brief): string {
+  return brief.fileName.replace(/\.md$/i, "");
+}
 
 class ProjectStore {
   briefs = $state<Brief[]>([]);
   selectedPath = $state<string | null>(null);
   briefsDir = $state<string>("");
+  vault = $state<VaultInfo>({ isVault: false });
+  /** True under WSL — used to add a handler hint when opening URLs fails. */
+  isWsl = $state(false);
   loading = $state(false);
   error = $state<string | null>(null);
 
@@ -20,12 +36,63 @@ class ProjectStore {
     return this.briefs.find((b) => b.path === this.selectedPath) ?? null;
   }
 
+  /** Index from normalised note name → brief, for resolving `[[wikilinks]]`. */
+  get nameIndex(): Map<string, Brief> {
+    const map = new Map<string, Brief>();
+    for (const b of this.briefs) {
+      // Filename stem is Obsidian's primary key; fall back to display name.
+      // First writer wins so the index is stable regardless of load order.
+      for (const key of [stem(b), b.name]) {
+        const norm = key.trim().toLowerCase();
+        if (norm && !map.has(norm)) map.set(norm, b);
+      }
+    }
+    return map;
+  }
+
+  /** Resolve a wikilink target to a brief, or null if it points nowhere. */
+  resolveWikilink(target: string): Brief | null {
+    return this.nameIndex.get(normalizeTarget(target)) ?? null;
+  }
+
+  /** Build an `obsidian://open` deep link for a brief, or null when not in a
+   *  vault (or the brief somehow sits outside the resolved vault root). */
+  obsidianUri(brief: Brief): string | null {
+    const { isVault, name, root } = this.vault;
+    if (!isVault || !name || !root) return null;
+    const sep = brief.path.includes("\\") ? "\\" : "/";
+    const prefix = root.endsWith(sep) ? root : root + sep;
+    if (!brief.path.startsWith(prefix)) return null;
+    // Vault-relative path, POSIX separators, no extension — Obsidian's `file`.
+    const rel = brief.path.slice(prefix.length).replace(/\\/g, "/").replace(/\.md$/i, "");
+    return `obsidian://open?vault=${encodeURIComponent(name)}&file=${encodeURIComponent(rel)}`;
+  }
+
+  /** Other briefs whose body wikilinks to the given one ("Linked from"). */
+  backlinksFor(path: string): Brief[] {
+    const target = this.briefs.find((b) => b.path === path);
+    if (!target) return [];
+    const keys = new Set([stem(target).toLowerCase(), target.name.toLowerCase()]);
+    const wikilink = /\[\[([^\]\n]+?)\]\]/g;
+    return this.briefs.filter((b) => {
+      if (b.path === path) return false;
+      let m: RegExpExecArray | null;
+      wikilink.lastIndex = 0;
+      while ((m = wikilink.exec(b.body))) {
+        if (keys.has(normalizeTarget(m[1]))) return true;
+      }
+      return false;
+    });
+  }
+
   /** (Re)load all briefs from disk. Keeps the current selection if it survives. */
   async load(): Promise<void> {
     this.loading = true;
     this.error = null;
     try {
       this.briefsDir = await getBriefsDir();
+      this.vault = await getVaultInfo();
+      this.isWsl = await isWslCmd();
       const briefs = await listBriefs();
       this.briefs = briefs;
       if (

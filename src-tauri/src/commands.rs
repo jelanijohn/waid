@@ -93,14 +93,26 @@ pub struct WebhookResult {
 // Bundled into the binary so the app has real content on first run regardless
 // of working directory. These mirror the files in the repo's `briefs/` folder.
 const SEED_BRIEFS: &[(&str, &str)] = &[
-    ("gluefi.md", include_str!("../../briefs/gluefi.md")),
-    ("blapp.md", include_str!("../../briefs/blapp.md")),
-    ("solaris.md", include_str!("../../briefs/solaris.md")),
     (
-        "the-thinking-room.md",
-        include_str!("../../briefs/the-thinking-room.md"),
+        "sample-web-app.md",
+        include_str!("../../briefs/sample-web-app.md"),
     ),
-    ("whats-next.md", include_str!("../../briefs/whats-next.md")),
+    (
+        "sample-mobile-app.md",
+        include_str!("../../briefs/sample-mobile-app.md"),
+    ),
+    (
+        "sample-side-project.md",
+        include_str!("../../briefs/sample-side-project.md"),
+    ),
+    (
+        "sample-research.md",
+        include_str!("../../briefs/sample-research.md"),
+    ),
+    (
+        "sample-archived.md",
+        include_str!("../../briefs/sample-archived.md"),
+    ),
 ];
 
 // --- Frontmatter parsing --------------------------------------------------
@@ -494,7 +506,7 @@ mod tests {
     #[test]
     fn slugify_handles_punctuation_and_spaces() {
         assert_eq!(slugify("What's Next?"), "what-s-next");
-        assert_eq!(slugify("  The Thinking Room  "), "the-thinking-room");
-        assert_eq!(slugify("Gluefi"), "gluefi");
+        assert_eq!(slugify("  Sample Research  "), "sample-research");
+        assert_eq!(slugify("SampleApp"), "sampleapp");
     }
 }

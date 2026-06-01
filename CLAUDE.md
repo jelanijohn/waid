@@ -45,7 +45,7 @@ Two halves talking over Tauri's `invoke` bridge:
 
 ### Briefs directory (important runtime detail)
 
-The repo's `briefs/*.md` are **seed templates**, not runtime data. They're baked into the binary via `include_str!` (`SEED_BRIEFS` in `commands.rs`). At runtime the app reads from the configured **briefs directory** — default `~/WAID/briefs`, overridable via `set_briefs_dir` (persisted to the app config dir's `settings.json`). On first run, if that directory is empty, the seeds are copied in. Editing the repo's `briefs/` folder does **not** affect a running app unless its briefs dir is pointed there. (Note: the repo seeds still contain real project data — `README.md`'s planned list tracks sanitizing them into generic samples.)
+The repo's `briefs/*.md` are **seed templates**, not runtime data. They're baked into the binary via `include_str!` (`SEED_BRIEFS` in `commands.rs`). At runtime the app reads from the configured **briefs directory** — default `~/WAID/briefs`, overridable via `set_briefs_dir` (persisted to the app config dir's `settings.json`). On first run, if that directory is empty, the seeds are copied in. Editing the repo's `briefs/` folder does **not** affect a running app unless its briefs dir is pointed there. (The seeds are generic `sample-*.md` placeholders, safe to ship.)
 
 ## Conventions
 

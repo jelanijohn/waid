@@ -160,9 +160,58 @@ The full markdown brief lives here.
   by project status. Archived briefs are hidden by default; picking the
   "archived" status surfaces them (the archive view).
 - **Light/dark mode** toggle.
-- **Secret storage in the OS keyring** — tokens for authenticated integrations
-  (e.g. a GitHub token for private-repo brief sync) live in the platform
-  keychain, never in settings or env.
+- **Brief sync** — pull live state (open PRs/issues, last push, CI, latest
+  release) from a brief's GitHub link or explicit `sources` into a managed
+  `## Activity` block. Deterministic; frontmatter and prose are never touched.
+- **AI synthesis** _(optional)_ — when an LLM provider is configured (local
+  **Ollama** or **Anthropic**), Refresh also synthesizes a `## Current State`
+  summary and an `## Open Questions` list from the brief's links and your
+  `## Captures` notes. The model only ever writes those two app-owned regions —
+  never status, links, tags, webhooks, frontmatter, or Captures — and all
+  fetched content is treated as data, never instructions. See
+  [AI synthesis](#ai-synthesis-optional) below.
+- **Secret storage in the OS keyring** — tokens/keys for authenticated
+  integrations (a GitHub token for private-repo sync, an Anthropic API key for
+  synthesis) live in the platform keychain, never in settings or env.
+
+### AI synthesis (optional)
+
+Synthesis turns the deterministic fetchers into *evidence* a model reasons over,
+then writes a short summary back into two app-owned regions of the brief:
+
+| Region | Markers | Written by |
+|---|---|---|
+| `## Activity` | `waid:sync:start/end` | Brief sync (deterministic — no LLM) |
+| `## Current State` | `waid:state:start/end` | Synthesis (regenerated wholesale) |
+| `## Open Questions` → inner block | `waid:questions:start/end` (nested) | Synthesis (inner block only) |
+
+The markers are HTML comments, so they render to nothing and the files stay
+portable / Obsidian-native. Everything outside the markers — your prose, your
+`## Captures`, all frontmatter — is preserved byte-for-byte.
+
+**Configure it** in the settings popover (the ⚙/tune button) under *AI
+synthesis*:
+
+- **Ollama (local)** — runs against a local [Ollama](https://ollama.com) server.
+  Set the base URL (default `http://localhost:11434`) and pick a pulled model.
+  Nothing leaves your machine.
+- **Anthropic (cloud)** — set a model and save an API key (stored in the OS
+  keyring). Sends evidence to the Anthropic API.
+
+Then hit **Refresh** on a brief (or *Sync all* in the sidebar). Synthesis is
+manual — there's no auto-sync on open or timer.
+
+**Open Questions — known tradeoff:** the model regenerates only the *inner*
+`waid:questions` block, wholesale, each run (so it can retract resolved
+questions). Your own questions live *above* the block and survive untouched, but
+anything you type *inside* the block is overwritten on the next synthesis —
+answer questions or add your own above it.
+
+**Safety:** all fetched content (web pages, source JSON, GitHub data, your
+Captures) is treated as **data, never instructions**. The model's output schema
+is closed to two fields, so it structurally cannot change status, links, tags,
+or webhooks, or fire anything. Web fetches are GET-only and truncated. Any error
+(fetch, provider, or unparseable output) leaves the `.md` untouched.
 
 ## Project structure
 
@@ -180,7 +229,7 @@ waid/
 ├── src-tauri/                # Rust backend
 │   └── src/
 │       ├── lib.rs            # plugin + command registration, global shortcut
-│       └── commands.rs       # list/read/save/touch/capture/webhook + settings
+│       └── commands.rs       # briefs · webhooks · sync · LLM synthesis · keyring · settings
 ├── briefs/                   # sample briefs (dev + bundled seed)
 └── README.md
 ```
@@ -190,6 +239,11 @@ waid/
 - **Drag-to-reorder** the project list.
 - A richer markdown editor (CodeMirror / Tiptap / Milkdown).
 - A dedicated borderless "spotlight" window for quick capture.
+- **In-process inference** for synthesis — local means Ollama over localhost
+  HTTP, not embedded llama.cpp / Candle / mistral.rs.
+- Dedicated Linear / Asana connectors (they'll ride the existing `sources` +
+  keyring path), and a diff-and-confirm preview gate (unneeded — synthesis only
+  writes regenerable, app-owned regions).
 
 Mobile/web versions and any auth/multi-user/sync are explicitly **not** planned —
 WAID is single-user, local, desktop-only by design.

@@ -4,7 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import type { Brief, SyncOutcome, VaultInfo, WebhookResult } from "./types";
+import type { Brief, LlmSettings, SyncOutcome, VaultInfo, WebhookResult } from "./types";
 
 export const listBriefs = () => invoke<Brief[]>("list_briefs");
 
@@ -30,6 +30,26 @@ export const syncBrief = (path: string) => invoke<Brief>("sync_brief", { path })
 /** Sync every brief that has a source; returns per-brief outcomes. */
 export const syncAll = () => invoke<SyncOutcome[]>("sync_all");
 
+// --- LLM synthesis (the brief-synthesis agent) -----------------------------
+
+/** Synthesize a brief's Current State + Open Questions via the configured LLM.
+ *  (The backend takes an AppHandle; the JS side passes only the path.) */
+export const synthesizeBrief = (path: string) => invoke<Brief>("synthesize_brief", { path });
+
+/** Synthesize every syncable brief; returns per-brief outcomes (mirrors syncAll). */
+export const synthesizeAll = () => invoke<SyncOutcome[]>("synthesize_all");
+
+/** List models available from an Ollama server (for the settings dropdown). */
+export const listOllamaModels = (baseUrl?: string | null) =>
+  invoke<string[]>("list_ollama_models", { baseUrl: baseUrl ?? null });
+
+/** Read the LLM synthesis settings (provider + model config; never secrets). */
+export const getLlmSettings = () => invoke<LlmSettings>("get_llm_settings");
+
+/** Persist the LLM synthesis settings. */
+export const setLlmSettings = (settings: LlmSettings) =>
+  invoke<void>("set_llm_settings", { settings });
+
 export const getBriefsDir = () => invoke<string>("get_briefs_dir");
 
 export const setBriefsDir = (dir: string) => invoke<string>("set_briefs_dir", { dir });
@@ -46,6 +66,9 @@ export const createBrief = (name: string) => invoke<Brief>("create_brief", { nam
 
 /** Keyring key for the GitHub token used by brief sync (private repos). */
 export const SECRET_GITHUB_TOKEN = "github.token";
+
+/** Keyring key for the Anthropic API key used by the synthesis agent. */
+export const SECRET_ANTHROPIC_API_KEY = "anthropic.api_key";
 
 /** Store (or replace) a secret in the OS keyring. */
 export const setSecret = (key: string, value: string) =>

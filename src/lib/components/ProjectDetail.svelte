@@ -20,6 +20,12 @@
 
   // Whether this brief has anything to sync (a GitHub link or explicit source).
   let syncable = $derived(isSyncableBrief(brief));
+  // Whether an LLM synthesis provider is configured (enables Current State +
+  // Open Questions on Refresh, even for briefs whose only signal is Captures).
+  let canSynthesize = $derived(projects.llmProvider !== null);
+  // Refresh is offered when there's deterministic data to sync OR a provider to
+  // synthesize with.
+  let canRefresh = $derived(syncable || canSynthesize);
 
   // Obsidian deep link (null unless the briefs dir is inside a vault).
   let obsidianUri = $derived(projects.obsidianUri(brief));
@@ -97,10 +103,14 @@
     if (syncing) return;
     syncing = true;
     try {
-      await projects.sync(brief.path);
-      toasts.success("Synced");
+      // Deterministic Activity sync first, then (when configured) LLM synthesis
+      // of Current State + Open Questions. Each step is independent so a sync
+      // failure still reports clearly.
+      if (syncable) await projects.sync(brief.path);
+      if (canSynthesize) await projects.synthesize(brief.path);
+      toasts.success(canSynthesize ? "Refreshed" : "Synced");
     } catch (e) {
-      toasts.error(`Sync failed: ${e}`);
+      toasts.error(`Refresh failed: ${e}`);
     } finally {
       syncing = false;
     }
@@ -163,16 +173,18 @@
               {saving ? "Saving…" : "Save"}
             </button>
           {:else}
-            {#if syncable}
+            {#if canRefresh}
               <button
                 class="inline-flex h-[30px] items-center gap-[5px] rounded-lg border bg-[var(--bg)] px-3 text-[12.5px] font-medium text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)] disabled:opacity-50"
                 style="border-color: var(--border);"
-                title="Refresh synced data from linked integrations"
+                title={canSynthesize
+                  ? "Refresh activity and re-synthesize Current State + Open Questions"
+                  : "Refresh synced data from linked integrations"}
                 onclick={refresh}
                 disabled={syncing}
               >
                 <Icon name="sync" size={14} class={syncing ? "spin" : ""} />
-                {syncing ? "Syncing…" : "Refresh"}
+                {syncing ? "Refreshing…" : "Refresh"}
               </button>
             {/if}
             {#if obsidianUri}

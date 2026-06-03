@@ -59,6 +59,16 @@ export interface WebhookResult {
   body: string;
 }
 
+/** LLM synthesis settings (see get_llm_settings / set_llm_settings).
+ *  `llmProvider` of "ollama" | "anthropic" enables the synthesis agent; null
+ *  disables it. Secrets (the Anthropic API key) live in the OS keyring, not here. */
+export interface LlmSettings {
+  llmProvider?: string | null;
+  ollamaUrl?: string | null;
+  ollamaModel?: string | null;
+  anthropicModel?: string | null;
+}
+
 /** Whether the briefs dir lives in an Obsidian vault (see get_vault_info). */
 export interface VaultInfo {
   isVault: boolean;

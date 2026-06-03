@@ -10,6 +10,9 @@ import {
   saveBrief as saveBriefCmd,
   syncBrief as syncBriefCmd,
   syncAll as syncAllCmd,
+  synthesizeBrief as synthesizeBriefCmd,
+  synthesizeAll as synthesizeAllCmd,
+  getLlmSettings,
 } from "$lib/tauri";
 import { settings } from "$lib/stores/settings.svelte";
 
@@ -42,6 +45,9 @@ class ProjectStore {
   vault = $state<VaultInfo>({ isVault: false });
   /** True under WSL — used to add a handler hint when opening URLs fails. */
   isWsl = $state(false);
+  /** Configured LLM synthesis provider ("ollama" | "anthropic"), or null when
+   *  synthesis is disabled. Drives whether Refresh also runs synthesis. */
+  llmProvider = $state<string | null>(null);
   loading = $state(false);
   error = $state<string | null>(null);
 
@@ -150,6 +156,7 @@ class ProjectStore {
       this.briefsDir = await getBriefsDir();
       this.vault = await getVaultInfo();
       this.isWsl = await isWslCmd();
+      await this.refreshLlmProvider();
       const briefs = await listBriefs();
       this.briefs = briefs;
       if (
@@ -196,9 +203,33 @@ class ProjectStore {
     return updated;
   }
 
+  /** Synthesize one brief's Current State + Open Questions via the LLM. */
+  async synthesize(path: string): Promise<Brief> {
+    const updated = await synthesizeBriefCmd(path);
+    this.upsert(updated);
+    return updated;
+  }
+
+  /** Re-read the configured synthesis provider from settings (null if off).
+   *  Called on load and after the settings UI changes the provider. */
+  async refreshLlmProvider(): Promise<void> {
+    try {
+      this.llmProvider = (await getLlmSettings()).llmProvider ?? null;
+    } catch {
+      this.llmProvider = null;
+    }
+  }
+
   /** Sync every syncable brief; reloads the list to pick up new bodies. */
   async syncAll(): Promise<SyncOutcome[]> {
     const outcomes = await syncAllCmd();
+    await this.load();
+    return outcomes;
+  }
+
+  /** Synthesize every syncable brief; reloads the list to pick up new bodies. */
+  async synthesizeAll(): Promise<SyncOutcome[]> {
+    const outcomes = await synthesizeAllCmd();
     await this.load();
     return outcomes;
   }

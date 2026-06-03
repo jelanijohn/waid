@@ -12,6 +12,10 @@
     deleteSecret,
     hasSecret,
     SECRET_GITHUB_TOKEN,
+    SECRET_ANTHROPIC_API_KEY,
+    getLlmSettings,
+    setLlmSettings,
+    listOllamaModels,
   } from "$lib/tauri";
   import { settings, ACCENTS, type SidebarStyle, type Density } from "$lib/stores/settings.svelte";
   import { STATUS_ORDER, STATUS_LABEL, statusColor } from "$lib/status";
@@ -29,6 +33,20 @@
   let ghToken = $state("");
   let ghStored = $state(false);
   let ghBusy = $state(false);
+
+  // LLM synthesis settings — managed from the settings popover.
+  // Provider "" means disabled; "ollama" / "anthropic" select a backend.
+  let llmProvider = $state<"" | "ollama" | "anthropic">("");
+  let ollamaUrl = $state("");
+  let ollamaModel = $state("");
+  let ollamaModels = $state<string[]>([]);
+  let ollamaError = $state("");
+  let anthropicModel = $state("");
+  let anthropicKey = $state("");
+  let anthropicStored = $state(false);
+  let llmBusy = $state(false);
+
+  const OLLAMA_DEFAULT_URL = "http://localhost:11434";
 
   onMount(() => {
     // ⌘/Ctrl+F focuses the search box; ⌘/Ctrl+N starts a new project.
@@ -85,6 +103,96 @@
     if (settingsOpen) {
       ghToken = "";
       refreshTokenStatus();
+      loadLlmSettings();
+    }
+  }
+
+  async function loadLlmSettings() {
+    try {
+      const s = await getLlmSettings();
+      llmProvider = (s.llmProvider as "" | "ollama" | "anthropic") ?? "";
+      ollamaUrl = s.ollamaUrl ?? OLLAMA_DEFAULT_URL;
+      ollamaModel = s.ollamaModel ?? "";
+      anthropicModel = s.anthropicModel ?? "";
+    } catch {
+      // Settings unreadable — fall back to disabled.
+      llmProvider = "";
+    }
+    anthropicKey = "";
+    try {
+      anthropicStored = await hasSecret(SECRET_ANTHROPIC_API_KEY);
+    } catch {
+      anthropicStored = false;
+    }
+    if (llmProvider === "ollama") fetchOllamaModels();
+  }
+
+  /** Persist the current synthesis settings and refresh the store's provider
+   *  flag (so the Refresh button reflects the change immediately). */
+  async function saveLlmSettings() {
+    try {
+      await setLlmSettings({
+        llmProvider: llmProvider || null,
+        ollamaUrl: ollamaUrl.trim() || null,
+        ollamaModel: ollamaModel.trim() || null,
+        anthropicModel: anthropicModel.trim() || null,
+      });
+      await projects.refreshLlmProvider();
+    } catch (e) {
+      toasts.error(`Could not save AI settings: ${e}`);
+    }
+  }
+
+  async function onProviderChange(value: string) {
+    llmProvider = value as "" | "ollama" | "anthropic";
+    await saveLlmSettings();
+    if (llmProvider === "ollama") fetchOllamaModels();
+  }
+
+  async function fetchOllamaModels() {
+    ollamaError = "";
+    try {
+      ollamaModels = await listOllamaModels(ollamaUrl.trim() || OLLAMA_DEFAULT_URL);
+      if (ollamaModels.length === 0) {
+        ollamaError = "No models found — pull one with `ollama pull …`.";
+      } else if (!ollamaModel && ollamaModels.length) {
+        // Default the selection to the first available model.
+        ollamaModel = ollamaModels[0];
+        await saveLlmSettings();
+      }
+    } catch (e) {
+      ollamaModels = [];
+      ollamaError = `Could not reach Ollama: ${e}`;
+    }
+  }
+
+  async function saveAnthropicKey() {
+    const value = anthropicKey.trim();
+    if (!value || llmBusy) return;
+    llmBusy = true;
+    try {
+      await setSecret(SECRET_ANTHROPIC_API_KEY, value);
+      anthropicKey = "";
+      anthropicStored = true;
+      toasts.success("Anthropic API key saved to keychain");
+    } catch (e) {
+      toasts.error(`Could not save key: ${e}`);
+    } finally {
+      llmBusy = false;
+    }
+  }
+
+  async function clearAnthropicKey() {
+    if (llmBusy) return;
+    llmBusy = true;
+    try {
+      await deleteSecret(SECRET_ANTHROPIC_API_KEY);
+      anthropicStored = false;
+      toasts.success("Anthropic API key removed");
+    } catch (e) {
+      toasts.error(`Could not remove key: ${e}`);
+    } finally {
+      llmBusy = false;
     }
   }
 
@@ -134,6 +242,14 @@
       const outcomes = await projects.syncAll();
       const failed = outcomes.filter((o) => !o.ok);
       const synced = outcomes.length - failed.length;
+      // When a provider is configured, also synthesize each syncable brief.
+      if (projects.llmProvider) {
+        try {
+          await projects.synthesizeAll();
+        } catch (e) {
+          toasts.error(`Synthesis failed: ${e}`);
+        }
+      }
       if (outcomes.length === 0) {
         toasts.push("Nothing to sync — no briefs have a GitHub link or source.", "info");
       } else if (failed.length === 0) {
@@ -360,6 +476,103 @@
             >
               Remove saved token
             </button>
+          {/if}
+
+          <!-- AI synthesis (Current State + Open Questions) -->
+          <div
+            class="mb-1 mt-3 border-t pt-3 text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--fg3)]"
+            style="border-color: var(--border);"
+          >
+            AI synthesis
+          </div>
+          <p class="mb-2 text-[10.5px] leading-snug text-[var(--fg3)]">
+            Summarize each brief's Current State &amp; Open Questions from its links and Captures.
+          </p>
+          <select
+            class="mb-2 w-full rounded-md border px-2 py-1 text-[11.5px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
+            style="background: var(--input-bg); border-color: var(--border);"
+            value={llmProvider}
+            onchange={(e) => onProviderChange(e.currentTarget.value)}
+          >
+            <option value="">Off</option>
+            <option value="ollama">Ollama (local)</option>
+            <option value="anthropic">Anthropic (cloud)</option>
+          </select>
+
+          {#if llmProvider === "ollama"}
+            <input
+              class="mb-1.5 w-full rounded-md border px-2 py-1 text-[11.5px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
+              style="background: var(--input-bg); border-color: var(--border);"
+              type="text"
+              autocomplete="off"
+              placeholder={OLLAMA_DEFAULT_URL}
+              bind:value={ollamaUrl}
+              onblur={() => {
+                saveLlmSettings();
+                fetchOllamaModels();
+              }}
+            />
+            <select
+              class="w-full rounded-md border px-2 py-1 text-[11.5px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
+              style="background: var(--input-bg); border-color: var(--border);"
+              bind:value={ollamaModel}
+              onchange={saveLlmSettings}
+            >
+              {#if ollamaModels.length === 0}
+                <option value="">No models found</option>
+              {:else}
+                {#each ollamaModels as m (m)}
+                  <option value={m}>{m}</option>
+                {/each}
+              {/if}
+            </select>
+            {#if ollamaError}
+              <p class="mt-1.5 text-[10.5px] leading-snug text-[var(--status-blocked)]">{ollamaError}</p>
+            {/if}
+          {:else if llmProvider === "anthropic"}
+            <input
+              class="mb-1.5 w-full rounded-md border px-2 py-1 text-[11.5px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
+              style="background: var(--input-bg); border-color: var(--border);"
+              type="text"
+              autocomplete="off"
+              placeholder="claude-haiku-4-5-20251001"
+              bind:value={anthropicModel}
+              onblur={saveLlmSettings}
+            />
+            <p class="mb-2 text-[10.5px] leading-snug text-[var(--fg3)]">
+              API key stored in your OS keychain.
+              {anthropicStored ? "A key is saved." : "No key saved."}
+            </p>
+            <div class="flex gap-1.5">
+              <input
+                class="min-w-0 flex-1 rounded-md border px-2 py-1 text-[11.5px] text-[var(--fg)] outline-none transition-colors focus:border-[var(--accent)]"
+                style="background: var(--input-bg); border-color: var(--border);"
+                type="password"
+                autocomplete="off"
+                placeholder={anthropicStored ? "Replace key…" : "sk-ant-…"}
+                bind:value={anthropicKey}
+                disabled={llmBusy}
+                onkeydown={(e) => {
+                  if (e.key === "Enter") saveAnthropicKey();
+                }}
+              />
+              <button
+                class="shrink-0 rounded-md bg-[var(--accent)] px-2.5 py-1 text-[11.5px] font-semibold text-white transition-[filter] hover:brightness-[1.06] disabled:opacity-50"
+                disabled={llmBusy || !anthropicKey.trim()}
+                onclick={saveAnthropicKey}
+              >
+                Save
+              </button>
+            </div>
+            {#if anthropicStored}
+              <button
+                class="mt-1.5 text-[10.5px] text-[var(--fg3)] transition-colors hover:text-[var(--fg)] hover:underline disabled:opacity-50"
+                disabled={llmBusy}
+                onclick={clearAnthropicKey}
+              >
+                Remove saved key
+              </button>
+            {/if}
           {/if}
         </div>
       {/if}

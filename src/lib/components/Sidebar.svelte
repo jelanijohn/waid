@@ -4,7 +4,15 @@
   import { projects } from "$lib/stores/projects.svelte";
   import { toasts } from "$lib/stores/toasts.svelte";
   import { relativeTime } from "$lib/time";
-  import { createBrief, pickDirectory, setBriefsDir } from "$lib/tauri";
+  import {
+    createBrief,
+    pickDirectory,
+    setBriefsDir,
+    setSecret,
+    deleteSecret,
+    hasSecret,
+    SECRET_GITHUB_TOKEN,
+  } from "$lib/tauri";
   import { settings, ACCENTS, type SidebarStyle, type Density } from "$lib/stores/settings.svelte";
   import { STATUS_ORDER, STATUS_LABEL, statusColor } from "$lib/status";
   import StatusPill from "./StatusPill.svelte";
@@ -15,6 +23,11 @@
   let newName = $state("");
   let searchEl = $state<HTMLInputElement>();
   let settingsOpen = $state(false);
+
+  // GitHub token (OS keyring) — managed from the settings popover.
+  let ghToken = $state("");
+  let ghStored = $state(false);
+  let ghBusy = $state(false);
 
   onMount(() => {
     // ⌘/Ctrl+F focuses the search box; ⌘/Ctrl+N starts a new project.
@@ -64,6 +77,53 @@
     settingsOpen = false;
     newName = "";
     creating = true;
+  }
+
+  function toggleSettings() {
+    settingsOpen = !settingsOpen;
+    if (settingsOpen) {
+      ghToken = "";
+      refreshTokenStatus();
+    }
+  }
+
+  async function refreshTokenStatus() {
+    try {
+      ghStored = await hasSecret(SECRET_GITHUB_TOKEN);
+    } catch {
+      // Keyring may be unavailable (e.g. no daemon on WSL) — treat as "not set".
+      ghStored = false;
+    }
+  }
+
+  async function saveToken() {
+    const value = ghToken.trim();
+    if (!value || ghBusy) return;
+    ghBusy = true;
+    try {
+      await setSecret(SECRET_GITHUB_TOKEN, value);
+      ghToken = "";
+      ghStored = true;
+      toasts.success("GitHub token saved to keychain");
+    } catch (e) {
+      toasts.error(`Could not save token: ${e}`);
+    } finally {
+      ghBusy = false;
+    }
+  }
+
+  async function clearToken() {
+    if (ghBusy) return;
+    ghBusy = true;
+    try {
+      await deleteSecret(SECRET_GITHUB_TOKEN);
+      ghStored = false;
+      toasts.success("GitHub token removed");
+    } catch (e) {
+      toasts.error(`Could not remove token: ${e}`);
+    } finally {
+      ghBusy = false;
+    }
   }
 
   async function changeFolder() {
@@ -127,7 +187,7 @@
         class="grid h-7 w-7 place-items-center rounded-lg text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)]"
         title="View & appearance"
         aria-label="View & appearance"
-        onclick={() => (settingsOpen = !settingsOpen)}
+        onclick={toggleSettings}
       >
         <Icon name="tune" size={17} />
       </button>
@@ -205,6 +265,48 @@
               </button>
             {/each}
           </div>
+
+          <!-- GitHub token (OS keyring) -->
+          <div
+            class="mb-1 mt-3 border-t pt-3 text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--fg3)]"
+            style="border-color: var(--border);"
+          >
+            GitHub token
+          </div>
+          <p class="mb-2 text-[10.5px] leading-snug text-[var(--fg3)]">
+            Stored in your OS keychain for syncing private repos.
+            {ghStored ? "A token is saved." : "No token saved."}
+          </p>
+          <div class="flex gap-1.5">
+            <input
+              class="min-w-0 flex-1 rounded-md border px-2 py-1 text-[11.5px] text-[var(--fg)] outline-none transition-colors focus:border-[var(--accent)]"
+              style="background: var(--input-bg); border-color: var(--border);"
+              type="password"
+              autocomplete="off"
+              placeholder={ghStored ? "Replace token…" : "ghp_…"}
+              bind:value={ghToken}
+              disabled={ghBusy}
+              onkeydown={(e) => {
+                if (e.key === "Enter") saveToken();
+              }}
+            />
+            <button
+              class="shrink-0 rounded-md bg-[var(--accent)] px-2.5 py-1 text-[11.5px] font-semibold text-white transition-[filter] hover:brightness-[1.06] disabled:opacity-50"
+              disabled={ghBusy || !ghToken.trim()}
+              onclick={saveToken}
+            >
+              Save
+            </button>
+          </div>
+          {#if ghStored}
+            <button
+              class="mt-1.5 text-[10.5px] text-[var(--fg3)] transition-colors hover:text-[var(--fg)] hover:underline disabled:opacity-50"
+              disabled={ghBusy}
+              onclick={clearToken}
+            >
+              Remove saved token
+            </button>
+          {/if}
         </div>
       {/if}
     </div>

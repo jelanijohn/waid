@@ -536,6 +536,100 @@ fn slugify(name: &str) -> String {
     out.trim_matches('-').to_string()
 }
 
+// --- Secrets (OS keyring) -------------------------------------------------
+//
+// Token storage for authenticated integrations (e.g. private GitHub repos).
+// Secrets never touch `settings.json` or env vars — they live in the platform
+// keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service)
+// via the `keyring` crate. On a headless / WSL box with no keyring daemon the
+// store is simply unavailable; commands surface a clear error rather than
+// silently falling back to plaintext.
+
+/// Keyring "service" namespace for every WAID secret (the app identifier).
+const KEYRING_SERVICE: &str = "com.jelanijohn.waid";
+
+/// Well-known secret keys. The Brief Sync feature reads `GITHUB_TOKEN` to make
+/// authenticated requests against private repos.
+const SECRET_GITHUB_TOKEN: &str = "github.token";
+
+/// Build a keyring entry for `key`, rejecting empty keys before touching the OS.
+fn keyring_entry(key: &str) -> Result<keyring::Entry, String> {
+    let key = key.trim();
+    if key.is_empty() {
+        return Err("secret key is empty".into());
+    }
+    keyring::Entry::new(KEYRING_SERVICE, key).map_err(keyring_error)
+}
+
+/// Turn a keyring error into a user-facing message, with a Linux/WSL hint when
+/// the platform store itself is missing (the common "no daemon running" case).
+fn keyring_error(e: keyring::Error) -> String {
+    match e {
+        keyring::Error::NoStorageAccess(_) | keyring::Error::PlatformFailure(_) => format!(
+            "OS keyring unavailable ({e}). On Linux/WSL a Secret Service daemon \
+             (e.g. gnome-keyring) must be running to store secrets."
+        ),
+        other => other.to_string(),
+    }
+}
+
+fn set_secret_value(key: &str, value: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        return Err("secret value is empty".into());
+    }
+    keyring_entry(key)?.set_password(value).map_err(keyring_error)
+}
+
+/// Read a secret; `Ok(None)` when no entry exists yet.
+fn get_secret_value(key: &str) -> Result<Option<String>, String> {
+    match keyring_entry(key)?.get_password() {
+        Ok(v) => Ok(Some(v)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(keyring_error(e)),
+    }
+}
+
+/// Delete a secret; succeeds even if it was already absent (idempotent).
+fn delete_secret_value(key: &str) -> Result<(), String> {
+    match keyring_entry(key)?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(keyring_error(e)),
+    }
+}
+
+/// Read the stored GitHub token, if any. This is the `keyring-backed auth`
+/// seam the Brief Sync feature plugs into: its GitHub request builder should
+/// call this and add an `Authorization: Bearer <token>` header when present.
+/// Unused until sync lands, hence the allow.
+#[allow(dead_code)]
+pub(crate) fn github_token() -> Option<String> {
+    get_secret_value(SECRET_GITHUB_TOKEN).ok().flatten()
+}
+
+/// Store (or replace) a secret in the OS keyring.
+#[tauri::command]
+pub fn set_secret(key: String, value: String) -> Result<(), String> {
+    set_secret_value(&key, &value)
+}
+
+/// Read a secret from the OS keyring (`null` when not set).
+#[tauri::command]
+pub fn get_secret(key: String) -> Result<Option<String>, String> {
+    get_secret_value(&key)
+}
+
+/// Remove a secret from the OS keyring.
+#[tauri::command]
+pub fn delete_secret(key: String) -> Result<(), String> {
+    delete_secret_value(&key)
+}
+
+/// Report whether a secret is stored, without returning its value.
+#[tauri::command]
+pub fn has_secret(key: String) -> Result<bool, String> {
+    Ok(get_secret_value(&key)?.is_some())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -609,6 +703,34 @@ mod tests {
         assert_eq!(names, vec!["Nested", "Top"]);
 
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Real end-to-end keyring roundtrip. Ignored by default because it needs a
+    /// running Secret Service / keychain daemon. Run on demand with:
+    ///   cargo test secret_real_roundtrip -- --ignored
+    /// (On WSL, start + unlock gnome-keyring first — see README/setup notes.)
+    #[test]
+    #[ignore = "requires a running OS keyring daemon"]
+    fn secret_real_roundtrip() {
+        let key = "test.roundtrip";
+        let _ = delete_secret_value(key); // clean slate
+        assert_eq!(get_secret_value(key).unwrap(), None);
+        set_secret_value(key, "hunter2").unwrap();
+        assert_eq!(get_secret_value(key).unwrap().as_deref(), Some("hunter2"));
+        set_secret_value(key, "rotated").unwrap(); // replace
+        assert_eq!(get_secret_value(key).unwrap().as_deref(), Some("rotated"));
+        delete_secret_value(key).unwrap();
+        assert_eq!(get_secret_value(key).unwrap(), None);
+        delete_secret_value(key).unwrap(); // idempotent
+    }
+
+    #[test]
+    fn secret_validation_rejects_empty_key_and_value() {
+        // These fail before any OS keyring access, so the test is hermetic.
+        assert!(get_secret_value("").is_err());
+        assert!(get_secret_value("   ").is_err());
+        assert!(set_secret_value("k", "  ").is_err());
+        assert!(set_secret_value("", "v").is_err());
     }
 
     #[test]

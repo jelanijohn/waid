@@ -60,6 +60,10 @@ pub fn run() {
             commands::get_vault_info,
             commands::is_wsl,
             commands::create_brief,
+            commands::set_secret,
+            commands::get_secret,
+            commands::delete_secret,
+            commands::has_secret,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -34,6 +34,26 @@ export const isWsl = () => invoke<boolean>("is_wsl");
 
 export const createBrief = (name: string) => invoke<Brief>("create_brief", { name });
 
+// --- Secrets (OS keyring) --------------------------------------------------
+// Tokens for authenticated integrations live in the platform keychain, never
+// in settings or env. Keys mirror the SECRET_* constants in commands.rs.
+
+/** Keyring key for the GitHub token used by brief sync (private repos). */
+export const SECRET_GITHUB_TOKEN = "github.token";
+
+/** Store (or replace) a secret in the OS keyring. */
+export const setSecret = (key: string, value: string) =>
+  invoke<void>("set_secret", { key, value });
+
+/** Read a secret from the OS keyring (null when not set). */
+export const getSecret = (key: string) => invoke<string | null>("get_secret", { key });
+
+/** Remove a secret from the OS keyring. */
+export const deleteSecret = (key: string) => invoke<void>("delete_secret", { key });
+
+/** Whether a secret is stored, without returning its value. */
+export const hasSecret = (key: string) => invoke<boolean>("has_secret", { key });
+
 /** Open a URL in the user's default browser. */
 export const openExternal = (url: string) => openUrl(url);
 

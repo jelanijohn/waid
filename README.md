@@ -156,7 +156,13 @@ The full markdown brief lives here.
 - **Quick capture** — press **⌘/Ctrl+K** (or the global **Ctrl+Shift+Space**) to
   pop a modal, pick a project, and append a timestamped note under its
   `## Captures` heading.
+- **Search & status filtering** — filter the sidebar by text (**⌘/Ctrl+F**) and
+  by project status. Archived briefs are hidden by default; picking the
+  "archived" status surfaces them (the archive view).
 - **Light/dark mode** toggle.
+- **Secret storage in the OS keyring** — tokens for authenticated integrations
+  (e.g. a GitHub token for private-repo brief sync) live in the platform
+  keychain, never in settings or env.
 
 ## Project structure
 
@@ -181,8 +187,7 @@ waid/
 
 ## Out of scope for v1 (planned)
 
-- **Encrypted secret storage** for webhook auth tokens (OS keyring).
-- **Search across briefs**, status filters, drag-to-reorder, archive view.
+- **Drag-to-reorder** the project list.
 - A richer markdown editor (CodeMirror / Tiptap / Milkdown).
 - A dedicated borderless "spotlight" window for quick capture.
 

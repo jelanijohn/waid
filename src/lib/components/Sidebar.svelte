@@ -23,6 +23,7 @@
   let newName = $state("");
   let searchEl = $state<HTMLInputElement>();
   let settingsOpen = $state(false);
+  let syncingAll = $state(false);
 
   // GitHub token (OS keyring) — managed from the settings popover.
   let ghToken = $state("");
@@ -126,6 +127,27 @@
     }
   }
 
+  async function syncAllBriefs() {
+    if (syncingAll) return;
+    syncingAll = true;
+    try {
+      const outcomes = await projects.syncAll();
+      const failed = outcomes.filter((o) => !o.ok);
+      const synced = outcomes.length - failed.length;
+      if (outcomes.length === 0) {
+        toasts.push("Nothing to sync — no briefs have a GitHub link or source.", "info");
+      } else if (failed.length === 0) {
+        toasts.success(`Synced ${synced} project${synced === 1 ? "" : "s"}`);
+      } else {
+        toasts.error(`Synced ${synced}, ${failed.length} failed (${failed[0].name}: ${failed[0].error})`);
+      }
+    } catch (e) {
+      toasts.error(`Sync all failed: ${e}`);
+    } finally {
+      syncingAll = false;
+    }
+  }
+
   async function changeFolder() {
     try {
       const dir = await pickDirectory();
@@ -183,6 +205,15 @@
       </div>
     </div>
     <div class="relative flex items-center gap-1">
+      <button
+        class="grid h-7 w-7 place-items-center rounded-lg text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)] disabled:opacity-50"
+        title="Sync all projects"
+        aria-label="Sync all projects"
+        onclick={syncAllBriefs}
+        disabled={syncingAll}
+      >
+        <Icon name="sync" size={17} class={syncingAll ? "spin" : ""} />
+      </button>
       <button
         class="grid h-7 w-7 place-items-center rounded-lg text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)]"
         title="View & appearance"
@@ -265,6 +296,29 @@
               </button>
             {/each}
           </div>
+
+          <!-- Sync -->
+          <div
+            class="mb-2 mt-3 border-t pt-3 text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--fg3)]"
+            style="border-color: var(--border);"
+          >
+            Sync
+          </div>
+          <button
+            class="flex w-full items-center justify-between gap-2 text-left"
+            onclick={() => settings.setAutoSyncOnOpen(!settings.autoSyncOnOpen)}
+          >
+            <span class="text-[11.5px] text-[var(--fg2)]">Auto-sync on open</span>
+            <span
+              class="relative h-[18px] w-[30px] shrink-0 rounded-full transition-colors"
+              style="background: {settings.autoSyncOnOpen ? 'var(--accent)' : 'var(--border)'};"
+            >
+              <span
+                class="absolute top-[2px] h-[14px] w-[14px] rounded-full bg-white transition-[left]"
+                style="left: {settings.autoSyncOnOpen ? '14px' : '2px'};"
+              ></span>
+            </span>
+          </button>
 
           <!-- GitHub token (OS keyring) -->
           <div

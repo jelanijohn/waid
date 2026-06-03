@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Brief, Webhook } from "$lib/types";
-  import { projects } from "$lib/stores/projects.svelte";
+  import { projects, isSyncableBrief } from "$lib/stores/projects.svelte";
   import { toasts } from "$lib/stores/toasts.svelte";
   import { openExternal, fireWebhook } from "$lib/tauri";
   import { relativeTime } from "$lib/time";
@@ -16,6 +16,10 @@
   // svelte-ignore state_referenced_locally -- intentional: {#key brief.path} remounts this component, re-seeding draft from the new brief.
   let draft = $state(brief.raw);
   let saving = $state(false);
+  let syncing = $state(false);
+
+  // Whether this brief has anything to sync (a GitHub link or explicit source).
+  let syncable = $derived(isSyncableBrief(brief));
 
   // Obsidian deep link (null unless the briefs dir is inside a vault).
   let obsidianUri = $derived(projects.obsidianUri(brief));
@@ -89,6 +93,19 @@
     }
   }
 
+  async function refresh() {
+    if (syncing) return;
+    syncing = true;
+    try {
+      await projects.sync(brief.path);
+      toasts.success("Synced");
+    } catch (e) {
+      toasts.error(`Sync failed: ${e}`);
+    } finally {
+      syncing = false;
+    }
+  }
+
   function onEditorKeydown(e: KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key === "s") {
       e.preventDefault();
@@ -146,6 +163,18 @@
               {saving ? "Saving…" : "Save"}
             </button>
           {:else}
+            {#if syncable}
+              <button
+                class="inline-flex h-[30px] items-center gap-[5px] rounded-lg border bg-[var(--bg)] px-3 text-[12.5px] font-medium text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)] disabled:opacity-50"
+                style="border-color: var(--border);"
+                title="Refresh synced data from linked integrations"
+                onclick={refresh}
+                disabled={syncing}
+              >
+                <Icon name="sync" size={14} class={syncing ? "spin" : ""} />
+                {syncing ? "Syncing…" : "Refresh"}
+              </button>
+            {/if}
             {#if obsidianUri}
               <button
                 class="inline-flex h-[30px] items-center gap-[5px] rounded-lg border bg-[var(--bg)] px-3 text-[12.5px] font-medium text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)]"
@@ -178,6 +207,11 @@
         <span class="ml-[2px] inline-flex items-center gap-1 text-[11.5px] text-[var(--fg3)]">
           <Icon name="schedule" size={13} /> Opened {relativeTime(brief.lastOpened)}
         </span>
+        {#if brief.lastSynced}
+          <span class="inline-flex items-center gap-1 text-[11.5px] text-[var(--fg3)]">
+            <Icon name="sync" size={13} /> Synced {relativeTime(brief.lastSynced)}
+          </span>
+        {/if}
       </div>
 
       <!-- Launch row: links + webhooks -->

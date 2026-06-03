@@ -1,6 +1,6 @@
 // Central project (brief) state, Svelte 5 runes flavour.
 
-import type { Brief, VaultInfo } from "$lib/types";
+import type { Brief, SyncOutcome, VaultInfo } from "$lib/types";
 import {
   listBriefs,
   getBriefsDir,
@@ -8,12 +8,26 @@ import {
   isWsl as isWslCmd,
   touchBrief,
   saveBrief as saveBriefCmd,
+  syncBrief as syncBriefCmd,
+  syncAll as syncAllCmd,
 } from "$lib/tauri";
+import { settings } from "$lib/stores/settings.svelte";
 
 /** Normalise a wikilink target / note name for case-insensitive matching. */
 function normalizeTarget(target: string): string {
   // Drop any `#heading` / `|alias` and surrounding whitespace, then lowercase.
   return target.split(/[#|]/)[0].trim().toLowerCase();
+}
+
+/** Mirrors the backend's parse_github_url: a github.com/{owner}/{repo} link. */
+const GITHUB_URL = /^https?:\/\/(www\.)?github\.com\/[^/]+\/[^/]+/i;
+
+/** Whether a brief has anything to sync (a GitHub link or an explicit source). */
+export function isSyncableBrief(brief: Brief): boolean {
+  return (
+    brief.links.some((l) => GITHUB_URL.test(l.url)) ||
+    (brief.sources?.some((s) => s.url.trim().length > 0) ?? false)
+  );
 }
 
 /** A brief's filename without the `.md` extension (its Obsidian note name). */
@@ -164,6 +178,8 @@ class ProjectStore {
       // Touch failing shouldn't block selection.
       console.error("touch_brief failed:", e);
     }
+    // Opt-in: auto-refresh the brief's sync block on open (debounced).
+    this.maybeAutoSync(path);
   }
 
   /** Save edited raw content back to disk and refresh that brief in place. */
@@ -171,6 +187,37 @@ class ProjectStore {
     const updated = await saveBriefCmd(path, content);
     this.upsert(updated);
     return updated;
+  }
+
+  /** Refresh one brief's managed sync block from its integrations. */
+  async sync(path: string): Promise<Brief> {
+    const updated = await syncBriefCmd(path);
+    this.upsert(updated);
+    return updated;
+  }
+
+  /** Sync every syncable brief; reloads the list to pick up new bodies. */
+  async syncAll(): Promise<SyncOutcome[]> {
+    const outcomes = await syncAllCmd();
+    await this.load();
+    return outcomes;
+  }
+
+  /** Debounce timer for auto-sync-on-open (Phase 4). */
+  private autoSyncTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** When auto-sync is enabled, sync the just-opened brief after a short delay,
+   *  but only if it's still the selection (rapid switching shouldn't spam the
+   *  API). No-op when the setting is off or the brief has no sources. */
+  private maybeAutoSync(path: string): void {
+    if (this.autoSyncTimer) clearTimeout(this.autoSyncTimer);
+    if (!settings.autoSyncOnOpen) return;
+    const brief = this.briefs.find((b) => b.path === path);
+    if (!brief || !isSyncableBrief(brief)) return;
+    this.autoSyncTimer = setTimeout(() => {
+      if (this.selectedPath !== path) return; // moved on — skip
+      this.sync(path).catch((e) => console.error("auto-sync failed:", e));
+    }, 800);
   }
 
   /** Replace (or insert) a brief by path, without reordering the list. */

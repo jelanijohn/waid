@@ -17,6 +17,7 @@ interface Persisted {
   accent: string;
   sidebarStyle: SidebarStyle;
   density: Density;
+  autoSyncOnOpen: boolean;
 }
 
 function applyDark(dark: boolean): void {
@@ -34,6 +35,9 @@ class Settings {
   accent = $state<string>(ACCENTS[0]);
   sidebarStyle = $state<SidebarStyle>("rows");
   density = $state<Density>("comfortable");
+  /** Opt-in: auto-refresh a brief's sync block when it's opened. Off by
+   *  default — sync is manual unless the user turns this on. */
+  autoSyncOnOpen = $state(false);
 
   /** Resolve saved prefs (or sensible defaults) and apply the dark class. */
   init(): void {
@@ -52,6 +56,7 @@ class Settings {
     this.accent = saved.accent ?? ACCENTS[0];
     this.sidebarStyle = saved.sidebarStyle ?? "rows";
     this.density = saved.density ?? "comfortable";
+    this.autoSyncOnOpen = saved.autoSyncOnOpen ?? false;
     applyDark(this.dark);
     applyAccent(this.accent);
   }
@@ -62,6 +67,7 @@ class Settings {
       accent: this.accent,
       sidebarStyle: this.sidebarStyle,
       density: this.density,
+      autoSyncOnOpen: this.autoSyncOnOpen,
     };
     localStorage.setItem(KEY, JSON.stringify(data));
   }
@@ -89,6 +95,11 @@ class Settings {
 
   setDensity(density: Density): void {
     this.density = density;
+    this.persist();
+  }
+
+  setAutoSyncOnOpen(on: boolean): void {
+    this.autoSyncOnOpen = on;
     this.persist();
   }
 }

@@ -13,6 +13,24 @@ export interface Webhook {
   body?: string | null;
 }
 
+/** A sync source for pulling external data into a brief (see sync_brief).
+ *  GitHub repos are derived from `links`; this covers everything else. */
+export interface SyncSource {
+  label: string;
+  url: string;
+  method?: string | null;
+  /** Flat `json_path -> label` extraction map. */
+  fields: Record<string, string>;
+}
+
+/** Per-brief result of a "Sync all" run (see sync_all). */
+export interface SyncOutcome {
+  path: string;
+  name: string;
+  ok: boolean;
+  error?: string | null;
+}
+
 export interface Brief {
   /** Absolute path to the .md file on disk. */
   path: string;
@@ -23,7 +41,12 @@ export interface Brief {
   tags: string[];
   links: Link[];
   webhooks: Webhook[];
+  /** Explicit sync sources (GitHub repos come from `links`). */
+  sources: SyncSource[];
   lastOpened?: string | null;
+  /** When the managed sync block was last written (from the body, not
+   *  frontmatter); null if never synced. */
+  lastSynced?: string | null;
   /** Markdown body (everything after the frontmatter). Shown by the renderer. */
   body: string;
   /** The entire raw file, frontmatter included. Shown/saved by edit mode. */

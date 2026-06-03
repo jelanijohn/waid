@@ -4,7 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import type { Brief, VaultInfo, WebhookResult } from "./types";
+import type { Brief, SyncOutcome, VaultInfo, WebhookResult } from "./types";
 
 export const listBriefs = () => invoke<Brief[]>("list_briefs");
 
@@ -23,6 +23,12 @@ export const fireWebhook = (
   method: string,
   body?: string | null,
 ) => invoke<WebhookResult>("fire_webhook", { url, method, body: body ?? null });
+
+/** Refresh a brief's managed sync block from its linked integrations. */
+export const syncBrief = (path: string) => invoke<Brief>("sync_brief", { path });
+
+/** Sync every brief that has a source; returns per-brief outcomes. */
+export const syncAll = () => invoke<SyncOutcome[]>("sync_all");
 
 export const getBriefsDir = () => invoke<string>("get_briefs_dir");
 

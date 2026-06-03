@@ -55,6 +55,8 @@ pub fn run() {
             commands::touch_brief,
             commands::append_capture,
             commands::fire_webhook,
+            commands::sync_brief,
+            commands::sync_all,
             commands::get_briefs_dir,
             commands::set_briefs_dir,
             commands::get_vault_info,

@@ -1,4 +1,5 @@
 mod commands;
+mod provider;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -71,6 +72,14 @@ pub fn run() {
             commands::get_secret,
             commands::delete_secret,
             commands::has_secret,
+            commands::save_brief_connection,
+            commands::delete_brief_connection,
+            commands::save_brief_integration,
+            commands::delete_brief_integration,
+            commands::test_brief_connection,
+            commands::fetch_integration,
+            commands::digest_integrations,
+            commands::morning_briefing,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

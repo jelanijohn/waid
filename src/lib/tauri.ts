@@ -4,7 +4,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import type { Brief, LlmSettings, SyncOutcome, VaultInfo, WebhookResult } from "./types";
+import type {
+  Brief,
+  BriefIntegration,
+  Connection,
+  IntegrationFetch,
+  LlmSettings,
+  SyncOutcome,
+  VaultInfo,
+  WebhookResult,
+} from "./types";
 
 export const listBriefs = () => invoke<Brief[]>("list_briefs");
 
@@ -82,6 +91,54 @@ export const deleteSecret = (key: string) => invoke<void>("delete_secret", { key
 
 /** Whether a secret is stored, without returning its value. */
 export const hasSecret = (key: string) => invoke<boolean>("has_secret", { key });
+
+// --- PM integrations: per-brief connections + selectors --------------------
+// Connections belong to a single brief: their metadata lives in that brief's
+// frontmatter, the token in the OS keyring (keyed by brief path + id). These
+// mutating calls return the reparsed brief so the store can upsert it.
+
+/** Add/update a connection on a brief. An empty token keeps the existing one. */
+export const saveBriefConnection = (path: string, connection: Connection, token: string) =>
+  invoke<Brief>("save_brief_connection", { path, connection, token });
+
+/** Remove a connection (and any selectors referencing it) from a brief. */
+export const deleteBriefConnection = (path: string, id: string) =>
+  invoke<Brief>("delete_brief_connection", { path, id });
+
+/** Add/update an integration selector (keyed by connection + kind) on a brief. */
+export const saveBriefIntegration = (path: string, integration: BriefIntegration) =>
+  invoke<Brief>("save_brief_integration", { path, integration });
+
+/** Remove an integration selector (by connection + kind) from a brief. */
+export const deleteBriefIntegration = (path: string, connection: string, kind: string) =>
+  invoke<Brief>("delete_brief_integration", { path, connection, kind });
+
+/** Verify a brief connection's saved token against its provider. */
+export const testBriefConnection = (path: string, id: string) =>
+  invoke<void>("test_brief_connection", { path, id });
+
+/** Generate an LLM digest of a brief's live integration items (display-only). */
+export const digestIntegrations = (path: string) =>
+  invoke<string>("digest_integrations", { path });
+
+/** Generate a cross-brief "morning briefing" across all briefs' integrations. */
+export const morningBriefing = () => invoke<string>("morning_briefing");
+
+/** Fetch live items for one of a brief's integration selectors (token internal). */
+export const fetchIntegration = (
+  path: string,
+  connectionId: string,
+  kind: string,
+  query?: string | null,
+  limit?: number | null,
+) =>
+  invoke<IntegrationFetch>("fetch_integration", {
+    path,
+    connectionId,
+    kind,
+    query: query ?? null,
+    limit: limit ?? null,
+  });
 
 /** Open a URL in the user's default browser. */
 export const openExternal = (url: string) => openUrl(url);

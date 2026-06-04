@@ -22,8 +22,10 @@
   import StatusPill from "./StatusPill.svelte";
   import Icon from "./Icon.svelte";
   import BrandMark from "./BrandMark.svelte";
+  import BriefingModal from "./BriefingModal.svelte";
 
   let creating = $state(false);
+  let briefingOpen = $state(false);
   let newName = $state("");
   let searchEl = $state<HTMLInputElement>();
   let settingsOpen = $state(false);
@@ -321,6 +323,16 @@
       </div>
     </div>
     <div class="relative flex items-center gap-1">
+      {#if projects.llmProvider}
+        <button
+          class="grid h-7 w-7 place-items-center rounded-lg text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)]"
+          title="Morning briefing across all projects"
+          aria-label="Morning briefing"
+          onclick={() => (briefingOpen = true)}
+        >
+          <Icon name="wb_sunny" size={17} />
+        </button>
+      {/if}
       <button
         class="grid h-7 w-7 place-items-center rounded-lg text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)] disabled:opacity-50"
         title="Sync all projects"
@@ -763,3 +775,5 @@
     </div>
   </footer>
 </aside>
+
+<BriefingModal open={briefingOpen} onclose={() => (briefingOpen = false)} />

@@ -6,6 +6,8 @@
   import { relativeTime } from "$lib/time";
   import { statusColor } from "$lib/status";
   import MarkdownView from "./MarkdownView.svelte";
+  import IntegrationPanel from "./IntegrationPanel.svelte";
+  import IntegrationsModal from "./IntegrationsModal.svelte";
   import Icon from "./Icon.svelte";
 
   let { brief }: { brief: Brief } = $props();
@@ -17,6 +19,7 @@
   let draft = $state(brief.raw);
   let saving = $state(false);
   let syncing = $state(false);
+  let integrationsOpen = $state(false);
 
   // Whether this brief has anything to sync (a GitHub link or explicit source).
   let syncable = $derived(isSyncableBrief(brief));
@@ -187,6 +190,14 @@
                 {syncing ? "Refreshing…" : "Refresh"}
               </button>
             {/if}
+            <button
+              class="inline-flex h-[30px] items-center gap-[5px] rounded-lg border bg-[var(--bg)] px-3 text-[12.5px] font-medium text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)]"
+              style="border-color: var(--border);"
+              title="Manage this brief's integrations (Linear, Jira, …)"
+              onclick={() => (integrationsOpen = true)}
+            >
+              <Icon name="hub" size={14} /> Integrations
+            </button>
             {#if obsidianUri}
               <button
                 class="inline-flex h-[30px] items-center gap-[5px] rounded-lg border bg-[var(--bg)] px-3 text-[12.5px] font-medium text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)]"
@@ -273,6 +284,7 @@
         Editing the raw file (frontmatter + markdown). ⌘/Ctrl+S to save.
       </p>
     {:else}
+      <IntegrationPanel {brief} onManage={() => (integrationsOpen = true)} />
       <MarkdownView source={brief.body} />
 
       {#if backlinks.length}
@@ -303,3 +315,5 @@
     <span class="ml-auto shrink-0">⌘K capture · ⌘S save · ⌘F search</span>
   </footer>
 </div>
+
+<IntegrationsModal {brief} open={integrationsOpen} onclose={() => (integrationsOpen = false)} />

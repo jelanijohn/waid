@@ -327,3 +327,52 @@ body {
   display: inline-block;
   animation: tw-spin 0.9s linear infinite;
 }
+
+/* =========================================================================
+ * Integrations — provider monogram tiles + the "needs a feed" pulse.
+ * Brand colors are kept here (not inline) so dark-mode tweaks live in CSS.
+ * ========================================================================= */
+.ptile {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  font-weight: 700;
+  color: #fff;
+  line-height: 1;
+}
+.ptile-linear {
+  background: #5e6ad2;
+}
+.ptile-jira {
+  background: #2684ff;
+}
+.ptile-asana {
+  background: #f06a6a;
+}
+.ptile-github {
+  background: #2d333b;
+}
+.dark .ptile-github {
+  background: #444c56;
+}
+
+/* Soft accent pulse on the safety-net "Add feed" button. */
+@keyframes tw-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 7px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+.pulse {
+  animation: tw-pulse 2s infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pulse {
+    animation: none;
+  }
+}

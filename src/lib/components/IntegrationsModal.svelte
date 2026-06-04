@@ -2,6 +2,8 @@
   import type { Brief, BriefIntegration, Connection, Provider } from "$lib/types";
   import { projects } from "$lib/stores/projects.svelte";
   import { toasts } from "$lib/stores/toasts.svelte";
+  import { integrations } from "$lib/stores/integrations.svelte";
+  import { PROVIDERS, PROVIDER_ORDER, kindIcon, kindLabel } from "$lib/providers";
   import {
     saveBriefConnection,
     deleteBriefConnection,
@@ -10,77 +12,183 @@
     testBriefConnection,
   } from "$lib/tauri";
   import Icon from "./Icon.svelte";
+  import ProviderTile from "./ProviderTile.svelte";
 
-  let { brief, open, onclose }: { brief: Brief; open: boolean; onclose: () => void } = $props();
+  // Mounted under {#if open} by ProjectDetail, so this is freshly constructed
+  // each time the modal opens — the start view derives from the brief once.
+  let { brief, onclose }: { brief: Brief; onclose: () => void } = $props();
 
-  const PROVIDERS: { value: Provider; label: string }[] = [
-    { value: "linear", label: "Linear" },
-    { value: "jira", label: "Jira" },
-    { value: "asana", label: "Asana" },
-    { value: "github", label: "GitHub" },
-  ];
+  // The whole modal is one small view state machine. The words "connection"
+  // and "integration" never surface as separate user tasks: it's "connect a
+  // tool", then "what to pull in" (a feed). Internally they still map 1:1 to
+  // Connection / BriefIntegration.
+  type View = "manage" | "pick" | "connect" | "choose";
+  // svelte-ignore state_referenced_locally -- intentional: ProjectDetail mounts this under {#if integrationsOpen}, so the start view is seeded once from the brief at open time.
+  let view = $state<View>(brief.integrations.length ? "manage" : "pick");
+  let busy = $state(false);
 
-  // --- New-connection form ---------------------------------------------------
+  // --- connect (step 1) form -------------------------------------------------
   let provider = $state<Provider>("linear");
   let label = $state("");
-  let id = $state("");
   let token = $state("");
   let baseUrl = $state("");
   let account = $state("");
-  let busy = $state(false);
+  let id = $state(""); // only surfaced on a slug collision
+
+  // --- choose (step 2) form, targeting one connection ------------------------
+  let targetConnId = $state("");
+  let chooseReturn = $state<View>("connect"); // where the back chevron returns
+  let kind = $state<string>("tasks");
+  let query = $state("");
+  let limit = $state("20");
+
   let testing = $state<string | null>(null);
 
   function slugify(s: string): string {
     return s.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   }
 
+  let meta = $derived(PROVIDERS[provider]);
   let effectiveId = $derived(id.trim() || slugify(label));
-  let needsBaseUrl = $derived(provider === "jira" || provider === "github");
-  let needsAccount = $derived(provider === "jira" || provider === "asana");
-  let accountLabel = $derived(provider === "asana" ? "Workspace ID (optional)" : "Account email");
-  let accountPlaceholder = $derived(provider === "asana" ? "1200000000000000" : "you@acme.com");
+  // Block a duplicate id (it would silently overwrite the existing connection).
+  let idTaken = $derived(brief.connections.some((c) => c.id === effectiveId));
   let jiraReady = $derived(
     provider !== "jira" || (baseUrl.trim().length > 0 && account.trim().length > 0),
   );
-  // Block adding a duplicate id (would silently overwrite the existing one).
-  let idTaken = $derived(brief.connections.some((c) => c.id === effectiveId));
-  let canSaveConn = $derived(
+  let canConnect = $derived(
     !busy &&
       label.trim().length > 0 &&
-      effectiveId.length > 0 &&
       token.trim().length > 0 &&
+      effectiveId.length > 0 &&
       jiraReady &&
       !idTaken,
   );
 
-  function resetConnForm() {
-    provider = "linear";
-    label = "";
-    id = "";
+  // Already-connected accounts for the picked provider (offer to reuse).
+  let existingForProvider = $derived(brief.connections.filter((c) => c.provider === provider));
+
+  // Manage view: each connection with the feeds referencing it.
+  let groups = $derived(
+    brief.connections.map((c) => ({
+      conn: c,
+      feeds: brief.integrations.filter((ig) => ig.connection === c.id),
+    })),
+  );
+
+  // The connection targeted by the choose step.
+  let targetConn = $derived(brief.connections.find((c) => c.id === targetConnId) ?? null);
+  let availableKinds = $derived(targetConn ? PROVIDERS[targetConn.provider].kinds : (["tasks"] as const));
+
+  // --- header copy -----------------------------------------------------------
+  let headerTitle = $derived(
+    view === "manage"
+      ? "Connected tools"
+      : view === "pick"
+        ? "Connect a tool"
+        : view === "connect"
+          ? `Connect ${meta.label}`
+          : "What should we pull in?",
+  );
+  let headerSub = $derived(
+    view === "manage"
+      ? brief.name
+      : view === "pick"
+        ? "Pick where your tasks live"
+        : view === "connect"
+          ? "Step 1 of 2 · Sign in"
+          : "Step 2 of 2 · Choose a view",
+  );
+
+  // --- flow ------------------------------------------------------------------
+  function pickProvider(p: Provider) {
+    provider = p;
+    label = `${PROVIDERS[p].label} — work`;
     token = "";
     baseUrl = "";
     account = "";
+    id = "";
+    view = "connect";
   }
 
-  async function saveConn() {
-    if (!canSaveConn) return;
+  function startChoose(connId: string, ret: View) {
+    targetConnId = connId;
+    const conn = brief.connections.find((c) => c.id === connId);
+    kind = conn ? PROVIDERS[conn.provider].kinds[0] : "tasks";
+    query = "";
+    limit = "20";
+    chooseReturn = ret;
+    view = "choose";
+  }
+
+  async function connect() {
+    if (!canConnect) return;
     busy = true;
     try {
       const conn: Connection = {
         id: effectiveId,
         provider,
         label: label.trim(),
-        baseUrl: needsBaseUrl && baseUrl.trim() ? baseUrl.trim() : null,
-        account: needsAccount && account.trim() ? account.trim() : null,
+        baseUrl: meta.needsBaseUrl && baseUrl.trim() ? baseUrl.trim() : null,
+        account: meta.needsAccount && account.trim() ? account.trim() : null,
       };
       const updated = await saveBriefConnection(brief.path, conn, token.trim());
       projects.upsert(updated);
-      toasts.success(`Connection "${conn.label}" added`);
-      resetConnForm();
+      toasts.success(`${conn.label} connected ✓`);
+      // The whole fix: completing auth carries you into step 2 (do NOT close).
+      startChoose(conn.id, "connect");
     } catch (e) {
-      toasts.error(`Could not save connection: ${e}`);
+      toasts.error(`Could not connect: ${e}`);
     } finally {
       busy = false;
+    }
+  }
+
+  async function addFeed() {
+    if (!targetConn) return;
+    busy = true;
+    try {
+      const k = (availableKinds as readonly string[]).includes(kind) ? kind : "tasks";
+      // The "Max items" input is type=number, so `limit` can come back as a
+      // number (or null) rather than the seeded string — coerce defensively.
+      const limitStr = String(limit ?? "").trim();
+      const integration: BriefIntegration = {
+        connection: targetConn.id,
+        kind: k,
+        query: query.trim() || null,
+        limit: limitStr ? Number(limitStr) : null,
+      };
+      const updated = await saveBriefIntegration(brief.path, integration);
+      projects.upsert(updated);
+      toasts.success(`Pulling ${kindLabel(k).toLowerCase()} from ${targetConn.label}`);
+      // Warm the panel so the new feed shows data immediately.
+      integrations
+        .fetch(brief.path, integration.connection, k, integration.query, integration.limit, true)
+        .catch(() => {});
+      view = "manage";
+    } catch (e) {
+      toasts.error(`Could not add feed: ${e}`);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function removeFeed(ig: BriefIntegration) {
+    try {
+      const updated = await deleteBriefIntegration(brief.path, ig.connection, ig.kind);
+      projects.upsert(updated);
+      toasts.push("Feed removed", "info");
+    } catch (e) {
+      toasts.error(`Could not remove: ${e}`);
+    }
+  }
+
+  async function removeConn(c: Connection) {
+    try {
+      const updated = await deleteBriefConnection(brief.path, c.id);
+      projects.upsert(updated);
+      toasts.push(`Removed ${c.label}`, "info");
+    } catch (e) {
+      toasts.error(`Could not remove: ${e}`);
     }
   }
 
@@ -96,351 +204,385 @@
     }
   }
 
-  async function removeConn(c: Connection) {
-    try {
-      const updated = await deleteBriefConnection(brief.path, c.id);
-      projects.upsert(updated);
-      toasts.push(`Removed "${c.label}"`, "info");
-    } catch (e) {
-      toasts.error(`Could not remove: ${e}`);
-    }
+  function goBack() {
+    if (view === "connect") view = brief.integrations.length ? "manage" : "pick";
+    else if (view === "choose") view = chooseReturn;
+    else if (view === "pick") view = "manage";
   }
 
-  // --- New-integration form --------------------------------------------------
-  let igConnection = $state("");
-  let igKind = $state<"tasks" | "notifications">("tasks");
-  let igQuery = $state("");
-  let igLimit = $state("");
-
-  // Default the connection picker to the brief's first connection.
-  $effect(() => {
-    if (!igConnection && brief.connections.length) igConnection = brief.connections[0].id;
-  });
-
-  let selectedConn = $derived(brief.connections.find((c) => c.id === igConnection) ?? null);
-  // Only GitHub exposes notifications today.
-  let availableKinds = $derived(
-    selectedConn?.provider === "github"
-      ? (["tasks", "notifications"] as const)
-      : (["tasks"] as const),
+  let canGoBack = $derived(
+    view === "connect" || view === "choose" || (view === "pick" && brief.integrations.length > 0),
   );
-  // Reset the kind when switching to a connection that doesn't support it
-  // (e.g. github→linear while "notifications" was selected).
-  $effect(() => {
-    if (!(availableKinds as readonly string[]).includes(igKind)) igKind = "tasks";
-  });
-  let canAddIg = $derived(!busy && igConnection.length > 0);
-
-  function connLabel(connId: string): string {
-    return brief.connections.find((c) => c.id === connId)?.label ?? connId;
-  }
-
-  async function addIg() {
-    if (!canAddIg) return;
-    busy = true;
-    try {
-      const kind = (availableKinds as readonly string[]).includes(igKind) ? igKind : "tasks";
-      const integration: BriefIntegration = {
-        connection: igConnection,
-        kind,
-        query: igQuery.trim() || null,
-        limit: igLimit.trim() ? Number(igLimit) : null,
-      };
-      const updated = await saveBriefIntegration(brief.path, integration);
-      projects.upsert(updated);
-      toasts.success("Integration added");
-      igQuery = "";
-      igLimit = "";
-    } catch (e) {
-      toasts.error(`Could not add integration: ${e}`);
-    } finally {
-      busy = false;
-    }
-  }
-
-  async function removeIg(ig: BriefIntegration) {
-    try {
-      const updated = await deleteBriefIntegration(brief.path, ig.connection, ig.kind);
-      projects.upsert(updated);
-      toasts.push("Integration removed", "info");
-    } catch (e) {
-      toasts.error(`Could not remove: ${e}`);
-    }
-  }
 
   function onKeydown(e: KeyboardEvent) {
     if (e.key === "Escape") onclose();
   }
 </script>
 
-{#if open}
+<div
+  class="anim-fade fixed inset-0 z-50 flex items-start justify-center"
+  style="background: rgba(10,20,40,0.45); padding-top: 8vh;"
+  role="presentation"
+  onclick={(e) => {
+    if (e.target === e.currentTarget) onclose();
+  }}
+>
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
-    class="anim-fade fixed inset-0 z-50 flex items-start justify-center"
-    style="background: rgba(10,20,40,0.45); padding-top: 10vh;"
-    role="presentation"
-    onclick={(e) => {
-      if (e.target === e.currentTarget) onclose();
-    }}
+    class="anim-pop flex max-h-[84vh] w-[min(94%,600px)] flex-col overflow-hidden rounded-2xl border shadow-[0_24px_70px_rgba(10,20,40,0.45)]"
+    style="background: var(--bg); border-color: var(--border);"
+    onkeydown={onKeydown}
   >
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div
-      class="anim-pop flex max-h-[80vh] w-[min(92%,580px)] flex-col rounded-[14px] border shadow-[0_24px_60px_rgba(10,20,40,0.4)]"
-      style="background: var(--bg); border-color: var(--border);"
-      onkeydown={onKeydown}
-    >
-      <div class="flex items-center justify-between gap-3 border-b px-4 py-3" style="border-color: var(--border);">
-        <h3 class="flex min-w-0 items-center gap-[7px] text-[14px] font-semibold text-[var(--fg)]">
-          <Icon name="hub" size={16} />
-          <span class="truncate">Integrations · {brief.name}</span>
-        </h3>
+    <!-- Header -->
+    <div class="flex items-center gap-[11px] border-b px-[18px] py-[15px]" style="border-color: var(--border);">
+      {#if canGoBack}
         <button
-          class="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-[var(--fg3)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)]"
-          aria-label="Close"
-          onclick={onclose}
+          class="-ml-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-lg text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)]"
+          aria-label="Back"
+          onclick={goBack}
         >
-          <Icon name="close" size={16} />
+          <Icon name="arrow_back" size={17} />
         </button>
+      {/if}
+
+      {#if view === "manage" || view === "pick"}
+        <span
+          class="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-[9px] text-white"
+          style="background: var(--accent);"
+        >
+          <Icon name={view === "pick" ? "add_link" : "hub"} size={16} />
+        </span>
+      {:else if view === "connect"}
+        <ProviderTile {provider} size={30} />
+      {:else if targetConn}
+        <ProviderTile provider={targetConn.provider} size={30} />
+      {/if}
+
+      <div class="min-w-0 flex-1">
+        <div class="truncate text-[14.5px] font-semibold text-[var(--fg)]">{headerTitle}</div>
+        <div class="mt-px truncate text-[11.5px] text-[var(--fg3)]">{headerSub}</div>
       </div>
 
-      <div class="scroll-thin flex-1 overflow-y-auto p-4">
-        <!-- Integrations (selectors) -->
-        <div class="mb-1 text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--fg3)]">
-          Integrations on this brief
+      {#if view === "connect" || view === "choose"}
+        <!-- 2-dot step indicator -->
+        <div class="mr-2 flex shrink-0 items-center gap-1.5">
+          <span class="h-1 w-[18px] rounded-full" style="background: var(--accent);"></span>
+          <span
+            class="h-1 w-[18px] rounded-full"
+            style="background: {view === 'choose' ? 'var(--accent)' : 'var(--border)'};"
+          ></span>
         </div>
-        {#if brief.integrations.length}
-          <div class="mb-3 flex flex-col gap-1.5">
-            {#each brief.integrations as ig (ig.connection + ig.kind)}
-              <div
-                class="flex items-center gap-2 rounded-[9px] border px-3 py-1.5"
+      {/if}
+
+      <button
+        class="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-[var(--fg3)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)]"
+        aria-label="Close"
+        onclick={onclose}
+      >
+        <Icon name="close" size={16} />
+      </button>
+    </div>
+
+    <!-- Body -->
+    <div class="scroll-thin flex-1 overflow-y-auto p-[18px]">
+      {#if view === "manage"}
+        <!-- ============ MANAGE: tools grouped by connection ============ -->
+        {#each groups as g (g.conn.id)}
+          <div class="mb-3 overflow-hidden rounded-[13px] border" style="border-color: var(--border);">
+            <!-- Account card head -->
+            <div class="flex items-center gap-[10px] px-[13px] py-[11px]" style="background: var(--side-bg);">
+              <ProviderTile provider={g.conn.provider} size={28} />
+              <div class="min-w-0 flex-1">
+                <div class="truncate text-[12.5px] font-semibold text-[var(--fg)]">{g.conn.label}</div>
+                <div class="truncate text-[11px] text-[var(--fg3)]">{PROVIDERS[g.conn.provider].label}</div>
+              </div>
+              <button
+                class="inline-flex h-[26px] shrink-0 items-center gap-[5px] rounded-[7px] border bg-[var(--bg)] px-[9px] text-[11.5px] font-medium text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)] disabled:opacity-50"
                 style="border-color: var(--border);"
+                onclick={() => testConn(g.conn)}
+                disabled={testing === g.conn.id}
               >
-                <Icon name={ig.kind === "notifications" ? "notifications" : "checklist"} size={13} class="text-[var(--fg3)]" />
-                <span class="truncate text-[12px] font-medium text-[var(--fg)]">{connLabel(ig.connection)}</span>
-                <span class="rounded bg-[var(--chip-bg)] px-[5px] py-px text-[9.5px] font-medium uppercase text-[var(--fg3)]">{ig.kind}</span>
-                {#if ig.query}
-                  <span class="truncate font-mono text-[10.5px] text-[var(--fg3)]">{ig.query}</span>
-                {/if}
+                <Icon name="wifi_tethering" size={13} class={testing === g.conn.id ? "spin" : ""} />
+                {testing === g.conn.id ? "Testing…" : "Test"}
+              </button>
+              <button
+                class="grid h-[26px] w-[26px] shrink-0 place-items-center rounded-lg text-[var(--fg3)] transition-colors hover:text-[var(--status-blocked)]"
+                title="Remove tool"
+                aria-label="Remove {g.conn.label}"
+                onclick={() => removeConn(g.conn)}
+              >
+                <Icon name="delete" size={15} />
+              </button>
+            </div>
+
+            {#if g.feeds.length}
+              <!-- Nested feeds -->
+              {#each g.feeds as f (f.connection + f.kind)}
+                <div class="flex items-center gap-[10px] border-t px-[13px] py-[10px]" style="border-color: var(--border);">
+                  <Icon name={kindIcon(f.kind)} size={15} class="text-[var(--fg3)]" />
+                  <span class="text-[12px] font-medium text-[var(--fg)]">{kindLabel(f.kind)}</span>
+                  {#if f.query}
+                    <span class="truncate rounded-[5px] bg-[var(--code-bg)] px-[6px] py-px font-mono text-[10.5px] text-[var(--fg3)]">{f.query}</span>
+                  {/if}
+                  <button
+                    class="ml-auto grid h-[24px] w-[24px] shrink-0 place-items-center rounded-md text-[var(--fg3)] transition-colors hover:text-[var(--status-blocked)]"
+                    title="Remove feed"
+                    aria-label="Remove feed"
+                    onclick={() => removeFeed(f)}
+                  >
+                    <Icon name="close" size={15} />
+                  </button>
+                </div>
+              {/each}
+              <div class="border-t border-dashed px-[13px] py-[9px]" style="border-color: var(--border);">
                 <button
-                  class="ml-auto grid h-[24px] w-[24px] shrink-0 place-items-center rounded-md text-[var(--fg3)] transition-colors hover:text-[var(--status-blocked)]"
-                  title="Remove integration"
-                  aria-label="Remove integration"
-                  onclick={() => removeIg(ig)}
+                  class="inline-flex items-center gap-[5px] text-[11.5px] font-medium text-[var(--accent)] hover:underline"
+                  onclick={() => startChoose(g.conn.id, "manage")}
                 >
-                  <Icon name="close" size={14} />
+                  <Icon name="add" size={14} /> Add another view from {PROVIDERS[g.conn.provider].label}
                 </button>
               </div>
-            {/each}
-          </div>
-        {:else}
-          <p class="mb-3 text-[11.5px] text-[var(--fg3)]">No integrations yet.</p>
-        {/if}
-
-        <!-- Add integration -->
-        {#if brief.connections.length}
-          <div class="mb-4 flex flex-wrap items-end gap-2 rounded-[10px] border p-2.5" style="border-color: var(--border);">
-            <label class="flex min-w-[120px] flex-1 flex-col gap-1 text-[10.5px] text-[var(--fg3)]">
-              Connection
-              <select
-                class="rounded-md border px-2 py-1 text-[12px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
-                style="background: var(--input-bg); border-color: var(--border);"
-                bind:value={igConnection}
+            {:else}
+              <!-- THE SAFETY NET: a connected tool with no feed loudly asks for one -->
+              <div
+                class="flex items-center gap-[11px] border-t px-[13px] py-3"
+                style="border-color: var(--border); background: color-mix(in srgb, var(--accent) 9%, transparent);"
               >
-                {#each brief.connections as c (c.id)}
-                  <option value={c.id}>{c.label}</option>
-                {/each}
-              </select>
-            </label>
-            {#if availableKinds.length > 1}
-              <!-- Only GitHub exposes a second kind (notifications); for the
-                   other providers there's just "tasks", so the dropdown is
-                   noise and we hide it. -->
-              <label class="flex flex-col gap-1 text-[10.5px] text-[var(--fg3)]">
-                Kind
-                <select
-                  class="rounded-md border px-2 py-1 text-[12px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
-                  style="background: var(--input-bg); border-color: var(--border);"
-                  bind:value={igKind}
-                >
-                  {#each availableKinds as k (k)}
-                    <option value={k}>{k}</option>
-                  {/each}
-                </select>
-              </label>
-            {/if}
-            <label class="flex w-[64px] flex-col gap-1 text-[10.5px] text-[var(--fg3)]">
-              Limit
-              <input
-                class="rounded-md border px-2 py-1 text-[12px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
-                style="background: var(--input-bg); border-color: var(--border);"
-                type="number"
-                min="1"
-                placeholder="20"
-                bind:value={igLimit}
-              />
-            </label>
-            <label class="flex min-w-[140px] flex-[2] flex-col gap-1 text-[10.5px] text-[var(--fg3)]">
-              Query (optional)
-              <input
-                class="rounded-md border px-2 py-1 font-mono text-[11.5px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
-                style="background: var(--input-bg); border-color: var(--border);"
-                type="text"
-                placeholder={selectedConn?.provider === "jira" ? "project = X AND …" : "provider-specific"}
-                bind:value={igQuery}
-              />
-            </label>
-            <button
-              class="inline-flex h-[30px] shrink-0 items-center gap-[5px] rounded-lg bg-[var(--accent)] px-3 text-[12px] font-medium text-white transition-[filter] hover:brightness-[1.06] disabled:opacity-50"
-              onclick={addIg}
-              disabled={!canAddIg}
-            >
-              <Icon name="add" size={14} /> Add
-            </button>
-          </div>
-        {:else}
-          <p class="mb-4 text-[11.5px] text-[var(--fg3)]">Add a connection below first.</p>
-        {/if}
-
-        <!-- Connections -->
-        <div
-          class="mb-1 border-t pt-3 text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--fg3)]"
-          style="border-color: var(--border);"
-        >
-          Connections (this brief)
-        </div>
-        {#if brief.connections.length}
-          <div class="mb-3 flex flex-col gap-2">
-            {#each brief.connections as c (c.id)}
-              <div class="flex items-center gap-2 rounded-[10px] border px-3 py-2" style="border-color: var(--border);">
-                <div class="min-w-0 flex-1">
-                  <div class="flex items-center gap-2">
-                    <span class="truncate text-[12.5px] font-medium text-[var(--fg)]">{c.label}</span>
-                    <span class="rounded-md bg-[var(--chip-bg)] px-[6px] py-px text-[10px] font-medium text-[var(--fg3)]">
-                      {PROVIDERS.find((p) => p.value === c.provider)?.label ?? c.provider}
-                    </span>
+                <Icon name="arrow_downward" size={18} class="text-[var(--accent)]" />
+                <div class="flex-1">
+                  <div class="text-[12.5px] font-semibold text-[var(--fg)]">Almost there — add a feed</div>
+                  <div class="mt-px text-[11px] text-[var(--fg2)]">
+                    {g.conn.label} is connected, but nothing's being pulled in yet. Choose what to show.
                   </div>
-                  <div class="truncate font-mono text-[10.5px] text-[var(--fg3)]">{c.id}</div>
                 </div>
                 <button
-                  class="inline-flex h-[28px] items-center gap-[5px] rounded-lg border bg-[var(--bg)] px-2.5 text-[11.5px] font-medium text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)] disabled:opacity-50"
-                  style="border-color: var(--border);"
-                  onclick={() => testConn(c)}
-                  disabled={testing === c.id}
+                  class="pulse inline-flex h-[30px] shrink-0 items-center gap-[5px] rounded-lg bg-[var(--accent)] px-3 text-[12px] font-medium text-white transition-[filter] hover:brightness-[1.06]"
+                  onclick={() => startChoose(g.conn.id, "manage")}
                 >
-                  <Icon name="wifi_tethering" size={13} class={testing === c.id ? "spin" : ""} />
-                  {testing === c.id ? "Testing…" : "Test"}
-                </button>
-                <button
-                  class="grid h-[28px] w-[28px] place-items-center rounded-lg text-[var(--fg3)] transition-colors hover:text-[var(--status-blocked)]"
-                  title="Remove connection"
-                  aria-label="Remove {c.label}"
-                  onclick={() => removeConn(c)}
-                >
-                  <Icon name="delete" size={15} />
+                  <Icon name="add" size={15} /> Add feed
                 </button>
               </div>
+            {/if}
+          </div>
+        {/each}
+
+        <button
+          class="inline-flex h-[38px] w-full items-center justify-center gap-[6px] rounded-lg bg-[var(--accent)] text-[12.5px] font-medium text-white transition-[filter] hover:brightness-[1.06]"
+          onclick={() => (view = "pick")}
+        >
+          <Icon name="add" size={16} /> Connect another tool
+        </button>
+
+        <p class="mt-[14px] text-[11px] leading-[1.5] text-[var(--fg3)]">
+          An <strong class="text-[var(--fg2)]">account</strong> is your sign-in to a tool. A
+          <strong class="text-[var(--fg2)]">feed</strong> is one thing it pulls into this brief — like “my open Linear
+          issues.” One account can power several feeds.
+        </p>
+      {:else if view === "pick"}
+        <!-- ============ PICK (also the empty state) ============ -->
+        <div class="px-2 pb-[18px] pt-2 text-center">
+          <div class="mb-1 text-[16px] font-semibold text-[var(--fg)]">Connect a tool to start</div>
+          <div class="mx-auto max-w-[44ch] text-[12.5px] leading-[1.5] text-[var(--fg3)]">
+            Pick where your tasks live. We'll sign you in, then ask what to pull into this brief.
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-[10px]">
+          {#each PROVIDER_ORDER as prov (prov)}
+            {@const pp = PROVIDERS[prov]}
+            <button
+              class="group flex items-center gap-[11px] rounded-[12px] border bg-[var(--bg)] p-[13px] text-left transition-all hover:-translate-y-px hover:shadow-[0_4px_14px_rgba(15,30,60,0.08)]"
+              style="border-color: var(--border);"
+              onclick={() => pickProvider(prov)}
+            >
+              <ProviderTile provider={prov} size={38} />
+              <div class="min-w-0 flex-1">
+                <div class="text-[13px] font-semibold text-[var(--fg)]">{pp.label}</div>
+                <div class="truncate text-[11px] text-[var(--fg3)]">{pp.blurb}</div>
+              </div>
+              <Icon name="chevron_right" size={18} class="text-[var(--fg3)]" />
+            </button>
+          {/each}
+        </div>
+      {:else if view === "connect"}
+        <!-- ============ CONNECT (step 1) ============ -->
+        {#if existingForProvider.length}
+          <div class="mb-[9px] text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--fg3)]">
+            Use an account you've already connected
+          </div>
+          <div class="mb-[14px] rounded-[11px] border p-1.5" style="border-color: var(--border);">
+            {#each existingForProvider as a (a.id)}
+              <button
+                class="flex w-full items-center gap-[10px] rounded-lg px-[9px] py-2 text-left transition-colors hover:bg-[var(--hover)]"
+                onclick={() => startChoose(a.id, "connect")}
+              >
+                <ProviderTile provider={a.provider} size={26} />
+                <span class="flex-1 truncate text-[12.5px] font-medium text-[var(--fg)]">{a.label}</span>
+                <Icon name="chevron_right" size={17} class="text-[var(--fg3)]" />
+              </button>
             {/each}
+          </div>
+          <div class="mb-[14px] flex items-center gap-[10px] text-[10.5px] uppercase tracking-[0.06em] text-[var(--fg3)]">
+            <span class="h-px flex-1" style="background: var(--border);"></span>
+            or connect a new one
+            <span class="h-px flex-1" style="background: var(--border);"></span>
           </div>
         {/if}
 
-        <!-- Add connection -->
-        <div class="rounded-[11px] border p-3" style="border-color: var(--border);">
-          <div class="mb-2 text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--fg3)]">
-            Add a connection
-          </div>
-          <div class="grid grid-cols-2 gap-2">
-            <label class="flex flex-col gap-1 text-[11px] text-[var(--fg3)]">
-              Provider
-              <select
-                class="rounded-md border px-2 py-1 text-[12px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
-                style="background: var(--input-bg); border-color: var(--border);"
-                bind:value={provider}
-              >
-                {#each PROVIDERS as p (p.value)}
-                  <option value={p.value}>{p.label}</option>
-                {/each}
-              </select>
-            </label>
-            <label class="flex flex-col gap-1 text-[11px] text-[var(--fg3)]">
-              Label
-              <input
-                class="rounded-md border px-2 py-1 text-[12px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
-                style="background: var(--input-bg); border-color: var(--border);"
-                type="text"
-                placeholder="Linear (work)"
-                bind:value={label}
-              />
-            </label>
-          </div>
+        <label class="mb-3 flex flex-col gap-[5px]">
+          <span class="text-[11px] text-[var(--fg3)]">Name this account</span>
+          <input
+            class="h-[34px] rounded-[9px] border px-[10px] text-[12.5px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
+            style="background: var(--input-bg); border-color: var(--border);"
+            placeholder={`${meta.label} — work`}
+            bind:value={label}
+          />
+        </label>
 
-          <label class="mt-2 flex flex-col gap-1 text-[11px] text-[var(--fg3)]">
-            Connection id
+        {#if meta.needsBaseUrl}
+          <label class="mb-3 flex flex-col gap-[5px]">
+            <span class="text-[11px] text-[var(--fg3)]">
+              {provider === "github" ? "Base URL (Enterprise — optional)" : "Base URL"}
+            </span>
             <input
-              class="rounded-md border px-2 py-1 font-mono text-[12px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
+              class="h-[34px] rounded-[9px] border px-[10px] text-[12.5px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
               style="background: var(--input-bg); border-color: var(--border);"
-              type="text"
-              placeholder={slugify(label) || "linear-work"}
+              placeholder={provider === "jira" ? "https://acme.atlassian.net" : "https://github.example.com"}
+              bind:value={baseUrl}
+            />
+          </label>
+        {/if}
+
+        {#if meta.needsAccount}
+          <label class="mb-3 flex flex-col gap-[5px]">
+            <span class="text-[11px] text-[var(--fg3)]">
+              {provider === "asana" ? "Workspace ID (optional)" : "Account email"}
+            </span>
+            <input
+              class="h-[34px] rounded-[9px] border px-[10px] text-[12.5px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
+              style="background: var(--input-bg); border-color: var(--border);"
+              placeholder={provider === "asana" ? "1200000000000000" : "you@acme.com"}
+              bind:value={account}
+            />
+          </label>
+        {/if}
+
+        {#if idTaken}
+          <!-- Only surfaced on a slug collision — otherwise the id is silent. -->
+          <label class="mb-3 flex flex-col gap-[5px]">
+            <span class="text-[11px] text-[var(--status-blocked)]">Account id (in use — pick another)</span>
+            <input
+              class="h-[34px] rounded-[9px] border px-[10px] font-mono text-[12px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
+              style="background: var(--input-bg); border-color: var(--status-blocked);"
+              placeholder={slugify(label) || provider}
               bind:value={id}
             />
-            <span class="text-[10.5px] {idTaken ? 'text-[var(--status-blocked)]' : 'text-[var(--fg3)]'}">
-              {#if idTaken}
-                <code>{effectiveId}</code> is already used on this brief.
-              {:else}
-                Defaults to <code>{effectiveId || "…"}</code>.
-              {/if}
+            <span class="text-[10.5px] text-[var(--status-blocked)]">
+              <code>{effectiveId}</code> is already used on this brief.
             </span>
           </label>
+        {/if}
 
-          {#if needsBaseUrl}
-            <label class="mt-2 flex flex-col gap-1 text-[11px] text-[var(--fg3)]">
-              Base URL {provider === "github" ? "(Enterprise — optional)" : ""}
-              <input
-                class="rounded-md border px-2 py-1 text-[12px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
-                style="background: var(--input-bg); border-color: var(--border);"
-                type="text"
-                placeholder={provider === "jira" ? "https://acme.atlassian.net" : "https://github.example.com"}
-                bind:value={baseUrl}
-              />
-            </label>
-          {/if}
-          {#if needsAccount}
-            <label class="mt-2 flex flex-col gap-1 text-[11px] text-[var(--fg3)]">
-              {accountLabel}
-              <input
-                class="rounded-md border px-2 py-1 text-[12px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
-                style="background: var(--input-bg); border-color: var(--border);"
-                type="text"
-                placeholder={accountPlaceholder}
-                bind:value={account}
-              />
-            </label>
-          {/if}
-
-          <label class="mt-2 flex flex-col gap-1 text-[11px] text-[var(--fg3)]">
-            API token
-            <input
-              class="rounded-md border px-2 py-1 text-[12px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
-              style="background: var(--input-bg); border-color: var(--border);"
-              type="password"
-              autocomplete="off"
-              placeholder="Stored in your OS keychain"
-              bind:value={token}
-            />
-          </label>
-
-          <div class="mt-3 flex items-center justify-between gap-2">
-            <span class="text-[10.5px] text-[var(--fg3)]">
-              The token goes straight to your OS keychain — never the brief.
-            </span>
-            <button
-              class="inline-flex h-[30px] shrink-0 items-center rounded-lg bg-[var(--accent)] px-4 text-[12.5px] font-medium text-white transition-[filter] hover:brightness-[1.06] disabled:opacity-50"
-              onclick={saveConn}
-              disabled={!canSaveConn}
-            >
-              {busy ? "Saving…" : "Add connection"}
-            </button>
+        <label class="flex flex-col gap-[5px]">
+          <span class="text-[11px] text-[var(--fg3)]">API token</span>
+          <input
+            class="h-[34px] rounded-[9px] border px-[10px] text-[12.5px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
+            style="background: var(--input-bg); border-color: var(--border);"
+            type="password"
+            autocomplete="off"
+            placeholder="Paste your token"
+            bind:value={token}
+          />
+          <span class="text-[10.5px] text-[var(--fg3)]">
+            <Icon name="lock" size={12} class="-mt-px mr-0.5" />Stored in your OS keychain — never written to the brief.
+          </span>
+        </label>
+      {:else if view === "choose" && targetConn}
+        <!-- ============ CHOOSE (step 2) ============ -->
+        <div
+          class="mb-4 flex items-center gap-[11px] rounded-[12px] border p-3"
+          style="border-color: var(--border); background: var(--side-bg);"
+        >
+          <ProviderTile provider={targetConn.provider} size={34} />
+          <div class="min-w-0 flex-1">
+            <div class="truncate text-[13px] font-semibold text-[var(--fg)]">{targetConn.label}</div>
+            <div class="truncate text-[11px] text-[var(--fg3)]">Connected ✓ — now pick what to show in this brief</div>
           </div>
         </div>
-      </div>
+
+        {#if availableKinds.length > 1}
+          <div class="mb-3 flex flex-col gap-[5px]">
+            <span class="text-[11px] text-[var(--fg3)]">Pull in</span>
+            <div class="inline-flex gap-[3px] self-start rounded-[9px] p-[3px]" style="background: var(--chip-bg);">
+              {#each availableKinds as k (k)}
+                <button
+                  class="inline-flex items-center gap-[5px] rounded-[7px] px-[11px] py-1 text-[11.5px] font-medium transition-colors {kind === k
+                    ? 'bg-[var(--bg)] text-[var(--fg)] shadow-[0_1px_2px_rgba(15,30,60,0.1)] dark:bg-[var(--accent)] dark:text-white'
+                    : 'text-[var(--fg2)]'}"
+                  onclick={() => (kind = k)}
+                >
+                  <Icon name={kindIcon(k)} size={14} /> {kindLabel(k)}
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/if}
+
+        <div class="grid grid-cols-[1fr_88px] gap-[10px]">
+          <label class="flex flex-col gap-[5px]">
+            <span class="text-[11px] text-[var(--fg3)]">Filter (optional)</span>
+            <input
+              class="h-[34px] rounded-[9px] border px-[10px] font-mono text-[11.5px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
+              style="background: var(--input-bg); border-color: var(--border);"
+              placeholder={PROVIDERS[targetConn.provider].queryPlaceholder}
+              bind:value={query}
+            />
+          </label>
+          <label class="flex flex-col gap-[5px]">
+            <span class="text-[11px] text-[var(--fg3)]">Max items</span>
+            <input
+              class="h-[34px] rounded-[9px] border px-[10px] text-[12.5px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
+              style="background: var(--input-bg); border-color: var(--border);"
+              type="number"
+              min="1"
+              placeholder="20"
+              bind:value={limit}
+            />
+          </label>
+        </div>
+        <span class="mt-[10px] block text-[11px] text-[var(--fg3)]">
+          Leave the filter blank to pull {PROVIDERS[targetConn.provider].blurb.toLowerCase()}.
+        </span>
+      {/if}
     </div>
+
+    <!-- Footer (only the two wizard steps have one) -->
+    {#if view === "connect"}
+      <div class="flex items-center justify-between gap-3 border-t px-[18px] py-[13px]" style="border-color: var(--border);">
+        <span class="inline-flex items-center gap-[5px] text-[10.5px] text-[var(--fg3)]">
+          <Icon name="schedule" size={13} /> Takes ~10 seconds
+        </span>
+        <button
+          class="inline-flex h-[32px] items-center gap-[5px] rounded-lg bg-[var(--accent)] px-4 text-[12.5px] font-medium text-white transition-[filter] hover:brightness-[1.06] disabled:opacity-50"
+          onclick={connect}
+          disabled={!canConnect}
+        >
+          {#if busy}
+            Connecting…
+          {:else}
+            Connect &amp; continue <Icon name="arrow_forward" size={14} />
+          {/if}
+        </button>
+      </div>
+    {:else if view === "choose"}
+      <div class="flex items-center justify-end gap-3 border-t px-[18px] py-[13px]" style="border-color: var(--border);">
+        <button
+          class="inline-flex h-[32px] items-center gap-[5px] rounded-lg bg-[var(--accent)] px-4 text-[12.5px] font-medium text-white transition-[filter] hover:brightness-[1.06] disabled:opacity-50"
+          onclick={addFeed}
+          disabled={busy}
+        >
+          <Icon name="check" size={14} /> Add to brief
+        </button>
+      </div>
+    {/if}
   </div>
-{/if}
+</div>

@@ -197,6 +197,11 @@
               onclick={() => (integrationsOpen = true)}
             >
               <Icon name="hub" size={14} /> Integrations
+              {#if brief.integrations.length}
+                <span class="rounded-full bg-[var(--chip-bg)] px-[6px] py-px text-[10px] font-semibold text-[var(--fg2)]">
+                  {brief.integrations.length}
+                </span>
+              {/if}
             </button>
             {#if obsidianUri}
               <button
@@ -316,4 +321,6 @@
   </footer>
 </div>
 
-<IntegrationsModal {brief} open={integrationsOpen} onclose={() => (integrationsOpen = false)} />
+{#if integrationsOpen}
+  <IntegrationsModal {brief} onclose={() => (integrationsOpen = false)} />
+{/if}

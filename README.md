@@ -7,7 +7,7 @@ right now?"). WAID answers: **"what's the state of all my projects?"**
 It lists your projects, renders each project's context **brief**, and lets you
 launch into work — open a Claude project, a repo, fire a webhook, or jot a quick
 note. It can pull live state from a project's integrations (GitHub, plus
-project-management connectors: Linear, Jira, Asana, GitHub, and Notion),
+project-management connectors: Linear, Jira, Asana, GitHub, Notion, and Gmail),
 optionally synthesize prose with a local or cloud LLM, and bootstrap a new
 project's brief from a folder, a GitHub repo, an interview, or a pasted prompt.
 Personal tool, not a team tool.
@@ -147,11 +147,11 @@ webhooks:
         value: "Bearer {{secret}}"
 connections:              # PM connections owned by this brief (metadata only; tokens live in the keyring)
   - id: linear-personal
-    provider: linear      # linear | jira | asana | github | notion
+    provider: linear      # linear | jira | asana | github | notion | gmail
     label: Linear (personal)
 integrations:             # selectors referencing the connections above
   - connection: linear-personal
-    kind: tasks           # tasks | notifications | page (Notion)
+    kind: tasks           # tasks | notifications | page (Notion) | email (Gmail)
     query: "assignee:me"
     limit: 10
 last_opened: 2026-05-31T10:00:00Z
@@ -199,8 +199,9 @@ integrations](#project-management-integrations-optional) below.
   release) from a brief's GitHub link or explicit `sources` into a managed
   `## Activity` block. Deterministic; frontmatter and prose are never touched.
 - **Project-management integrations** — connect a brief to **Linear, Jira,
-  Asana, GitHub, or Notion** and the detail pane shows your normalized tasks /
-  notifications (or a Notion database's rows) with a local rollup. Deterministic
+  Asana, GitHub, Notion, or Gmail** and the detail pane shows your normalized
+  tasks / notifications (or a Notion database's rows, or recent Gmail matches)
+  with a local rollup. Deterministic
   and strictly additive — a failed fetch is a toast, never a write into the
   `.md`. See [Project-management integrations](#project-management-integrations-optional).
 - **AI synthesis** _(optional)_ — when an LLM provider is configured (local
@@ -216,9 +217,13 @@ integrations](#project-management-integrations-optional) below.
   Display-only; same data-not-instructions guard as synthesis.
 - **Secret storage in the OS keyring** — tokens/keys for authenticated
   integrations (a GitHub token for private-repo sync, an Anthropic API key for
-  synthesis, per-brief PM connection tokens, and per-brief webhook secrets) live
-  in the platform keychain, never in settings or env. Keys: `github.token`,
-  `anthropic.api_key`, `bconn:<brief-path>:<id>`, and `whook:<brief-path>:<id>`.
+  synthesis, per-brief PM connection tokens, per-brief webhook secrets, and the
+  Gmail OAuth client + account grants) live in the platform keychain, never in
+  settings or env. Keys: `github.token`, `anthropic.api_key`,
+  `bconn:<brief-path>:<id>`, `whook:<brief-path>:<id>`, `gmail.client_id` /
+  `gmail.client_secret` (the bring-your-own Google Desktop client), and
+  `gmail.oauth:<account-email>` (the account-scoped OAuth grant, shared across
+  briefs — not `bconn:`-keyed).
 
 ### AI synthesis (optional)
 
@@ -264,7 +269,7 @@ untouched.
 
 Connect a brief to a PM tool and the detail pane shows your live tasks /
 notifications inline, with a one-line local rollup (counts by status, recently
-updated). Supported providers: **Linear, Jira, Asana, GitHub, Notion**.
+updated). Supported providers: **Linear, Jira, Asana, GitHub, Notion, Gmail**.
 
 **How it's wired.** A brief owns one or more **connections** (account-level
 metadata: provider, label, and where needed a base URL or account) and one or
@@ -286,6 +291,38 @@ token) can pull a **database's rows** as items (`kind: tasks`), or treat a
 evidence pool just like a `notion.so` link in the body. The integration only sees
 databases/pages you've explicitly *shared* with it via the page's *Connections*
 menu.
+
+**Gmail** surfaces recent, brief-relevant emails (`kind: email`): the selector's
+`query` is a **Gmail search string** (`from:acme.com subject:"redesign"
+newer_than:14d`), and matching messages appear as items (subject as the title,
+sender in the assignee slot, read/unread status). It's **read-only** and
+**metadata-only** — only subjects and short snippets ever leave Gmail, never
+message bodies. Unlike the token-paste providers, Gmail signs in with **Google
+OAuth** (it opens your browser once per Gmail account; the grant is stored in the
+OS keyring and reused across every brief pointed at that account).
+
+> **One-time Google Cloud setup (per the user, not WAID).** WAID ships no shared
+> Google credentials — you bring your own OAuth client:
+>
+> 1. Create (or reuse) a Google Cloud project and **enable the Gmail API**.
+> 2. **OAuth consent screen:** User type **External**; add the scope
+>    `.../auth/gmail.readonly`. **Set the publishing status to “In production.”**
+>    Leave it *unverified* — for personal use (< 100 users) you just click through
+>    the “Google hasn't verified this app” warning at consent time; verification
+>    is **not** required.
+>    - ⚠️ **This is the line everyone gets wrong.** `gmail.readonly` is a
+>      *restricted* scope, so in **Testing** status Google **revokes the refresh
+>      token after 7 days** (`invalid_grant`) — you'd have to reconnect every
+>      week. **Production** (even unverified) gives a long-lived grant.
+> 3. **Credentials → Create OAuth client ID → Application type: Desktop app.** Copy
+>    the **client ID** and **client secret**.
+> 4. In WAID **Settings → Gmail (Google OAuth client)**, paste the ID + secret
+>    (stored in the keyring). Loopback redirect URIs (`http://127.0.0.1:<port>`)
+>    are auto-allowed for Desktop clients, so there's nothing to register.
+>
+> Then, on a brief, pick **Gmail** in the integrations modal, click **Connect
+> Google account**, approve in the browser, and add an email feed with a search
+> query.
 
 Everything here is deterministic and **strictly additive**: fetches never write
 into your `.md`, so a failed or auth-walled fetch is just a toast and a panel
@@ -313,7 +350,7 @@ waid/
 │       ├── lib.rs            # plugin + command registration, global shortcut
 │       ├── commands.rs       # briefs · webhooks · sync · LLM synthesis · keyring · settings ·
 │       │                     #   PM connections/selectors/digests · brief bootstrap
-│       └── provider/         # PM integrations (mod.rs + linear/jira/asana/github/notion)
+│       └── provider/         # PM integrations (mod.rs + linear/jira/asana/github/notion/gmail)
 ├── briefs/                   # sample briefs (dev + bundled seed)
 └── README.md
 ```

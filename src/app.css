@@ -362,6 +362,12 @@ body {
   background: #f4f4f2;
   color: #111;
 }
+.ptile-gmail {
+  background: #ea4335;
+}
+.dark .ptile-gmail {
+  background: #f15b50;
+}
 
 /* Soft accent pulse on the safety-net "Add feed" button. */
 @keyframes tw-pulse {

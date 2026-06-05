@@ -44,9 +44,35 @@ pub async fn fetch(
     sel: &BriefIntegration,
     token: &str,
 ) -> Result<Vec<IntegrationItem>, String> {
-    if sel.kind != "tasks" {
-        return Err(format!("Notion supports kind: tasks (got \"{}\").", sel.kind));
+    match sel.kind.as_str() {
+        "tasks" => fetch_database(sel, token).await,
+        "page" => fetch_page(sel, token).await,
+        other => Err(format!(
+            "Notion supports kind: tasks, page (got \"{other}\")."
+        )),
     }
+}
+
+/// A single Notion page surfaced as one item (its title + last-edited time). Used
+/// for "project page" feeds. The page's text feeds synthesis separately via
+/// `fetch_page_text`; here we only need it to render as a panel row.
+async fn fetch_page(sel: &BriefIntegration, token: &str) -> Result<Vec<IntegrationItem>, String> {
+    let page_id = extract_id(sel.query.as_deref().unwrap_or_default())
+        .ok_or("Notion page selector needs a page id or URL in `query`.")?;
+    let client = super::http_client()?;
+    let resp = with_headers(client.get(format!("{BASE}/pages/{page_id}")), token)
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+    let page = super::read_json(resp, "Notion").await?;
+    Ok(vec![map_page(&page)])
+}
+
+/// Query a Notion database's rows as items (the original `fetch` behaviour).
+async fn fetch_database(
+    sel: &BriefIntegration,
+    token: &str,
+) -> Result<Vec<IntegrationItem>, String> {
     let db_id = extract_id(sel.query.as_deref().unwrap_or_default())
         .ok_or("Notion selector needs a database id or URL in `query`.")?;
     let client = super::http_client()?;
@@ -381,6 +407,29 @@ mod tests {
         assert_eq!(item.status, None);
         assert_eq!(item.assignee, None);
         assert!(item.meta.is_empty());
+    }
+
+    #[test]
+    fn maps_standalone_page() {
+        // A "project page" (not a database row): its only property is the title;
+        // status/assignee degrade to None, and it still surfaces as one item.
+        let page: serde_json::Value = serde_json::from_str(
+            r#"{
+                "id": "2f1baf9c8d7e4a3b9c0d1e2f3a4b5c6d",
+                "url": "https://www.notion.so/Project-Home-2f1baf9c8d7e4a3b9c0d1e2f3a4b5c6d",
+                "last_edited_time": "2026-06-01T10:00:00.000Z",
+                "properties": {
+                    "title": { "type": "title", "title": [ { "plain_text": "Project Home" } ] }
+                }
+            }"#,
+        )
+        .unwrap();
+        let item = map_page(&page);
+        assert_eq!(item.title, "Project Home");
+        assert_eq!(item.status, None);
+        assert_eq!(item.assignee, None);
+        assert_eq!(item.updated_at.as_deref(), Some("2026-06-01T10:00:00.000Z"));
+        assert_eq!(item.kind, "task");
     }
 
     #[test]

@@ -21,7 +21,7 @@
   // Which feeds have their full item list expanded (keyed connection+kind).
   let expanded = $state<Record<string, boolean>>({});
   function feedKey(ig: BriefIntegration): string {
-    return ig.connection + ig.kind;
+    return ig.connection + ig.kind + (ig.query ?? "");
   }
 
   async function runDigest() {
@@ -148,9 +148,9 @@
       </div>
     {/if}
 
-    {#each brief.integrations as ig (ig.connection + ig.kind)}
+    {#each brief.integrations as ig (feedKey(ig))}
       {@const conn = connFor(ig.connection)}
-      {@const entry = integrations.get(brief.path, ig.connection, ig.kind)}
+      {@const entry = integrations.get(brief.path, ig.connection, ig.kind, ig.query)}
       <div class="overflow-hidden rounded-[12px] border" style="border-color: var(--border);">
         {#if !conn}
           <!-- Redesigned "connection isn't set up" — amber reconnect banner. -->
@@ -189,7 +189,7 @@
               <div class="flex items-center gap-[7px]">
                 <span class="truncate text-[12.5px] font-semibold text-[var(--fg)]">{conn.label}</span>
                 <span class="shrink-0 rounded-[5px] bg-[var(--chip-bg)] px-[6px] py-px text-[9.5px] font-semibold uppercase tracking-[0.04em] text-[var(--fg3)]">
-                  {kindLabel(ig.kind)}
+                  {kindLabel(ig.kind, conn.provider)}
                 </span>
               </div>
               {#if entry?.data}

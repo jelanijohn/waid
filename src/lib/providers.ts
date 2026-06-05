@@ -6,7 +6,7 @@
 
 import type { Provider } from "./types";
 
-export type Kind = "tasks" | "notifications";
+export type Kind = "tasks" | "notifications" | "page";
 
 export interface ProviderMeta {
   label: string;
@@ -64,9 +64,9 @@ export const PROVIDERS: Record<Provider, ProviderMeta> = {
   notion: {
     label: "Notion",
     mono: "N",
-    blurb: "Pages from a database",
+    blurb: "A database's rows or a page",
     queryPlaceholder: "database id or URL",
-    kinds: ["tasks"],
+    kinds: ["tasks", "page"],
     needsBaseUrl: false,
     needsAccount: false,
   },
@@ -74,12 +74,15 @@ export const PROVIDERS: Record<Provider, ProviderMeta> = {
 
 export const PROVIDER_ORDER: Provider[] = ["linear", "jira", "asana", "github", "notion"];
 
-/** Material glyph for a kind (used in segmented controls + feed rows). */
-export function kindIcon(kind: string): string {
+/** Material glyph for a kind (used in segmented controls + feed rows). For Notion
+ *  the same `kind` values mean "database" vs "page", so they render differently. */
+export function kindIcon(kind: string, provider?: Provider): string {
+  if (provider === "notion") return kind === "page" ? "description" : "table";
   return kind === "notifications" ? "notifications" : "checklist";
 }
 
-/** Human label for a kind. */
-export function kindLabel(kind: string): string {
+/** Human label for a kind. Notion reuses `tasks`/`page` to mean database vs page. */
+export function kindLabel(kind: string, provider?: Provider): string {
+  if (provider === "notion") return kind === "page" ? "Project page" : "Database / table";
   return kind === "notifications" ? "Notifications" : "Tasks";
 }

@@ -129,13 +129,17 @@ export const saveBriefConnection = (path: string, connection: Connection, token:
 export const deleteBriefConnection = (path: string, id: string) =>
   invoke<Brief>("delete_brief_connection", { path, id });
 
-/** Add/update an integration selector (keyed by connection + kind) on a brief. */
+/** Add/update an integration selector (keyed by connection + kind + query) on a brief. */
 export const saveBriefIntegration = (path: string, integration: BriefIntegration) =>
   invoke<Brief>("save_brief_integration", { path, integration });
 
-/** Remove an integration selector (by connection + kind) from a brief. */
-export const deleteBriefIntegration = (path: string, connection: string, kind: string) =>
-  invoke<Brief>("delete_brief_integration", { path, connection, kind });
+/** Remove an integration selector (by connection + kind + query) from a brief. */
+export const deleteBriefIntegration = (
+  path: string,
+  connection: string,
+  kind: string,
+  query?: string | null,
+) => invoke<Brief>("delete_brief_integration", { path, connection, kind, query: query ?? null });
 
 /** Verify a brief connection's saved token against its provider. */
 export const testBriefConnection = (path: string, id: string) =>

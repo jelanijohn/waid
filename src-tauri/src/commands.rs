@@ -1320,6 +1320,21 @@ async fn gather_evidence(
         });
     }
 
+    // Notion "project page" feeds (kind == "page") whose connection is a Notion
+    // account — their page text joins the evidence pool, so they count toward the
+    // budget split too.
+    let notion_page_feeds: Vec<&BriefIntegration> = brief
+        .integrations
+        .iter()
+        .filter(|ig| {
+            ig.kind == "page"
+                && brief
+                    .connections
+                    .iter()
+                    .any(|c| c.id == ig.connection && matches!(c.provider, provider::Provider::Notion))
+        })
+        .collect();
+
     // Split the remaining budget across the web-fetched sources so no single
     // page dominates the context window.
     let web_count = brief
@@ -1327,12 +1342,17 @@ async fn gather_evidence(
         .iter()
         .filter(|l| parse_github_url(&l.url).is_none() && !l.url.trim().is_empty())
         .count()
-        + brief.sources.iter().filter(|s| !s.url.trim().is_empty()).count();
+        + brief.sources.iter().filter(|s| !s.url.trim().is_empty()).count()
+        + notion_page_feeds.len();
     let per_cap = if web_count == 0 {
         budget
     } else {
         (budget / web_count).max(1_000)
     };
+
+    // Notion page ids already gathered (from links below, then page feeds), so a
+    // page referenced both as a link and as a feed isn't fetched twice.
+    let mut seen_notion_pages: Vec<String> = Vec::new();
 
     // Non-GitHub links → fetch + reduce.
     for link in &brief.links {
@@ -1368,6 +1388,7 @@ async fn gather_evidence(
                                 content: text,
                             });
                         }
+                        seen_notion_pages.push(page_id);
                     }
                 }
             }
@@ -1382,6 +1403,31 @@ async fn gather_evidence(
                 };
                 evidence.push(Evidence { label, content: text });
             }
+        }
+    }
+
+    // Notion "project page" feeds → their page text as evidence (the same role a
+    // notion.so link plays above, but configured in the integrations panel). The
+    // connection's token is loaded here in the command layer, as elsewhere.
+    for ig in &notion_page_feeds {
+        let url = ig.query.as_deref().unwrap_or_default();
+        let page_id = match notion_page_id(url) {
+            Some(id) if !seen_notion_pages.contains(&id) => id,
+            _ => continue,
+        };
+        let token = match brief_connection_token(&brief.path, &ig.connection) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if let Ok(text) = provider::notion::fetch_page_text(&token, &page_id).await {
+            let text = truncate_chars(text.trim(), per_cap);
+            if !text.is_empty() {
+                evidence.push(Evidence {
+                    label: format!("Notion · {url}"),
+                    content: text,
+                });
+            }
+            seen_notion_pages.push(page_id);
         }
     }
 
@@ -1926,6 +1972,11 @@ pub async fn digest_integrations(app: AppHandle, path: String) -> Result<String,
 
     let mut sections: Vec<(BriefIntegration, IntegrationFetch)> = Vec::new();
     for sel in &brief.integrations {
+        // Notion "project page" feeds feed synthesis, not the task/notification
+        // digest — skip them here.
+        if sel.kind == "page" {
+            continue;
+        }
         if let Ok(fetch) = fetch_brief_integration(&path, &brief.connections, sel).await {
             sections.push((sel.clone(), fetch));
         }
@@ -1959,6 +2010,9 @@ pub async fn morning_briefing(app: AppHandle) -> Result<String, String> {
         }
         let mut sections = Vec::new();
         for sel in &brief.integrations {
+            if sel.kind == "page" {
+                continue; // page feeds are synthesis-only, not part of the briefing
+            }
             if let Ok(fetch) = fetch_brief_integration(&brief.path, &brief.connections, sel).await {
                 sections.push((sel.clone(), fetch));
             }
@@ -3167,27 +3221,32 @@ pub fn save_brief_integration(
             integration.connection
         ));
     }
-    match integs
-        .iter_mut()
-        .find(|ig| ig.connection == integration.connection && ig.kind == integration.kind)
-    {
+    // Feed identity is (connection, kind, query): one connection can host several
+    // feeds of the same kind pointed at different targets (e.g. multiple Notion
+    // databases/pages), so a new query appends rather than overwriting a sibling.
+    match integs.iter_mut().find(|ig| {
+        ig.connection == integration.connection
+            && ig.kind == integration.kind
+            && ig.query == integration.query
+    }) {
         Some(existing) => *existing = integration,
         None => integs.push(integration),
     }
     rewrite_brief_lists(&path, &conns, &integs)
 }
 
-/// Remove an integration selector (by connection + kind) from a brief.
+/// Remove an integration selector (by connection + kind + query) from a brief.
 #[tauri::command]
 pub fn delete_brief_integration(
     path: String,
     connection: String,
     kind: String,
+    query: Option<String>,
 ) -> Result<Brief, String> {
     let (conns, integs) = read_brief_lists(&path)?;
     let integs: Vec<BriefIntegration> = integs
         .into_iter()
-        .filter(|ig| !(ig.connection == connection && ig.kind == kind))
+        .filter(|ig| !(ig.connection == connection && ig.kind == kind && ig.query == query))
         .collect();
     rewrite_brief_lists(&path, &conns, &integs)
 }
@@ -3867,6 +3926,51 @@ mod tests {
         let on_disk = fs::read_to_string(&path).unwrap();
         assert!(!on_disk.contains("connections:") && !on_disk.contains("integrations:"));
         assert!(on_disk.contains("custom: keep-me"));
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn integration_identity_includes_query() {
+        // Two feeds on one connection differing only by `query` (e.g. two Notion
+        // databases/pages) must coexist, and deleting one must leave the other.
+        let dir = scratch_dir("integ-identity");
+        let path = dir.join("p.md");
+        fs::write(
+            &path,
+            "---\nname: P\nconnections:\n  - id: notion\n    provider: notion\n    label: Notion\n---\nbody",
+        )
+        .unwrap();
+        let path_str = path.to_string_lossy().to_string();
+
+        let feed = |q: &str, k: &str| BriefIntegration {
+            connection: "notion".into(),
+            kind: k.into(),
+            query: Some(q.into()),
+            limit: None,
+        };
+        save_brief_integration(path_str.clone(), feed("db-one", "tasks")).unwrap();
+        save_brief_integration(path_str.clone(), feed("db-two", "tasks")).unwrap();
+        let brief = save_brief_integration(path_str.clone(), feed("page-x", "page")).unwrap();
+        assert_eq!(brief.integrations.len(), 3, "feeds with distinct queries coexist");
+
+        // Deleting one query leaves the siblings untouched.
+        let brief = delete_brief_integration(
+            path_str.clone(),
+            "notion".into(),
+            "tasks".into(),
+            Some("db-one".into()),
+        )
+        .unwrap();
+        let queries: Vec<_> = brief
+            .integrations
+            .iter()
+            .map(|ig| ig.query.clone().unwrap())
+            .collect();
+        assert_eq!(brief.integrations.len(), 2);
+        assert!(queries.contains(&"db-two".to_string()));
+        assert!(queries.contains(&"page-x".to_string()));
+        assert!(!queries.contains(&"db-one".to_string()));
 
         fs::remove_dir_all(&dir).unwrap();
     }

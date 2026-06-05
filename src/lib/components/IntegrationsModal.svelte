@@ -78,6 +78,12 @@
   // The connection targeted by the choose step.
   let targetConn = $derived(brief.connections.find((c) => c.id === targetConnId) ?? null);
   let availableKinds = $derived(targetConn ? PROVIDERS[targetConn.provider].kinds : (["tasks"] as const));
+  // Notion needs a database/page URL in `query` (it's not an optional filter), and
+  // a "Project page" feed is a single page — no Max-items cap.
+  let isNotion = $derived(targetConn?.provider === "notion");
+  let isNotionPage = $derived(isNotion && kind === "page");
+  let queryRequired = $derived(isNotion);
+  let canAddFeed = $derived(!busy && (!queryRequired || query.trim().length > 0));
 
   // --- header copy -----------------------------------------------------------
   let headerTitle = $derived(
@@ -155,11 +161,12 @@
         connection: targetConn.id,
         kind: k,
         query: query.trim() || null,
-        limit: limitStr ? Number(limitStr) : null,
+        // A Notion "page" feed is a single page — no item cap.
+        limit: k === "page" ? null : limitStr ? Number(limitStr) : null,
       };
       const updated = await saveBriefIntegration(brief.path, integration);
       projects.upsert(updated);
-      toasts.success(`Pulling ${kindLabel(k).toLowerCase()} from ${targetConn.label}`);
+      toasts.success(`Pulling ${kindLabel(k, targetConn.provider).toLowerCase()} from ${targetConn.label}`);
       // Warm the panel so the new feed shows data immediately.
       integrations
         .fetch(brief.path, integration.connection, k, integration.query, integration.limit, true)
@@ -174,7 +181,7 @@
 
   async function removeFeed(ig: BriefIntegration) {
     try {
-      const updated = await deleteBriefIntegration(brief.path, ig.connection, ig.kind);
+      const updated = await deleteBriefIntegration(brief.path, ig.connection, ig.kind, ig.query);
       projects.upsert(updated);
       toasts.push("Feed removed", "info");
     } catch (e) {
@@ -317,10 +324,10 @@
 
             {#if g.feeds.length}
               <!-- Nested feeds -->
-              {#each g.feeds as f (f.connection + f.kind)}
+              {#each g.feeds as f (f.connection + f.kind + (f.query ?? ""))}
                 <div class="flex items-center gap-[10px] border-t px-[13px] py-[10px]" style="border-color: var(--border);">
-                  <Icon name={kindIcon(f.kind)} size={15} class="text-[var(--fg3)]" />
-                  <span class="text-[12px] font-medium text-[var(--fg)]">{kindLabel(f.kind)}</span>
+                  <Icon name={kindIcon(f.kind, g.conn.provider)} size={15} class="text-[var(--fg3)]" />
+                  <span class="text-[12px] font-medium text-[var(--fg)]">{kindLabel(f.kind, g.conn.provider)}</span>
                   {#if f.query}
                     <span class="truncate rounded-[5px] bg-[var(--code-bg)] px-[6px] py-px font-mono text-[10.5px] text-[var(--fg3)]">{f.query}</span>
                   {/if}
@@ -511,7 +518,7 @@
 
         {#if availableKinds.length > 1}
           <div class="mb-3 flex flex-col gap-[5px]">
-            <span class="text-[11px] text-[var(--fg3)]">Pull in</span>
+            <span class="text-[11px] text-[var(--fg3)]">{isNotion ? "This Notion URL is a…" : "Pull in"}</span>
             <div class="inline-flex gap-[3px] self-start rounded-[9px] p-[3px]" style="background: var(--chip-bg);">
               {#each availableKinds as k (k)}
                 <button
@@ -520,37 +527,47 @@
                     : 'text-[var(--fg2)]'}"
                   onclick={() => (kind = k)}
                 >
-                  <Icon name={kindIcon(k)} size={14} /> {kindLabel(k)}
+                  <Icon name={kindIcon(k, targetConn.provider)} size={14} /> {kindLabel(k, targetConn.provider)}
                 </button>
               {/each}
             </div>
           </div>
         {/if}
 
-        <div class="grid grid-cols-[1fr_88px] gap-[10px]">
+        <div class="grid gap-[10px] {isNotionPage ? 'grid-cols-1' : 'grid-cols-[1fr_88px]'}">
           <label class="flex flex-col gap-[5px]">
-            <span class="text-[11px] text-[var(--fg3)]">Filter (optional)</span>
+            <span class="text-[11px] text-[var(--fg3)]">
+              {#if isNotionPage}Notion page URL{:else if isNotion}Notion database URL{:else}Filter (optional){/if}
+            </span>
             <input
               class="h-[34px] rounded-[9px] border px-[10px] font-mono text-[11.5px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
               style="background: var(--input-bg); border-color: var(--border);"
-              placeholder={PROVIDERS[targetConn.provider].queryPlaceholder}
+              placeholder={isNotionPage ? "https://www.notion.so/My-Page-…" : PROVIDERS[targetConn.provider].queryPlaceholder}
               bind:value={query}
             />
           </label>
-          <label class="flex flex-col gap-[5px]">
-            <span class="text-[11px] text-[var(--fg3)]">Max items</span>
-            <input
-              class="h-[34px] rounded-[9px] border px-[10px] text-[12.5px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
-              style="background: var(--input-bg); border-color: var(--border);"
-              type="number"
-              min="1"
-              placeholder="20"
-              bind:value={limit}
-            />
-          </label>
+          {#if !isNotionPage}
+            <label class="flex flex-col gap-[5px]">
+              <span class="text-[11px] text-[var(--fg3)]">Max items</span>
+              <input
+                class="h-[34px] rounded-[9px] border px-[10px] text-[12.5px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
+                style="background: var(--input-bg); border-color: var(--border);"
+                type="number"
+                min="1"
+                placeholder="20"
+                bind:value={limit}
+              />
+            </label>
+          {/if}
         </div>
         <span class="mt-[10px] block text-[11px] text-[var(--fg3)]">
-          Leave the filter blank to pull {PROVIDERS[targetConn.provider].blurb.toLowerCase()}.
+          {#if isNotionPage}
+            Its text becomes context for this brief's synthesised Current State. Share the page with your integration first.
+          {:else if isNotion}
+            Paste a database you've shared with this integration. Its rows show up as items.
+          {:else}
+            Leave the filter blank to pull {PROVIDERS[targetConn.provider].blurb.toLowerCase()}.
+          {/if}
         </span>
       {/if}
     </div>
@@ -578,7 +595,7 @@
         <button
           class="inline-flex h-[32px] items-center gap-[5px] rounded-lg bg-[var(--accent)] px-4 text-[12.5px] font-medium text-white transition-[filter] hover:brightness-[1.06] disabled:opacity-50"
           onclick={addFeed}
-          disabled={busy}
+          disabled={!canAddFeed}
         >
           <Icon name="check" size={14} /> Add to brief
         </button>

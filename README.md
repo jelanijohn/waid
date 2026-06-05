@@ -6,7 +6,11 @@ right now?"). WAID answers: **"what's the state of all my projects?"**
 
 It lists your projects, renders each project's context **brief**, and lets you
 launch into work — open a Claude project, a repo, fire a webhook, or jot a quick
-note. Personal tool, not a team tool.
+note. It can pull live state from a project's integrations (GitHub, plus
+project-management connectors: Linear, Jira, Asana, GitHub, and Notion),
+optionally synthesize prose with a local or cloud LLM, and bootstrap a new
+project's brief from a folder, a GitHub repo, an interview, or a pasted prompt.
+Personal tool, not a team tool.
 
 ## Why it's built this way
 
@@ -26,6 +30,8 @@ note. Personal tool, not a team tool.
 - [SvelteKit](https://svelte.dev/) (Svelte 5, TypeScript) — frontend (SPA mode)
 - [Tailwind CSS v4](https://tailwindcss.com/) — styling
 - `marked` + `DOMPurify` — markdown rendering
+- `reqwest` (plain JSON, no provider SDKs) — PM integrations + sync
+- OS keyring — secret storage for integration tokens / API keys
 - Plain `.md` files on disk — data
 
 ## Prerequisites
@@ -46,6 +52,7 @@ note. Personal tool, not a team tool.
 ```bash
 pnpm install
 pnpm tauri dev      # launches the desktop app with hot reload
+pnpm tauri:wsl      # same, but sets WEBKIT_DISABLE_DMABUF_RENDERER=1 for WSL
 ```
 
 ## Build
@@ -134,6 +141,15 @@ webhooks:
     url: https://...
     method: POST          # defaults to POST if omitted
     body: '{"env":"staging"}'   # optional; sent as JSON
+connections:              # PM connections owned by this brief (metadata only; tokens live in the keyring)
+  - id: linear-personal
+    provider: linear      # linear | jira | asana | github | notion
+    label: Linear (personal)
+integrations:             # selectors referencing the connections above
+  - connection: linear-personal
+    kind: tasks           # tasks | notifications | page (Notion)
+    query: "assignee:me"
+    limit: 10
 last_opened: 2026-05-31T10:00:00Z
 ---
 
@@ -141,6 +157,10 @@ last_opened: 2026-05-31T10:00:00Z
 
 The full markdown brief lives here.
 ```
+
+Connection *metadata* lives on the brief (portable, Obsidian-safe); the *token*
+lives in the OS keyring, scoped per brief. See [Project-management
+integrations](#project-management-integrations-optional) below.
 
 ## Features (v1)
 
@@ -150,7 +170,13 @@ The full markdown brief lives here.
 - **Edit mode** — toggle to a raw textarea and save back to the `.md` file
   (round-trips the whole file, so your frontmatter is never mangled). ⌘/Ctrl+S
   saves.
-- **Link buttons** open URLs in your default browser.
+- **Brief bootstrap** — a freshly-created stub brief offers a *Generate the
+  initial brief* button with four methods: point at a local folder/repo, give a
+  GitHub URL, answer a 3-question interview, or copy/paste a handoff prompt into
+  any AI and import the result. Each produces a *proposed* brief that opens in
+  edit mode for review — nothing is written until you Save.
+- **Link buttons** open URLs in your default browser (plus *Open in Obsidian*
+  when the briefs folder is in a vault).
 - **Webhook buttons** fire GET/POST (and PUT/PATCH/DELETE) requests with a toast
   on success/failure.
 - **Quick capture** — press **⌘/Ctrl+K** (or the global **Ctrl+Shift+Space**) to
@@ -163,16 +189,26 @@ The full markdown brief lives here.
 - **Brief sync** — pull live state (open PRs/issues, last push, CI, latest
   release) from a brief's GitHub link or explicit `sources` into a managed
   `## Activity` block. Deterministic; frontmatter and prose are never touched.
+- **Project-management integrations** — connect a brief to **Linear, Jira,
+  Asana, GitHub, or Notion** and the detail pane shows your normalized tasks /
+  notifications (or a Notion database's rows) with a local rollup. Deterministic
+  and strictly additive — a failed fetch is a toast, never a write into the
+  `.md`. See [Project-management integrations](#project-management-integrations-optional).
 - **AI synthesis** _(optional)_ — when an LLM provider is configured (local
   **Ollama** or **Anthropic**), Refresh also synthesizes a `## Current State`
-  summary and an `## Open Questions` list from the brief's links and your
-  `## Captures` notes. The model only ever writes those two app-owned regions —
-  never status, links, tags, webhooks, frontmatter, or Captures — and all
-  fetched content is treated as data, never instructions. See
+  summary and an `## Open Questions` list from the brief's links, Notion page
+  text, and your `## Captures` notes. The model only ever writes those two
+  app-owned regions — never status, links, tags, webhooks, frontmatter, or
+  Captures — and all fetched content is treated as data, never instructions. See
   [AI synthesis](#ai-synthesis-optional) below.
+- **AI digest & morning briefing** _(optional)_ — with a provider configured,
+  generate a short prose digest of one brief's live PM items (snapshot-able into
+  `## Captures`), or a cross-brief *morning briefing* over every project's items.
+  Display-only; same data-not-instructions guard as synthesis.
 - **Secret storage in the OS keyring** — tokens/keys for authenticated
   integrations (a GitHub token for private-repo sync, an Anthropic API key for
-  synthesis) live in the platform keychain, never in settings or env.
+  synthesis, and per-brief PM connection tokens) live in the platform keychain,
+  never in settings or env.
 
 ### AI synthesis (optional)
 
@@ -207,11 +243,43 @@ questions). Your own questions live *above* the block and survive untouched, but
 anything you type *inside* the block is overwritten on the next synthesis —
 answer questions or add your own above it.
 
-**Safety:** all fetched content (web pages, source JSON, GitHub data, your
-Captures) is treated as **data, never instructions**. The model's output schema
-is closed to two fields, so it structurally cannot change status, links, tags,
-or webhooks, or fire anything. Web fetches are GET-only and truncated. Any error
-(fetch, provider, or unparseable output) leaves the `.md` untouched.
+**Safety:** all fetched content (web pages, source JSON, GitHub data, Notion page
+text, your Captures) is treated as **data, never instructions**. The model's
+output schema is closed to two fields, so it structurally cannot change status,
+links, tags, or webhooks, or fire anything. Web fetches are GET-only and
+truncated. Any error (fetch, provider, or unparseable output) leaves the `.md`
+untouched.
+
+## Project-management integrations (optional)
+
+Connect a brief to a PM tool and the detail pane shows your live tasks /
+notifications inline, with a one-line local rollup (counts by status, recently
+updated). Supported providers: **Linear, Jira, Asana, GitHub, Notion**.
+
+**How it's wired.** A brief owns one or more **connections** (account-level
+metadata: provider, label, and where needed a base URL or account) and one or
+more **integration selectors** (a `kind` — `tasks`, `notifications`, or Notion's
+`page` — plus an optional `query` and `limit`). A connection's *metadata* lives
+in the brief's frontmatter and round-trips with the file; its *token* lives in
+the OS keyring, scoped per brief. One connection can carry several feeds — e.g.
+two Notion databases — since a feed's identity is `(connection, kind, query)`.
+
+Manage them from the **integrations** button on a brief: add/edit/delete
+connections and feeds, paste a token, and *Test connection* to validate it.
+Tokens are read-only API tokens you create in each provider; only GitHub exposes
+notifications, Jira needs a base URL + account email, Asana needs a workspace id,
+and GitHub Enterprise needs a base URL.
+
+**Notion** is a little special: a connection (a Notion *internal integration*
+token) can pull a **database's rows** as items (`kind: tasks`), or treat a
+**page** (`kind: page`) as context that feeds AI synthesis — its text joins the
+evidence pool just like a `notion.so` link in the body. The integration only sees
+databases/pages you've explicitly *shared* with it via the page's *Connections*
+menu.
+
+Everything here is deterministic and **strictly additive**: fetches never write
+into your `.md`, so a failed or auth-walled fetch is just a toast and a panel
+error state — the brief renders fully regardless.
 
 ## Project structure
 
@@ -219,17 +287,22 @@ or webhooks, or fire anything. Web fetches are GET-only and truncated. Any error
 waid/
 ├── src/                      # SvelteKit frontend
 │   ├── lib/
-│   │   ├── components/       # Sidebar, ProjectDetail, MarkdownView, QuickCapture, Toasts…
-│   │   ├── stores/           # projects, theme, toasts
-│   │   ├── tauri.ts          # wrappers around invoke / plugins
-│   │   ├── types.ts          # Brief / Link / Webhook types
+│   │   ├── components/       # Sidebar, ProjectDetail, MarkdownView, QuickCapture, Toasts,
+│   │   │                     #   IntegrationPanel, IntegrationsModal, BriefingModal, BootstrapModal…
+│   │   ├── stores/           # projects, settings, toasts, integrations
+│   │   ├── tauri.ts          # wrappers around invoke / plugins / secrets
+│   │   ├── types.ts          # Brief / Link / Webhook / Connection / Integration… types
+│   │   ├── providers.ts      # PM-provider display metadata (brand/monogram/kinds)
+│   │   ├── bootstrap.ts      # paste-a-prompt template + stub-brief detection
 │   │   ├── markdown.ts       # marked + DOMPurify
 │   │   └── time.ts           # relative-time helper
 │   └── routes/               # +layout, +page (main view)
 ├── src-tauri/                # Rust backend
 │   └── src/
 │       ├── lib.rs            # plugin + command registration, global shortcut
-│       └── commands.rs       # briefs · webhooks · sync · LLM synthesis · keyring · settings
+│       ├── commands.rs       # briefs · webhooks · sync · LLM synthesis · keyring · settings ·
+│       │                     #   PM connections/selectors/digests · brief bootstrap
+│       └── provider/         # PM integrations (mod.rs + linear/jira/asana/github/notion)
 ├── briefs/                   # sample briefs (dev + bundled seed)
 └── README.md
 ```
@@ -241,9 +314,14 @@ waid/
 - A dedicated borderless "spotlight" window for quick capture.
 - **In-process inference** for synthesis — local means Ollama over localhost
   HTTP, not embedded llama.cpp / Candle / mistral.rs.
-- Dedicated Linear / Asana connectors (they'll ride the existing `sources` +
-  keyring path), and a diff-and-confirm preview gate (unneeded — synthesis only
-  writes regenerable, app-owned regions).
+- A **due-date / overdue signal** in the integration rollup (`overdue` is `null`
+  today).
+
+A diff-and-confirm preview gate stays unneeded — synthesis and digests only write
+regenerable, app-owned regions (and digests don't write at all until you snapshot
+them), and bootstrap only proposes a draft into edit mode. The Linear / Asana /
+Jira / GitHub / Notion connectors, OS-keyring secret storage, Obsidian vault
+support, search + status filters, and brief bootstrap have all **shipped**.
 
 Mobile/web versions and any auth/multi-user/sync are explicitly **not** planned —
 WAID is single-user, local, desktop-only by design.

@@ -131,6 +131,17 @@ export interface LlmSettings {
   anthropicModel?: string | null;
 }
 
+/** Guided-interview answers for the brief-bootstrap chooser (see
+ *  bootstrap_from_answers). Mirrors the Rust `BootstrapAnswers` struct. */
+export interface BootstrapAnswers {
+  /** "What is this project?" */
+  summary: string;
+  /** "What's the goal / definition of done?" */
+  goal?: string | null;
+  /** "Anything else / current state in your words." */
+  notes?: string | null;
+}
+
 /** Whether the briefs dir lives in an Obsidian vault (see get_vault_info). */
 export interface VaultInfo {
   isVault: boolean;

@@ -80,6 +80,10 @@ pub fn run() {
             commands::fetch_integration,
             commands::digest_integrations,
             commands::morning_briefing,
+            commands::bootstrap_from_folder,
+            commands::bootstrap_from_github,
+            commands::bootstrap_from_answers,
+            commands::normalize_bootstrap_paste,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -5,9 +5,11 @@
   import { openExternal, fireWebhook } from "$lib/tauri";
   import { relativeTime } from "$lib/time";
   import { statusColor } from "$lib/status";
+  import { isStubBrief } from "$lib/bootstrap";
   import MarkdownView from "./MarkdownView.svelte";
   import IntegrationPanel from "./IntegrationPanel.svelte";
   import IntegrationsModal from "./IntegrationsModal.svelte";
+  import BootstrapModal from "./BootstrapModal.svelte";
   import Icon from "./Icon.svelte";
 
   let { brief }: { brief: Brief } = $props();
@@ -20,6 +22,18 @@
   let saving = $state(false);
   let syncing = $state(false);
   let integrationsOpen = $state(false);
+  let bootstrapOpen = $state(false);
+
+  // A freshly-created brief still on its stub body → offer to generate one.
+  let isStub = $derived(isStubBrief(brief));
+
+  // Seed edit mode with the bootstrap draft; the existing Save is the commit
+  // gate (the modal never writes to disk).
+  function acceptDraft(raw: string) {
+    draft = raw;
+    editing = true;
+    bootstrapOpen = false;
+  }
 
   // Whether this brief has anything to sync (a GitHub link or explicit source).
   let syncable = $derived(isSyncableBrief(brief));
@@ -290,6 +304,35 @@
       </p>
     {:else}
       <IntegrationPanel {brief} onManage={() => (integrationsOpen = true)} />
+
+      {#if isStub}
+        <!-- Empty-state CTA: this brief is still on its create_brief stub. -->
+        <div
+          class="mb-5 flex items-center gap-[14px] overflow-hidden rounded-[13px] border p-[15px]"
+          style="border-color: var(--border); background: color-mix(in srgb, var(--accent) 7%, transparent);"
+        >
+          <span
+            class="grid h-[40px] w-[40px] shrink-0 place-items-center rounded-[12px] text-white"
+            style="background: var(--accent);"
+          >
+            <Icon name="auto_awesome" size={20} />
+          </span>
+          <div class="min-w-0 flex-1">
+            <div class="text-[13.5px] font-semibold text-[var(--fg)]">Generate the initial brief</div>
+            <div class="mt-px text-[11.5px] leading-[1.5] text-[var(--fg2)]">
+              Draft this brief from a folder, a GitHub repo, a few quick answers, or a paste-in prompt — then review
+              before saving.
+            </div>
+          </div>
+          <button
+            class="inline-flex h-[32px] shrink-0 items-center gap-[6px] rounded-lg bg-[var(--accent)] px-[13px] text-[12.5px] font-medium text-white transition-[filter] hover:brightness-[1.06]"
+            onclick={() => (bootstrapOpen = true)}
+          >
+            <Icon name="bolt" size={15} fill={1} /> Generate
+          </button>
+        </div>
+      {/if}
+
       <MarkdownView source={brief.body} />
 
       {#if backlinks.length}
@@ -323,4 +366,8 @@
 
 {#if integrationsOpen}
   <IntegrationsModal {brief} onclose={() => (integrationsOpen = false)} />
+{/if}
+
+{#if bootstrapOpen}
+  <BootstrapModal {brief} onclose={() => (bootstrapOpen = false)} onDraft={acceptDraft} />
 {/if}

@@ -33,6 +33,13 @@ export function isSyncableBrief(brief: Brief): boolean {
   );
 }
 
+/** The first github.com/{owner}/{repo} URL among a brief's links, or null.
+ *  Single source of truth for the GITHUB_URL regex (used by the bootstrap
+ *  chooser to recommend the GitHub method). */
+export function githubUrlInBrief(brief: Brief): string | null {
+  return brief.links.find((l) => GITHUB_URL.test(l.url))?.url ?? null;
+}
+
 /** A brief's filename without the `.md` extension (its Obsidian note name). */
 function stem(brief: Brief): string {
   return brief.fileName.replace(/\.md$/i, "");

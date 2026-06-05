@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type {
+  BootstrapAnswers,
   Brief,
   BriefIntegration,
   Connection,
@@ -68,6 +69,29 @@ export const getVaultInfo = () => invoke<VaultInfo>("get_vault_info");
 export const isWsl = () => invoke<boolean>("is_wsl");
 
 export const createBrief = (name: string) => invoke<Brief>("create_brief", { name });
+
+// --- Brief bootstrap (initial-brief generation) ----------------------------
+// Each returns a *proposed raw file string* (frontmatter + body) WITHOUT writing
+// to disk. The frontend drops it into edit mode; the user's Save is the commit
+// gate. Deterministic metadata always; AI body only when a provider is set.
+
+/** Draft a brief from a local folder/repo (README + manifest + file tree). */
+export const bootstrapFromFolder = (path: string, dir: string) =>
+  invoke<string>("bootstrap_from_folder", { path, dir });
+
+/** Draft a brief from a GitHub repo URL (description/topics/README). */
+export const bootstrapFromGithub = (path: string, url: string) =>
+  invoke<string>("bootstrap_from_github", { path, url });
+
+/** Draft a brief from guided-interview answers (composes locally w/o a provider). */
+export const bootstrapFromAnswers = (path: string, answers: BootstrapAnswers) =>
+  invoke<string>("bootstrap_from_answers", { path, answers });
+
+/** Normalize a pasted bootstrap brief: lift its Current State / Open Questions
+ *  sections into WAID's app-owned marker regions so a later Refresh regenerates
+ *  them in place instead of duplicating. Returns the proposed raw (edit-mode). */
+export const normalizeBootstrapPaste = (pasted: string) =>
+  invoke<string>("normalize_bootstrap_paste", { pasted });
 
 // --- Secrets (OS keyring) --------------------------------------------------
 // Tokens for authenticated integrations live in the platform keychain, never

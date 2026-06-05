@@ -61,9 +61,18 @@ export const PROVIDERS: Record<Provider, ProviderMeta> = {
     needsBaseUrl: true,
     needsAccount: false,
   },
+  notion: {
+    label: "Notion",
+    mono: "N",
+    blurb: "Pages from a database",
+    queryPlaceholder: "database id or URL",
+    kinds: ["tasks"],
+    needsBaseUrl: false,
+    needsAccount: false,
+  },
 };
 
-export const PROVIDER_ORDER: Provider[] = ["linear", "jira", "asana", "github"];
+export const PROVIDER_ORDER: Provider[] = ["linear", "jira", "asana", "github", "notion"];
 
 /** Material glyph for a kind (used in segmented controls + feed rows). */
 export function kindIcon(kind: string): string {

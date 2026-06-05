@@ -35,3 +35,8 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 # repos, etc.). Platform-native stores: macOS Keychain, Windows Credential
 # Manager, Linux Secret Service (sync, pure-Rust crypto for the D-Bus session).
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+
+[dev-dependencies]
+# Async runtime for ignored, on-demand live-integration diagnostics (the app
+# itself gets its runtime from Tauri).
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }

@@ -1,4 +1,4 @@
-//! Project-management provider integrations (Linear, Jira, Asana, GitHub).
+//! Project-management provider integrations (Linear, Jira, Asana, GitHub, Notion).
 //!
 //! An account-level **connection** (metadata in `settings.json`, token in the OS
 //! keyring) plus a per-brief **selector** drive a fetch against a provider's API,
@@ -21,6 +21,7 @@ pub mod asana;
 pub mod github;
 pub mod jira;
 pub mod linear;
+pub mod notion;
 
 /// The supported providers. Serialized lowercase (`"linear"`) to mirror the
 /// `Provider` string union in `types.ts`.
@@ -31,6 +32,7 @@ pub enum Provider {
     Jira,
     Asana,
     Github,
+    Notion,
 }
 
 // --- Shared HTTP helpers (used by every provider submodule) ---------------
@@ -173,6 +175,7 @@ pub async fn fetch(
         Provider::Jira => jira::fetch(conn, sel, token).await?,
         Provider::Asana => asana::fetch(conn, sel, token).await?,
         Provider::Github => github::fetch(conn, sel, token).await?,
+        Provider::Notion => notion::fetch(conn, sel, token).await?,
     };
     let summary = summarize(&items);
     Ok(IntegrationFetch {
@@ -190,6 +193,7 @@ pub async fn validate(conn: &Connection, token: &str) -> Result<(), String> {
         Provider::Jira => jira::validate(conn, token).await,
         Provider::Asana => asana::validate(conn, token).await,
         Provider::Github => github::validate(conn, token).await,
+        Provider::Notion => notion::validate(conn, token).await,
     }
 }
 

@@ -711,6 +711,33 @@ fn parse_github_url(url: &str) -> Option<(String, String)> {
     Some((owner, repo))
 }
 
+/// Whether `url`'s host equals `host` or is a subdomain of it (case-insensitive),
+/// regardless of scheme/path. Used to route Notion links before the web fetcher.
+fn host_is(url: &str, host: &str) -> bool {
+    let rest = url
+        .split_once("://")
+        .map(|(_, r)| r)
+        .unwrap_or(url);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let h = authority.rsplit('@').next().unwrap_or(authority); // drop any userinfo
+    let h = h.split(':').next().unwrap_or(h).to_lowercase(); // drop any port
+    h == host || h.ends_with(&format!(".{host}"))
+}
+
+/// The Notion object id for a Notion page URL, delegating to the provider's
+/// id extractor. `None` when the URL carries no 32-hex id.
+fn notion_page_id(url: &str) -> Option<String> {
+    provider::notion::extract_id(url)
+}
+
+/// Whether `url` points at Notion's authenticated app (private pages), on either
+/// the legacy `notion.so` host or the current `notion.com` / `app.notion.com`.
+/// Public published pages (`*.notion.site`) are intentionally excluded — they're
+/// reachable without the token and flow through the normal web fetcher.
+fn is_notion_app_url(url: &str) -> bool {
+    host_is(url, "notion.so") || host_is(url, "notion.com")
+}
+
 /// Whether a brief has anything to sync (a GitHub link or an explicit source).
 fn brief_is_syncable(brief: &Brief) -> bool {
     brief.sources.iter().any(|s| !s.url.trim().is_empty())
@@ -1310,6 +1337,40 @@ async fn gather_evidence(
     // Non-GitHub links → fetch + reduce.
     for link in &brief.links {
         if link.url.trim().is_empty() || parse_github_url(&link.url).is_some() {
+            continue;
+        }
+        // Private Notion pages: fetch their text with the brief's Notion token
+        // instead of web-fetching (which would just hit the JS login wall).
+        // Notion's app lives on both `notion.so` (legacy) and `notion.com` /
+        // `app.notion.com` (current), so match both. `*.notion.site` (public
+        // published pages) is deliberately not matched — it falls through as a
+        // normal web link. Handled-or-skipped either way: don't also web-fetch.
+        if is_notion_app_url(&link.url) {
+            if let Some(conn) = brief
+                .connections
+                .iter()
+                .find(|c| matches!(c.provider, provider::Provider::Notion))
+            {
+                if let (Some(page_id), Ok(token)) = (
+                    notion_page_id(&link.url),
+                    brief_connection_token(&brief.path, &conn.id),
+                ) {
+                    if let Ok(text) = provider::notion::fetch_page_text(&token, &page_id).await {
+                        let text = truncate_chars(text.trim(), per_cap);
+                        if !text.is_empty() {
+                            let label = if link.label.trim().is_empty() {
+                                &link.url
+                            } else {
+                                &link.label
+                            };
+                            evidence.push(Evidence {
+                                label: format!("Notion · {label}"),
+                                content: text,
+                            });
+                        }
+                    }
+                }
+            }
             continue;
         }
         if let Ok(text) = fetch_and_reduce(client, &link.url, per_cap).await {
@@ -3186,6 +3247,24 @@ mod tests {
     }
 
     #[test]
+    fn notion_app_urls_route_to_token_fetch() {
+        // Current domain (app.notion.com) — this is the shape that was silently
+        // falling through to the web fetcher before the fix.
+        assert!(is_notion_app_url(
+            "https://app.notion.com/p/Product-Home-c0a946fbbb7683be907e01d3fac2c180"
+        ));
+        // Legacy domain, and bare notion.com.
+        assert!(is_notion_app_url(
+            "https://www.notion.so/My-Page-2f1baf9c8d7e4a3b9c0d1e2f3a4b5c6d"
+        ));
+        assert!(is_notion_app_url("https://notion.com/abc"));
+        // Public published pages stay on the normal web path (no token needed).
+        assert!(!is_notion_app_url("https://myworkspace.notion.site/Public-Page"));
+        // Unrelated host that merely contains "notion" must not match.
+        assert!(!is_notion_app_url("https://notionx.com/page"));
+    }
+
+    #[test]
     fn no_frontmatter_is_all_body() {
         let raw = "# Just markdown\n\nno frontmatter here";
         let (yaml, body) = split_frontmatter(raw);
@@ -3264,6 +3343,64 @@ mod tests {
         delete_secret_value(key).unwrap();
         assert_eq!(get_secret_value(key).unwrap(), None);
         delete_secret_value(key).unwrap(); // idempotent
+    }
+
+    /// Live end-to-end diagnostic for the Notion synthesis-evidence path. Ignored
+    /// by default (needs the OS keyring + network + a shared page). Run with:
+    ///   WAID_NOTION_BRIEF=/mnt/c/Users/jelan/WAID/briefs/gluefi.md \
+    ///     cargo test notion_evidence_live -- --ignored --nocapture
+    /// Walks the exact chain `gather_evidence` uses and prints where it breaks.
+    #[test]
+    #[ignore = "requires keyring + network + a shared Notion page"]
+    fn notion_evidence_live() {
+        let path = std::env::var("WAID_NOTION_BRIEF")
+            .unwrap_or_else(|_| "/mnt/c/Users/jelan/WAID/briefs/gluefi.md".to_string());
+        let raw = fs::read_to_string(&path).expect("read brief");
+        let brief = parse_brief(&PathBuf::from(&path), raw);
+        eprintln!("brief.path = {}", brief.path);
+
+        let conn = brief
+            .connections
+            .iter()
+            .find(|c| matches!(c.provider, provider::Provider::Notion))
+            .expect("no Notion connection on this brief");
+        eprintln!("notion connection id = {}", conn.id);
+
+        let token = brief_connection_token(&brief.path, &conn.id)
+            .expect("no token in keyring for this connection");
+        eprintln!("token loaded: {} chars", token.len());
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        match rt.block_on(provider::notion::validate(conn, &token)) {
+            Ok(()) => eprintln!("validate: OK (token accepted by Notion)"),
+            Err(e) => eprintln!("validate: ERR -> {e}"),
+        }
+
+        let notion_links: Vec<_> = brief
+            .links
+            .iter()
+            .filter(|l| is_notion_app_url(&l.url))
+            .collect();
+        eprintln!("notion app links found: {}", notion_links.len());
+
+        for link in notion_links {
+            eprintln!("\n--- {} ---", link.url);
+            match notion_page_id(&link.url) {
+                Some(id) => {
+                    eprintln!("page id = {id}");
+                    match rt.block_on(provider::notion::fetch_page_text(&token, &id)) {
+                        Ok(text) => eprintln!(
+                            "fetch_page_text: OK, {} chars\nfirst 300:\n{}",
+                            text.len(),
+                            text.chars().take(300).collect::<String>()
+                        ),
+                        Err(e) => eprintln!("fetch_page_text: ERR -> {e}"),
+                    }
+                }
+                None => eprintln!("notion_page_id: None (no 32-hex id in URL)"),
+            }
+        }
     }
 
     #[test]

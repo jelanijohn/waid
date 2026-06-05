@@ -355,6 +355,13 @@ body {
 .dark .ptile-github {
   background: #444c56;
 }
+.ptile-notion {
+  background: #111;
+}
+.dark .ptile-notion {
+  background: #f4f4f2;
+  color: #111;
+}
 
 /* Soft accent pulse on the safety-net "Add feed" button. */
 @keyframes tw-pulse {

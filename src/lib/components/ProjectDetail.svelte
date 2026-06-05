@@ -9,6 +9,7 @@
   import MarkdownView from "./MarkdownView.svelte";
   import IntegrationPanel from "./IntegrationPanel.svelte";
   import IntegrationsModal from "./IntegrationsModal.svelte";
+  import WebhooksModal from "./WebhooksModal.svelte";
   import BootstrapModal from "./BootstrapModal.svelte";
   import Icon from "./Icon.svelte";
 
@@ -22,7 +23,14 @@
   let saving = $state(false);
   let syncing = $state(false);
   let integrationsOpen = $state(false);
-  let bootstrapOpen = $state(false);
+  let webhooksOpen = $state(false);
+  // Auto-open Generate when this brief was just created (one-shot store signal).
+  // {#key brief.path} remounts this component per selection, so reading +
+  // clearing the flag here fires once for the new project and never again.
+  // svelte-ignore state_referenced_locally -- intentional one-shot read on mount.
+  const justCreated = projects.bootstrapPath === brief.path;
+  if (justCreated) projects.bootstrapPath = null;
+  let bootstrapOpen = $state(justCreated);
 
   // A freshly-created brief still on its stub body → offer to generate one.
   let isStub = $derived(isStubBrief(brief));
@@ -105,7 +113,7 @@
 
   async function fire(hook: Webhook) {
     try {
-      const res = await fireWebhook(hook.url, hook.method, hook.body);
+      const res = await fireWebhook(brief.path, hook);
       if (res.ok) {
         toasts.success(`${hook.label || "Webhook"} → ${res.status}`);
       } else {
@@ -214,6 +222,19 @@
               {#if brief.integrations.length}
                 <span class="rounded-full bg-[var(--chip-bg)] px-[6px] py-px text-[10px] font-semibold text-[var(--fg2)]">
                   {brief.integrations.length}
+                </span>
+              {/if}
+            </button>
+            <button
+              class="inline-flex h-[30px] items-center gap-[5px] rounded-lg border bg-[var(--bg)] px-3 text-[12.5px] font-medium text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)]"
+              style="border-color: var(--border);"
+              title="Manage this brief's webhooks (custom headers, secrets)"
+              onclick={() => (webhooksOpen = true)}
+            >
+              <Icon name="bolt" size={14} /> Webhooks
+              {#if brief.webhooks.length}
+                <span class="rounded-full bg-[var(--chip-bg)] px-[6px] py-px text-[10px] font-semibold text-[var(--fg2)]">
+                  {brief.webhooks.length}
                 </span>
               {/if}
             </button>
@@ -366,6 +387,10 @@
 
 {#if integrationsOpen}
   <IntegrationsModal {brief} onclose={() => (integrationsOpen = false)} />
+{/if}
+
+{#if webhooksOpen}
+  <WebhooksModal {brief} onclose={() => (webhooksOpen = false)} />
 {/if}
 
 {#if bootstrapOpen}

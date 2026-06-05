@@ -30,9 +30,25 @@ pub struct Link {
     pub url: String,
 }
 
+/// A single custom request header on a webhook. One value across the webhook
+/// may contain the `{{secret}}` sentinel, resolved from the keyring at fire time.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WebhookHeader {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub value: String,
+}
+
 /// A webhook button rendered in the detail pane (fires an HTTP request).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Webhook {
+    /// Stable slug scoping the keyring secret (key `whook:<brief-path>:<id>`).
+    /// Survives relabeling. `#[serde(default)]` keeps old briefs parsing; a
+    /// missing id is synthesized from the label on first save, and empty ids are
+    /// never written back to frontmatter.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
     #[serde(default)]
     pub label: String,
     #[serde(default)]
@@ -43,6 +59,10 @@ pub struct Webhook {
     /// Optional request body (sent as JSON for POST/PUT/PATCH).
     #[serde(default)]
     pub body: Option<String>,
+    /// Custom headers. One value may contain `{{secret}}`, resolved from the
+    /// keyring at fire time. `#[serde(default)]` keeps old briefs parsing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub headers: Vec<WebhookHeader>,
 }
 
 fn default_method() -> String {
@@ -645,30 +665,86 @@ pub fn append_capture(path: String, note: String) -> Result<Brief, String> {
     Ok(parse_brief(&p, raw))
 }
 
-/// Fire a webhook and return its status + body for a toast.
+/// Sentinel placed in a header value to request the brief's webhook secret be
+/// interpolated at fire time (e.g. `Authorization: Bearer {{secret}}`).
+const WEBHOOK_SECRET_TOKEN: &str = "{{secret}}";
+
+/// Whether any header value references the keyring secret.
+fn webhook_needs_secret(webhook: &Webhook) -> bool {
+    webhook
+        .headers
+        .iter()
+        .any(|h| h.value.contains(WEBHOOK_SECRET_TOKEN))
+}
+
+/// Assemble the concrete `(name, value)` header pairs to send, dropping
+/// blank-named rows and interpolating the secret where `{{secret}}` appears.
+/// Pure (no network/keyring) so the header logic is unit-testable.
+fn build_webhook_headers(webhook: &Webhook, secret: Option<&str>) -> Vec<(String, String)> {
+    webhook
+        .headers
+        .iter()
+        .filter_map(|h| {
+            let name = h.name.trim();
+            if name.is_empty() {
+                return None;
+            }
+            let value = match secret {
+                Some(s) => h.value.replace(WEBHOOK_SECRET_TOKEN, s),
+                None => h.value.clone(),
+            };
+            Some((name.to_string(), value))
+        })
+        .collect()
+}
+
+/// Fire a webhook and return its status + body for a toast. Resolves the
+/// brief-scoped secret internally (never passed from the frontend, like
+/// `fetch_integration`) and only when a header actually references it.
 #[tauri::command]
-pub async fn fire_webhook(
-    url: String,
-    method: Option<String>,
-    body: Option<String>,
-) -> Result<WebhookResult, String> {
-    let method = method.unwrap_or_else(default_method).to_uppercase();
+pub async fn fire_webhook(path: String, webhook: Webhook) -> Result<WebhookResult, String> {
+    let method = webhook.method.to_uppercase();
     let client = reqwest::Client::new();
 
     let mut req = match method.as_str() {
-        "GET" => client.get(&url),
-        "POST" => client.post(&url),
-        "PUT" => client.put(&url),
-        "PATCH" => client.patch(&url),
-        "DELETE" => client.delete(&url),
+        "GET" => client.get(&webhook.url),
+        "POST" => client.post(&webhook.url),
+        "PUT" => client.put(&webhook.url),
+        "PATCH" => client.patch(&webhook.url),
+        "DELETE" => client.delete(&webhook.url),
         other => return Err(format!("unsupported HTTP method: {other}")),
     };
 
-    if let Some(b) = body {
+    // Load the secret only if some header references it.
+    let secret = if webhook_needs_secret(&webhook) {
+        Some(
+            get_secret_value(&webhook_secret_key(&path, &webhook.id))?
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| {
+                    "This webhook expects a secret but none is saved — add one.".to_string()
+                })?,
+        )
+    } else {
+        None
+    };
+
+    let headers = build_webhook_headers(&webhook, secret.as_deref());
+    let mut set_content_type = false;
+    for (name, value) in &headers {
+        if name.eq_ignore_ascii_case("content-type") {
+            set_content_type = true;
+        }
+        req = req.header(name, value);
+    }
+
+    if let Some(b) = &webhook.body {
         if !b.trim().is_empty() {
-            req = req
-                .header("content-type", "application/json")
-                .body(b);
+            // Preserve the historical default (JSON body) unless the user set
+            // their own content-type header.
+            if !set_content_type {
+                req = req.header("content-type", "application/json");
+            }
+            req = req.body(b.clone());
         }
     }
 
@@ -3111,6 +3187,25 @@ fn connection_secret_key(brief_path: &str, id: &str) -> String {
     format!("bconn:{}:{}", brief_path, id.trim())
 }
 
+/// Keyring entry key for a webhook's secret, scoped to the owning brief (mirrors
+/// `connection_secret_key`). Keyed by the webhook's stable slug `id` so the
+/// secret survives relabeling. (Deleting/renaming the id orphans the secret —
+/// harmless; the user just re-enters it.)
+fn webhook_secret_key(brief_path: &str, id: &str) -> String {
+    format!("whook:{}:{}", brief_path, id.trim())
+}
+
+/// Backfill stable ids for any id-less webhook (pre-`id` briefs), synthesizing
+/// from the label exactly as the frontend does so both sides agree on identity
+/// before the first frontmatter rewrite persists them.
+fn ensure_webhook_ids(hooks: &mut [Webhook]) {
+    for w in hooks.iter_mut() {
+        if w.id.trim().is_empty() {
+            w.id = slugify(&w.label);
+        }
+    }
+}
+
 /// Load a brief's token from the keyring, erroring when none is saved.
 fn brief_connection_token(brief_path: &str, id: &str) -> Result<String, String> {
     get_secret_value(&connection_secret_key(brief_path, id))?
@@ -3204,6 +3299,85 @@ pub fn delete_brief_connection(path: String, id: String) -> Result<Brief, String
         integs.into_iter().filter(|ig| ig.connection != id).collect();
     let brief = rewrite_brief_lists(&path, &conns, &integs)?;
     let _ = delete_secret_value(&connection_secret_key(&path, &id));
+    Ok(brief)
+}
+
+// --- Per-brief webhooks -----------------------------------------------------
+//
+// Webhooks round-trip through the brief's `webhooks` frontmatter key (mirrors
+// connections). Header *shapes* live in the file; a single secret per webhook
+// (referenced via `{{secret}}` in a header value) lives in the keyring keyed by
+// `whook:<brief-path>:<id>`. Splices only the `webhooks` key, preserving
+// everything else (same approach as `rewrite_brief_lists`).
+
+/// Read just the webhook list from a brief on disk.
+fn read_brief_webhooks(path: &str) -> Result<Vec<Webhook>, String> {
+    let p = PathBuf::from(path);
+    let raw = fs::read_to_string(&p).map_err(|e| format!("could not read {path}: {e}"))?;
+    Ok(parse_brief(&p, raw).webhooks)
+}
+
+/// Rewrite a brief's `webhooks` frontmatter key, preserving every other key and
+/// the body verbatim. Returns the reparsed brief.
+fn rewrite_brief_webhooks(path: &str, webhooks: &[Webhook]) -> Result<Brief, String> {
+    let p = PathBuf::from(path);
+    let raw = fs::read_to_string(&p).map_err(|e| format!("could not read {path}: {e}"))?;
+    let (yaml, body) = split_frontmatter(&raw);
+
+    let mut map: serde_yaml::Mapping = match &yaml {
+        Some(y) => serde_yaml::from_str(y).unwrap_or_default(),
+        None => serde_yaml::Mapping::new(),
+    };
+    set_list_key(&mut map, "webhooks", webhooks)?;
+
+    let yaml_out = serde_yaml::to_string(&map).map_err(|e| e.to_string())?;
+    let new_raw = format!("---\n{}---\n\n{}", yaml_out, body);
+    fs::write(&p, &new_raw).map_err(|e| format!("could not write {path}: {e}"))?;
+    Ok(parse_brief(&p, new_raw))
+}
+
+/// Add or update a webhook on a brief (identity = stable slug `id`) and,
+/// optionally, set its keyring secret. An empty `secret` keeps the existing one
+/// (so editing the header shape doesn't require re-pasting it). A missing `id`
+/// is synthesized from the label. Returns the reparsed brief.
+#[tauri::command]
+pub fn save_brief_webhook(
+    path: String,
+    mut webhook: Webhook,
+    secret: String,
+) -> Result<Brief, String> {
+    webhook.label = webhook.label.trim().to_string();
+    if webhook.label.is_empty() {
+        return Err("webhook label is empty".into());
+    }
+    webhook.id = webhook.id.trim().to_string();
+    if webhook.id.is_empty() {
+        webhook.id = slugify(&webhook.label);
+    }
+    if webhook.id.is_empty() {
+        return Err("could not derive a webhook id from the label".into());
+    }
+    if !secret.trim().is_empty() {
+        set_secret_value(&webhook_secret_key(&path, &webhook.id), &secret)?;
+    }
+    let mut hooks = read_brief_webhooks(&path)?;
+    ensure_webhook_ids(&mut hooks);
+    match hooks.iter_mut().find(|w| w.id == webhook.id) {
+        Some(existing) => *existing = webhook,
+        None => hooks.push(webhook),
+    }
+    rewrite_brief_webhooks(&path, &hooks)
+}
+
+/// Remove a webhook (by stable slug `id`) and its keyring secret (best-effort,
+/// idempotent). Returns the reparsed brief.
+#[tauri::command]
+pub fn delete_brief_webhook(path: String, id: String) -> Result<Brief, String> {
+    let mut hooks = read_brief_webhooks(&path)?;
+    ensure_webhook_ids(&mut hooks);
+    hooks.retain(|w| w.id != id);
+    let brief = rewrite_brief_webhooks(&path, &hooks)?;
+    let _ = delete_secret_value(&webhook_secret_key(&path, &id));
     Ok(brief)
 }
 
@@ -3925,6 +4099,133 @@ mod tests {
         assert!(cleared.connections.is_empty() && cleared.integrations.is_empty());
         let on_disk = fs::read_to_string(&path).unwrap();
         assert!(!on_disk.contains("connections:") && !on_disk.contains("integrations:"));
+        assert!(on_disk.contains("custom: keep-me"));
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn webhook_secret_key_is_scoped_to_brief() {
+        assert_eq!(
+            webhook_secret_key("/briefs/a.md", "deploy-staging"),
+            "whook:/briefs/a.md:deploy-staging"
+        );
+        // Same id under a different brief → distinct keyring entry.
+        assert_ne!(
+            webhook_secret_key("/briefs/a.md", "deploy"),
+            webhook_secret_key("/briefs/b.md", "deploy")
+        );
+        // The id is trimmed.
+        assert_eq!(
+            webhook_secret_key("/briefs/a.md", "  deploy  "),
+            "whook:/briefs/a.md:deploy"
+        );
+    }
+
+    #[test]
+    fn build_webhook_headers_interpolates_secret_and_drops_blanks() {
+        let hook = Webhook {
+            id: "deploy".into(),
+            label: "Deploy".into(),
+            url: "https://x".into(),
+            method: "POST".into(),
+            body: None,
+            headers: vec![
+                WebhookHeader { name: "Authorization".into(), value: "Bearer {{secret}}".into() },
+                WebhookHeader { name: "X-Plain".into(), value: "static".into() },
+                WebhookHeader { name: "  ".into(), value: "dropped".into() },
+            ],
+        };
+        assert!(webhook_needs_secret(&hook));
+
+        let built = build_webhook_headers(&hook, Some("tok123"));
+        assert_eq!(
+            built,
+            vec![
+                ("Authorization".to_string(), "Bearer tok123".to_string()),
+                ("X-Plain".to_string(), "static".to_string()),
+            ]
+        );
+
+        // No secret reference ⇒ no secret needed; values pass through untouched.
+        let plain = Webhook {
+            headers: vec![WebhookHeader { name: "X-Plain".into(), value: "static".into() }],
+            ..Webhook::default()
+        };
+        assert!(!webhook_needs_secret(&plain));
+        assert_eq!(
+            build_webhook_headers(&plain, None),
+            vec![("X-Plain".to_string(), "static".to_string())]
+        );
+    }
+
+    #[test]
+    fn webhooks_back_compat_parse_without_id_or_headers() {
+        // A pre-feature brief: webhooks have neither `id` nor `headers`.
+        let raw = "---\nname: P\nwebhooks:\n  - label: Old hook\n    url: https://x/deploy\n    method: POST\n---\nbody";
+        let brief = parse_brief(&PathBuf::from("/tmp/p.md"), raw.to_string());
+        assert_eq!(brief.webhooks.len(), 1);
+        assert_eq!(brief.webhooks[0].id, "");
+        assert!(brief.webhooks[0].headers.is_empty());
+        // ensure_webhook_ids synthesizes a stable slug from the label.
+        let mut hooks = brief.webhooks.clone();
+        ensure_webhook_ids(&mut hooks);
+        assert_eq!(hooks[0].id, "old-hook");
+    }
+
+    #[test]
+    fn save_and_delete_brief_webhook_splice_only_webhooks() {
+        let dir = scratch_dir("webhook-roundtrip");
+        let path = dir.join("p.md");
+        let raw = "---\nname: P\nstatus: active\ncustom: keep-me\n---\n\n# Body\n\nprose\n";
+        fs::write(&path, raw).unwrap();
+        let path_str = path.to_string_lossy().to_string();
+
+        // Add a webhook with no explicit id → id synthesized from the label.
+        let hook = Webhook {
+            id: String::new(),
+            label: "Deploy staging".into(),
+            url: "https://api.example.com/deploy".into(),
+            method: "POST".into(),
+            body: Some("{\"env\":\"staging\"}".into()),
+            headers: vec![WebhookHeader {
+                name: "Authorization".into(),
+                value: "Bearer {{secret}}".into(),
+            }],
+        };
+        let brief = save_brief_webhook(path_str.clone(), hook, String::new()).unwrap();
+        assert_eq!(brief.webhooks.len(), 1);
+        assert_eq!(brief.webhooks[0].id, "deploy-staging");
+        assert_eq!(brief.webhooks[0].headers[0].value, "Bearer {{secret}}");
+
+        // Other frontmatter keys + the body survive byte-for-byte.
+        let on_disk = fs::read_to_string(&path).unwrap();
+        assert!(on_disk.contains("custom: keep-me"));
+        assert!(on_disk.contains("status: active"));
+        assert!(on_disk.contains("# Body\n\nprose"));
+        // The synthesized id is persisted; only the header *template* (not a
+        // secret) is written — the secret lives in the keyring.
+        assert!(on_disk.contains("id: deploy-staging"));
+        assert!(on_disk.contains("Bearer {{secret}}"));
+
+        // Editing by the same id updates in place (no duplicate).
+        let edit = Webhook {
+            id: "deploy-staging".into(),
+            label: "Deploy prod".into(),
+            url: "https://api.example.com/prod".into(),
+            method: "POST".into(),
+            body: None,
+            headers: vec![],
+        };
+        let brief = save_brief_webhook(path_str.clone(), edit, String::new()).unwrap();
+        assert_eq!(brief.webhooks.len(), 1);
+        assert_eq!(brief.webhooks[0].label, "Deploy prod");
+
+        // Delete removes the webhook key entirely when the list empties.
+        let brief = delete_brief_webhook(path_str.clone(), "deploy-staging".into()).unwrap();
+        assert!(brief.webhooks.is_empty());
+        let on_disk = fs::read_to_string(&path).unwrap();
+        assert!(!on_disk.contains("webhooks:"));
         assert!(on_disk.contains("custom: keep-me"));
 
         fs::remove_dir_all(&dir).unwrap();

@@ -56,6 +56,8 @@ pub fn run() {
             commands::touch_brief,
             commands::append_capture,
             commands::fire_webhook,
+            commands::save_brief_webhook,
+            commands::delete_brief_webhook,
             commands::sync_brief,
             commands::sync_all,
             commands::synthesize_brief,

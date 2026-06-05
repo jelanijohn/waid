@@ -13,6 +13,7 @@ import type {
   LlmSettings,
   SyncOutcome,
   VaultInfo,
+  Webhook,
   WebhookResult,
 } from "./types";
 
@@ -28,11 +29,18 @@ export const touchBrief = (path: string) => invoke<Brief>("touch_brief", { path 
 export const appendCapture = (path: string, note: string) =>
   invoke<Brief>("append_capture", { path, note });
 
-export const fireWebhook = (
-  url: string,
-  method: string,
-  body?: string | null,
-) => invoke<WebhookResult>("fire_webhook", { url, method, body: body ?? null });
+// fire_webhook resolves headers + the keyring secret server-side, so it needs
+// the owning brief's path plus the whole Webhook object.
+export const fireWebhook = (path: string, webhook: Webhook) =>
+  invoke<WebhookResult>("fire_webhook", { path, webhook });
+
+/** Add/update a webhook on a brief (identity = slug id); empty secret keeps the existing one. */
+export const saveBriefWebhook = (path: string, webhook: Webhook, secret: string) =>
+  invoke<Brief>("save_brief_webhook", { path, webhook, secret });
+
+/** Remove a webhook (by slug id) + its keyring secret. */
+export const deleteBriefWebhook = (path: string, id: string) =>
+  invoke<Brief>("delete_brief_webhook", { path, id });
 
 /** Refresh a brief's managed sync block from its linked integrations. */
 export const syncBrief = (path: string) => invoke<Brief>("sync_brief", { path });

@@ -287,6 +287,8 @@
     try {
       const brief = await createBrief(name);
       await projects.load();
+      // New projects start as a stub — pop Generate immediately on select.
+      projects.bootstrapPath = brief.path;
       await projects.select(brief.path);
       newName = "";
       creating = false;

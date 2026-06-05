@@ -48,6 +48,9 @@ function stem(brief: Brief): string {
 class ProjectStore {
   briefs = $state<Brief[]>([]);
   selectedPath = $state<string | null>(null);
+  /** Path of a just-created brief that should auto-open the Generate modal on
+   *  its next mount. One-shot: ProjectDetail reads it once and clears it. */
+  bootstrapPath = $state<string | null>(null);
   briefsDir = $state<string>("");
   vault = $state<VaultInfo>({ isVault: false });
   /** True under WSL — used to add a handler hint when opening URLs fails. */

@@ -20,6 +20,59 @@ export function isStubBrief(brief: Brief): boolean {
   return body.length === 0;
 }
 
+/** A minimal starter brief: the existing frontmatter (preserved verbatim so
+ *  unknown keys / last_opened survive) plus a skeleton body that showcases the
+ *  sections the brief format outlines — an overview, the optional Goals/Stack/
+ *  Notes blocks, and the Current State / Open Questions sections. Hands into
+ *  edit mode for the user to fill in; the app-managed Activity/Captures regions
+ *  are left out (WAID writes those). */
+export function blankTemplate(brief: Brief): string {
+  // Lift the leading `---\n…\n---\n` block straight from the raw file (tolerant
+  // of a BOM and CRLF). Falls back to a bare name block if it's somehow absent.
+  const fm = brief.raw.match(/^﻿?---\r?\n[\s\S]*?\r?\n---\r?\n/);
+  let frontmatter = fm
+    ? fm[0]
+    : `---\nname: ${brief.name}\ndescription: \ntags: []\nlinks: []\nwebhooks: []\n---\n`;
+  // Seed the empty stub fields with samples so the template showcases them too.
+  // Only fills blanks — an existing brief's real values are left untouched.
+  frontmatter = frontmatter
+    .replace(/^description:[ \t]*$/m, "description: A short, one-line summary of what this project does.")
+    .replace(/^tags:[ \t]*\[\][ \t]*$/m, "tags: [side-project, prototype]")
+    .replace(
+      /^links:[ \t]*\[\][ \t]*$/m,
+      "links:\n  - label: Homepage\n    url: https://example.com\n  - label: Repo\n    url: https://github.com/your-org/your-repo",
+    )
+    .replace(
+      /^webhooks:[ \t]*\[\][ \t]*$/m,
+      "webhooks:\n  - label: Deploy\n    url: https://example.com/hooks/deploy\n    method: POST\n  - label: Notify\n    url: https://example.com/hooks/notify\n    method: POST",
+    );
+  return `${frontmatter}
+# ${brief.name}
+
+A one-sentence overview of what this project is and why it exists.
+
+## Goals
+
+- What "done" looks like.
+
+## Stack
+
+- Key tools, languages, or services.
+
+## Current State
+
+Where the project stands right now — a couple of sentences.
+
+## Open Questions
+
+- The next thing a maintainer should resolve.
+
+## Notes
+
+- Anything else worth remembering.
+`;
+}
+
 /** Build the paste-a-prompt template for a project name. */
 export function pastePromptTemplate(name: string): string {
   return `You are helping me write the initial WAID project brief for "${name}".

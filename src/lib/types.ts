@@ -6,11 +6,22 @@ export interface Link {
   url: string;
 }
 
+export interface WebhookHeader {
+  name: string;
+  /** May contain the literal `{{secret}}`, resolved from the keyring at fire time. */
+  value: string;
+}
+
 export interface Webhook {
+  /** Stable slug, e.g. "deploy-staging". Scopes the keyring secret; survives
+   *  relabeling. Synthesized from the label on first save when absent. */
+  id: string;
   label: string;
   url: string;
   method: string;
   body?: string | null;
+  /** Custom request headers; one value may reference the keyring secret via `{{secret}}`. */
+  headers?: WebhookHeader[];
 }
 
 /** A sync source for pulling external data into a brief (see sync_brief).

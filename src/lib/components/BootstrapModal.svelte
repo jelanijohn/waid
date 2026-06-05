@@ -9,7 +9,7 @@
     bootstrapFromAnswers,
     normalizeBootstrapPaste,
   } from "$lib/tauri";
-  import { pastePromptTemplate } from "$lib/bootstrap";
+  import { pastePromptTemplate, blankTemplate } from "$lib/bootstrap";
   import Icon from "./Icon.svelte";
 
   // Mounted under {#if bootstrapOpen} by ProjectDetail, so this is freshly
@@ -67,8 +67,8 @@
     {
       id: "blank",
       icon: "description",
-      label: "Start blank",
-      blurb: "Keep the empty brief and write it yourself",
+      label: "Start from a blank template",
+      blurb: "A skeleton brief with the standard sections, ready to fill in",
     },
   ]);
 
@@ -93,7 +93,7 @@
 
   function pick(id: Method["id"]) {
     if (id === "blank") {
-      onclose();
+      onDraft(blankTemplate(brief));
     } else if (id === "folder") {
       runFolder();
     } else {

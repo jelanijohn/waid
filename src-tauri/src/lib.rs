@@ -79,6 +79,7 @@ pub fn run() {
             commands::save_brief_integration,
             commands::delete_brief_integration,
             commands::test_brief_connection,
+            commands::connect_gmail,
             commands::fetch_integration,
             commands::digest_integrations,
             commands::morning_briefing,

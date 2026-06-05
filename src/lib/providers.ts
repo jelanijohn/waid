@@ -6,7 +6,7 @@
 
 import type { Provider } from "./types";
 
-export type Kind = "tasks" | "notifications" | "page";
+export type Kind = "tasks" | "notifications" | "page" | "email";
 
 export interface ProviderMeta {
   label: string;
@@ -70,19 +70,32 @@ export const PROVIDERS: Record<Provider, ProviderMeta> = {
     needsBaseUrl: false,
     needsAccount: false,
   },
+  gmail: {
+    label: "Gmail",
+    // "G" is taken by GitHub; "@" reads as email and avoids the clash.
+    mono: "@",
+    blurb: "Recent emails matching a search",
+    queryPlaceholder: "from:acme.com newer_than:14d",
+    kinds: ["email"],
+    needsBaseUrl: false,
+    // The account is discovered by the OAuth flow, not typed (see IntegrationsModal).
+    needsAccount: true,
+  },
 };
 
-export const PROVIDER_ORDER: Provider[] = ["linear", "jira", "asana", "github", "notion"];
+export const PROVIDER_ORDER: Provider[] = ["linear", "jira", "asana", "github", "notion", "gmail"];
 
 /** Material glyph for a kind (used in segmented controls + feed rows). For Notion
  *  the same `kind` values mean "database" vs "page", so they render differently. */
 export function kindIcon(kind: string, provider?: Provider): string {
+  if (kind === "email") return "mail";
   if (provider === "notion") return kind === "page" ? "description" : "table";
   return kind === "notifications" ? "notifications" : "checklist";
 }
 
 /** Human label for a kind. Notion reuses `tasks`/`page` to mean database vs page. */
 export function kindLabel(kind: string, provider?: Provider): string {
+  if (kind === "email") return "Email";
   if (provider === "notion") return kind === "page" ? "Project page" : "Database / table";
   return kind === "notifications" ? "Notifications" : "Tasks";
 }

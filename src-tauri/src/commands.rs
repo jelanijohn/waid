@@ -1942,7 +1942,7 @@ async fn fetch_brief_integration(
         .iter()
         .find(|c| c.id == sel.connection)
         .ok_or_else(|| format!("brief has no connection \"{}\"", sel.connection))?;
-    let token = brief_connection_token(brief_path, &sel.connection)?;
+    let token = resolve_connection_token(conn, brief_path).await?;
     let fetched_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     provider::fetch(conn, sel, &token, fetched_at).await
 }
@@ -3087,6 +3087,11 @@ const KEYRING_SERVICE: &str = "com.jelanijohn.waid";
 /// Anthropic API key when the Anthropic provider is selected.
 const SECRET_GITHUB_TOKEN: &str = "github.token";
 const SECRET_ANTHROPIC_API_KEY: &str = "anthropic.api_key";
+// The user's bring-your-own Google OAuth *Desktop* client (see `connect_gmail`).
+// The client_id isn't sensitive, but both live in the keyring for one storage
+// path. WAID ships no shared Google credentials.
+const SECRET_GMAIL_CLIENT_ID: &str = "gmail.client_id";
+const SECRET_GMAIL_CLIENT_SECRET: &str = "gmail.client_secret";
 
 /// Build a keyring entry for `key`, rejecting empty keys before touching the OS.
 fn keyring_entry(key: &str) -> Result<keyring::Entry, String> {
@@ -3213,6 +3218,321 @@ fn brief_connection_token(brief_path: &str, id: &str) -> Result<String, String> 
         .ok_or_else(|| "No API token saved for this connection — add one.".to_string())
 }
 
+// --- Gmail OAuth: account-scoped grant + the auth seam ---------------------
+//
+// Gmail is the one provider that doesn't use a pasted static token. It uses
+// Google OAuth (the desktop loopback + PKCE flow in `connect_gmail`), and the
+// grant is scoped to the **Gmail account**, not the brief: every brief whose
+// connection names `account` reuses one grant. So Gmail tokens never live under
+// `bconn:` — they live under `gmail.oauth:<account>`. All of this is the command
+// layer's job; the `provider/gmail` module only ever receives a ready token.
+
+/// Account-scoped OAuth grant key. One grant per Gmail address, shared across
+/// every brief whose connection names this account. Lowercased so casing in the
+/// connection metadata can't fork the entry.
+fn gmail_grant_key(account: &str) -> String {
+    format!("gmail.oauth:{}", account.trim().to_lowercase())
+}
+
+/// One Gmail OAuth grant, stored as JSON under `gmail_grant_key(account)`.
+#[derive(Serialize, Deserialize)]
+struct GmailGrant {
+    refresh_token: String,
+    access_token: String,
+    /// RFC3339; when this access_token stops being valid.
+    expires_at: String,
+}
+
+/// Pure freshness check (with a 60s safety margin) — unit-tested. An unparseable
+/// timestamp is treated as stale so a corrupt grant forces a refresh, not a panic.
+fn grant_is_fresh(expires_at: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
+    chrono::DateTime::parse_from_rfc3339(expires_at)
+        .map(|t| t.with_timezone(&chrono::Utc) > now + chrono::Duration::seconds(60))
+        .unwrap_or(false)
+}
+
+/// Compute the stored `expires_at` from an `expires_in` (seconds), trimming a
+/// small skew so we refresh slightly early. Shared by `connect_gmail` and the
+/// refresh path.
+fn gmail_expires_at(now: chrono::DateTime<chrono::Utc>, expires_in_secs: i64) -> String {
+    let skew = 30;
+    (now + chrono::Duration::seconds((expires_in_secs - skew).max(0)))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// Read the user's bring-your-own Google OAuth client (id + secret) from the
+/// keyring, erroring with a setup hint when either is missing.
+fn gmail_oauth_client() -> Result<(String, String), String> {
+    let id = get_secret_value(SECRET_GMAIL_CLIENT_ID)?
+        .filter(|s| !s.trim().is_empty())
+        .ok_or("Add your Google OAuth client in Settings first.")?;
+    let secret = get_secret_value(SECRET_GMAIL_CLIENT_SECRET)?
+        .filter(|s| !s.trim().is_empty())
+        .ok_or("Add your Google OAuth client in Settings first.")?;
+    Ok((id, secret))
+}
+
+/// Return a usable Gmail access token for `account`, refreshing (and persisting
+/// the refreshed grant) when the cached one is stale. Network + keyring only.
+async fn gmail_access_token(account: &str) -> Result<String, String> {
+    let key = gmail_grant_key(account);
+    let raw = get_secret_value(&key)?.ok_or(
+        "Gmail account not connected — connect it in this brief's integration settings.",
+    )?;
+    let grant: GmailGrant =
+        serde_json::from_str(&raw).map_err(|e| format!("corrupt Gmail grant: {e}"))?;
+    if grant_is_fresh(&grant.expires_at, chrono::Utc::now()) {
+        return Ok(grant.access_token);
+    }
+
+    let (client_id, client_secret) = gmail_oauth_client()?;
+    let resp = http_client(5, 20)?
+        .post("https://oauth2.googleapis.com/token")
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", grant.refresh_token.as_str()),
+            ("client_id", client_id.as_str()),
+            ("client_secret", client_secret.as_str()),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("Gmail token refresh failed: {e}"))?;
+    let status = resp.status();
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("invalid Gmail token response: {e}"))?;
+    if !status.is_success() {
+        let err = json.get("error").and_then(|v| v.as_str()).unwrap_or_default();
+        // A revoked/expired grant comes back as 400 invalid_grant — tell the user
+        // to reconnect rather than leaving a cryptic HTTP error.
+        if err == "invalid_grant" {
+            return Err("Gmail access was revoked or expired — reconnect Gmail in this \
+                brief's integration settings."
+                .into());
+        }
+        return Err(format!("Gmail token refresh failed ({status}): {err}"));
+    }
+    let access_token = json
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .ok_or("Gmail token response missing access_token")?
+        .to_string();
+    let expires_in = json.get("expires_in").and_then(|v| v.as_i64()).unwrap_or(3600);
+    // Google usually omits a fresh refresh_token on refresh — keep the existing one.
+    let updated = GmailGrant {
+        refresh_token: grant.refresh_token,
+        access_token: access_token.clone(),
+        expires_at: gmail_expires_at(chrono::Utc::now(), expires_in),
+    };
+    set_secret_value(&key, &serde_json::to_string(&updated).map_err(|e| e.to_string())?)?;
+    Ok(access_token)
+}
+
+/// Resolve the bearer token for a connection. Gmail uses the account-scoped OAuth
+/// grant (refreshed on demand); every other provider uses the per-brief `bconn:`
+/// token unchanged. The single seam the generic fetch/test call sites route
+/// through, so neither they nor the `provider/` module learn Gmail is special.
+async fn resolve_connection_token(
+    conn: &Connection,
+    brief_path: &str,
+) -> Result<String, String> {
+    match conn.provider {
+        provider::Provider::Gmail => {
+            let account = conn
+                .account
+                .as_deref()
+                .map(str::trim)
+                .filter(|a| !a.is_empty())
+                .ok_or("Gmail connection has no account — reconnect it.")?;
+            gmail_access_token(account).await
+        }
+        _ => brief_connection_token(brief_path, &conn.id),
+    }
+}
+
+/// base64url-without-padding, used for the PKCE verifier/challenge and `state`.
+fn b64url(bytes: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+/// 32 bytes of OS entropy as base64url (43 chars). Used for the PKCE verifier and
+/// the CSRF `state`.
+fn random_b64url() -> Result<String, String> {
+    let mut buf = [0u8; 32];
+    getrandom::fill(&mut buf).map_err(|e| format!("could not gather entropy: {e}"))?;
+    Ok(b64url(&buf))
+}
+
+/// PKCE pair: a high-entropy `code_verifier` and its `S256` `code_challenge`.
+fn pkce_pair() -> Result<(String, String), String> {
+    use sha2::{Digest, Sha256};
+    let verifier = random_b64url()?;
+    let challenge = b64url(&Sha256::digest(verifier.as_bytes()));
+    Ok((verifier, challenge))
+}
+
+/// Run the Google OAuth desktop loopback flow for ONE Gmail account and store the
+/// resulting grant under `gmail_grant_key(<account>)`. Returns the discovered
+/// account email so the frontend can set it as `Connection.account`. Requires the
+/// Gmail client_id/secret to be saved first. Only ever writes to the keyring.
+#[tauri::command]
+pub async fn connect_gmail(app: AppHandle) -> Result<String, String> {
+    use tauri_plugin_opener::OpenerExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (client_id, client_secret) = gmail_oauth_client()?;
+    let (verifier, challenge) = pkce_pair()?;
+    let state = random_b64url()?;
+
+    // Loopback redirect: bind an ephemeral port; Desktop OAuth clients auto-allow
+    // `http://127.0.0.1:<any-port>`, so there's no redirect URI to register.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|e| format!("could not start loopback listener: {e}"))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| e.to_string())?
+        .port();
+    let redirect_uri = format!("http://127.0.0.1:{port}");
+
+    let auth_url = reqwest::Url::parse_with_params(
+        "https://accounts.google.com/o/oauth2/v2/auth",
+        &[
+            ("client_id", client_id.as_str()),
+            ("redirect_uri", redirect_uri.as_str()),
+            ("response_type", "code"),
+            ("scope", "https://www.googleapis.com/auth/gmail.readonly"),
+            ("code_challenge", challenge.as_str()),
+            ("code_challenge_method", "S256"),
+            ("state", state.as_str()),
+            // offline + consent guarantee a refresh_token on first consent.
+            ("access_type", "offline"),
+            ("prompt", "consent"),
+        ],
+    )
+    .map_err(|e| format!("could not build auth URL: {e}"))?;
+
+    app.opener()
+        .open_url(auth_url.to_string(), None::<&str>)
+        .map_err(|e| format!("could not open browser: {e}"))?;
+
+    // Wait for the single loopback redirect (bounded so an abandoned consent can't
+    // hang the command forever).
+    let (mut sock, _) = tokio::time::timeout(Duration::from_secs(300), listener.accept())
+        .await
+        .map_err(|_| "Timed out waiting for Google sign-in.".to_string())?
+        .map_err(|e| format!("loopback accept failed: {e}"))?;
+
+    let mut buf = vec![0u8; 8192];
+    let n = sock
+        .read(&mut buf)
+        .await
+        .map_err(|e| format!("could not read redirect: {e}"))?;
+    let request = String::from_utf8_lossy(&buf[..n]);
+    // First line: "GET /?code=...&state=... HTTP/1.1".
+    let target = request
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .unwrap_or("/");
+    let redirect = reqwest::Url::parse(&format!("http://127.0.0.1{target}"))
+        .map_err(|e| format!("malformed redirect: {e}"))?;
+    let params: std::collections::HashMap<String, String> =
+        redirect.query_pairs().into_owned().collect();
+
+    // Always answer the browser so the tab doesn't hang, then drop the socket.
+    let page = "<!doctype html><html><body style=\"font-family:system-ui;padding:3rem;text-align:center\">\
+        <h2>Connected ✓</h2><p>You can close this tab and return to WAID.</p></body></html>";
+    let http = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        page.len(),
+        page
+    );
+    let _ = sock.write_all(http.as_bytes()).await;
+    let _ = sock.flush().await;
+    drop(sock);
+    drop(listener);
+
+    if let Some(err) = params.get("error") {
+        return Err(format!("Google sign-in was declined ({err})."));
+    }
+    if params.get("state").map(String::as_str) != Some(state.as_str()) {
+        return Err("Gmail sign-in failed a security check (state mismatch). Try again.".into());
+    }
+    let code = params
+        .get("code")
+        .filter(|c| !c.is_empty())
+        .ok_or("Google sign-in returned no authorization code.")?;
+
+    // Exchange the code for tokens.
+    let client = http_client(5, 20)?;
+    let resp = client
+        .post("https://oauth2.googleapis.com/token")
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("code", code.as_str()),
+            ("redirect_uri", redirect_uri.as_str()),
+            ("client_id", client_id.as_str()),
+            ("client_secret", client_secret.as_str()),
+            ("code_verifier", verifier.as_str()),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("token exchange failed: {e}"))?;
+    let status = resp.status();
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("invalid token response: {e}"))?;
+    if !status.is_success() {
+        let err = json.get("error").and_then(|v| v.as_str()).unwrap_or_default();
+        return Err(format!("Gmail token exchange failed ({status}): {err}"));
+    }
+    let access_token = json
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .ok_or("token response missing access_token")?
+        .to_string();
+    let refresh_token = json
+        .get("refresh_token")
+        .and_then(|v| v.as_str())
+        .filter(|t| !t.is_empty())
+        .ok_or(
+            "Google didn't return a refresh token. Ensure the OAuth consent screen is set to \
+            \"In production\" and try again.",
+        )?
+        .to_string();
+    let expires_in = json.get("expires_in").and_then(|v| v.as_i64()).unwrap_or(3600);
+
+    // Discover the account email (works with gmail.readonly — no userinfo scope).
+    let profile = client
+        .get("https://gmail.googleapis.com/gmail/v1/users/me/profile")
+        .bearer_auth(&access_token)
+        .send()
+        .await
+        .map_err(|e| format!("could not read Gmail profile: {e}"))?;
+    let profile = provider::read_json(profile, "Gmail").await?;
+    let email = profile
+        .get("emailAddress")
+        .and_then(|v| v.as_str())
+        .filter(|e| !e.is_empty())
+        .ok_or("Gmail profile had no email address")?
+        .to_string();
+
+    let grant = GmailGrant {
+        refresh_token,
+        access_token,
+        expires_at: gmail_expires_at(chrono::Utc::now(), expires_in),
+    };
+    set_secret_value(
+        &gmail_grant_key(&email),
+        &serde_json::to_string(&grant).map_err(|e| e.to_string())?,
+    )?;
+    Ok(email)
+}
+
 /// Read just the connection + integration lists from a brief on disk.
 fn read_brief_lists(path: &str) -> Result<(Vec<Connection>, Vec<BriefIntegration>), String> {
     let p = PathBuf::from(path);
@@ -3277,7 +3597,12 @@ pub fn save_brief_connection(
     }
     let (mut conns, integs) = read_brief_lists(&path)?;
     let exists = conns.iter().any(|c| c.id == connection.id);
-    if !token.trim().is_empty() {
+    // Gmail has no `bconn:` token — its grant lives under the account key (set by
+    // the OAuth flow), so the frontend calls this with an empty token. Skip both
+    // the keyring write and the "token required" check for it.
+    if connection.provider == provider::Provider::Gmail {
+        // metadata-only write; the account grant is already persisted by `connect_gmail`.
+    } else if !token.trim().is_empty() {
         set_secret_value(&connection_secret_key(&path, &connection.id), &token)?;
     } else if !exists {
         return Err("a token is required to add a connection".into());
@@ -3433,7 +3758,7 @@ pub async fn test_brief_connection(path: String, id: String) -> Result<(), Strin
         .into_iter()
         .find(|c| c.id == id)
         .ok_or_else(|| format!("brief has no connection \"{id}\""))?;
-    let token = brief_connection_token(&path, &id)?;
+    let token = resolve_connection_token(&conn, &path).await?;
     provider::validate(&conn, &token).await
 }
 
@@ -3455,7 +3780,7 @@ pub async fn fetch_integration(
         .into_iter()
         .find(|c| c.id == connection_id)
         .ok_or_else(|| format!("brief has no connection \"{connection_id}\""))?;
-    let token = brief_connection_token(&path, &connection_id)?;
+    let token = resolve_connection_token(&conn, &path).await?;
     let sel = BriefIntegration {
         connection: connection_id,
         kind,
@@ -3557,6 +3882,41 @@ mod tests {
         assert_eq!(names, vec!["Nested", "Top"]);
 
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn gmail_grant_key_lowercases_and_trims() {
+        assert_eq!(gmail_grant_key("Me@Acme.com"), "gmail.oauth:me@acme.com");
+        assert_eq!(gmail_grant_key("  me@acme.com  "), "gmail.oauth:me@acme.com");
+        // Casing in the connection metadata can't fork the entry.
+        assert_eq!(gmail_grant_key("ME@ACME.COM"), gmail_grant_key("me@acme.com"));
+    }
+
+    #[test]
+    fn grant_freshness_respects_margin_and_unparseable() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-06-05T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        // Comfortably ahead → fresh.
+        assert!(grant_is_fresh("2026-06-05T13:00:00Z", now));
+        // Already past → stale.
+        assert!(!grant_is_fresh("2026-06-05T11:00:00Z", now));
+        // Within the 60s safety margin → treated as stale (refresh early).
+        assert!(!grant_is_fresh("2026-06-05T12:00:30Z", now));
+        // Unparseable → stale, never a panic.
+        assert!(!grant_is_fresh("not-a-timestamp", now));
+    }
+
+    #[test]
+    fn gmail_expires_at_trims_skew_and_is_parseable() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-06-05T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        // 3600s token, 30s skew → expires_at is 59m30s out, and grant_is_fresh
+        // (which adds its own 60s margin) still sees it as fresh right now.
+        let exp = gmail_expires_at(now, 3600);
+        assert!(chrono::DateTime::parse_from_rfc3339(&exp).is_ok());
+        assert!(grant_is_fresh(&exp, now));
     }
 
     /// Real end-to-end keyring roundtrip. Ignored by default because it needs a

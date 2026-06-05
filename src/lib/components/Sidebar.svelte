@@ -13,6 +13,8 @@
     hasSecret,
     SECRET_GITHUB_TOKEN,
     SECRET_ANTHROPIC_API_KEY,
+    SECRET_GMAIL_CLIENT_ID,
+    SECRET_GMAIL_CLIENT_SECRET,
     getLlmSettings,
     setLlmSettings,
     listOllamaModels,
@@ -35,6 +37,13 @@
   let ghToken = $state("");
   let ghStored = $state(false);
   let ghBusy = $state(false);
+
+  // Gmail OAuth client (bring-your-own Desktop client; OS keyring) — managed from
+  // the settings popover. Both id + secret are required before Connect works.
+  let gmailClientId = $state("");
+  let gmailClientSecret = $state("");
+  let gmailClientStored = $state(false);
+  let gmailBusy = $state(false);
 
   // LLM synthesis settings — managed from the settings popover.
   // Provider "" means disabled; "ollama" / "anthropic" select a backend.
@@ -104,8 +113,53 @@
     settingsOpen = !settingsOpen;
     if (settingsOpen) {
       ghToken = "";
+      gmailClientId = "";
+      gmailClientSecret = "";
       refreshTokenStatus();
+      refreshGmailClientStatus();
       loadLlmSettings();
+    }
+  }
+
+  async function refreshGmailClientStatus() {
+    try {
+      gmailClientStored = await hasSecret(SECRET_GMAIL_CLIENT_ID);
+    } catch {
+      gmailClientStored = false;
+    }
+  }
+
+  async function saveGmailClient() {
+    const id = gmailClientId.trim();
+    const secret = gmailClientSecret.trim();
+    if (!id || !secret || gmailBusy) return;
+    gmailBusy = true;
+    try {
+      await setSecret(SECRET_GMAIL_CLIENT_ID, id);
+      await setSecret(SECRET_GMAIL_CLIENT_SECRET, secret);
+      gmailClientId = "";
+      gmailClientSecret = "";
+      gmailClientStored = true;
+      toasts.success("Google OAuth client saved to keychain");
+    } catch (e) {
+      toasts.error(`Could not save Google client: ${e}`);
+    } finally {
+      gmailBusy = false;
+    }
+  }
+
+  async function clearGmailClient() {
+    if (gmailBusy) return;
+    gmailBusy = true;
+    try {
+      await deleteSecret(SECRET_GMAIL_CLIENT_ID);
+      await deleteSecret(SECRET_GMAIL_CLIENT_SECRET);
+      gmailClientStored = false;
+      toasts.success("Google OAuth client removed");
+    } catch (e) {
+      toasts.error(`Could not remove Google client: ${e}`);
+    } finally {
+      gmailBusy = false;
     }
   }
 
@@ -489,6 +543,67 @@
               onclick={clearToken}
             >
               Remove saved token
+            </button>
+          {/if}
+
+          <!-- Gmail OAuth client (bring-your-own Google Desktop client; OS keyring) -->
+          <div
+            class="mb-1 mt-3 border-t pt-3 text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--fg3)]"
+            style="border-color: var(--border);"
+          >
+            Gmail (Google OAuth client)
+          </div>
+          <p class="mb-2 text-[10.5px] leading-snug text-[var(--fg3)]">
+            To pull emails into a brief, create your own Google Cloud OAuth
+            <strong class="text-[var(--fg2)]">Desktop</strong> client (Gmail API enabled), then paste its ID + secret
+            here. {gmailClientStored ? "A client is saved." : "No client saved."}
+          </p>
+          <p
+            class="mb-2 rounded-md px-2 py-1.5 text-[10px] leading-snug text-[var(--fg2)]"
+            style="background: color-mix(in srgb, var(--status-blocked) 12%, transparent);"
+          >
+            <Icon name="warning" size={11} class="-mt-px mr-0.5" />
+            On the OAuth consent screen, set publishing status to
+            <strong>“In production”</strong> (unverified is fine for personal use). In
+            <strong>Testing</strong>, Google revokes the grant after 7 days and you'd have to reconnect weekly.
+          </p>
+          <input
+            class="mb-1.5 w-full rounded-md border px-2 py-1 text-[11.5px] text-[var(--fg)] outline-none transition-colors focus:border-[var(--accent)]"
+            style="background: var(--input-bg); border-color: var(--border);"
+            type="text"
+            autocomplete="off"
+            placeholder={gmailClientStored ? "Replace client ID…" : "…apps.googleusercontent.com"}
+            bind:value={gmailClientId}
+            disabled={gmailBusy}
+          />
+          <div class="flex gap-1.5">
+            <input
+              class="min-w-0 flex-1 rounded-md border px-2 py-1 text-[11.5px] text-[var(--fg)] outline-none transition-colors focus:border-[var(--accent)]"
+              style="background: var(--input-bg); border-color: var(--border);"
+              type="password"
+              autocomplete="off"
+              placeholder={gmailClientStored ? "Replace client secret…" : "Client secret (GOCSPX-…)"}
+              bind:value={gmailClientSecret}
+              disabled={gmailBusy}
+              onkeydown={(e) => {
+                if (e.key === "Enter") saveGmailClient();
+              }}
+            />
+            <button
+              class="shrink-0 rounded-md bg-[var(--accent)] px-2.5 py-1 text-[11.5px] font-semibold text-white transition-[filter] hover:brightness-[1.06] disabled:opacity-50"
+              disabled={gmailBusy || !gmailClientId.trim() || !gmailClientSecret.trim()}
+              onclick={saveGmailClient}
+            >
+              Save
+            </button>
+          </div>
+          {#if gmailClientStored}
+            <button
+              class="mt-1.5 text-[10.5px] text-[var(--fg3)] transition-colors hover:text-[var(--fg)] hover:underline disabled:opacity-50"
+              disabled={gmailBusy}
+              onclick={clearGmailClient}
+            >
+              Remove saved client
             </button>
           {/if}
 

@@ -111,6 +111,11 @@ export const SECRET_GITHUB_TOKEN = "github.token";
 /** Keyring key for the Anthropic API key used by the synthesis agent. */
 export const SECRET_ANTHROPIC_API_KEY = "anthropic.api_key";
 
+/** Keyring keys for the user's bring-your-own Google OAuth *Desktop* client,
+ *  used by the Gmail provider's connect flow (see connectGmail). */
+export const SECRET_GMAIL_CLIENT_ID = "gmail.client_id";
+export const SECRET_GMAIL_CLIENT_SECRET = "gmail.client_secret";
+
 /** Store (or replace) a secret in the OS keyring. */
 export const setSecret = (key: string, value: string) =>
   invoke<void>("set_secret", { key, value });
@@ -152,6 +157,11 @@ export const deleteBriefIntegration = (
 /** Verify a brief connection's saved token against its provider. */
 export const testBriefConnection = (path: string, id: string) =>
   invoke<void>("test_brief_connection", { path, id });
+
+/** Run the Google OAuth desktop loopback flow for one Gmail account. Opens the
+ *  browser, captures the consent, stores the account-scoped grant in the keyring,
+ *  and returns the connected account's email (set it as Connection.account). */
+export const connectGmail = () => invoke<string>("connect_gmail");
 
 /** Generate an LLM digest of a brief's live integration items (display-only). */
 export const digestIntegrations = (path: string) =>

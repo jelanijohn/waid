@@ -35,6 +35,15 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 # repos, etc.). Platform-native stores: macOS Keychain, Windows Credential
 # Manager, Linux Secret Service (sync, pure-Rust crypto for the D-Bus session).
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+# Gmail OAuth (desktop loopback + PKCE) is hand-rolled in commands.rs over the
+# existing reqwest — no OAuth SDK. These are the minimal, ubiquitous primitives
+# that flow needs: a localhost listener for the redirect (tokio::net), SHA-256 +
+# base64url for the PKCE challenge, and OS entropy for the verifier/state. All
+# were already in the dependency tree transitively; declaring them is free.
+tokio = { version = "1", features = ["net", "time", "io-util"] }
+sha2 = "0.10"
+base64 = "0.22"
+getrandom = "0.3"
 
 [dev-dependencies]
 # Async runtime for ignored, on-demand live-integration diagnostics (the app

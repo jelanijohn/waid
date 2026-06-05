@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod asana;
 pub mod github;
+pub mod gmail;
 pub mod jira;
 pub mod linear;
 pub mod notion;
@@ -33,6 +34,7 @@ pub enum Provider {
     Asana,
     Github,
     Notion,
+    Gmail,
 }
 
 // --- Shared HTTP helpers (used by every provider submodule) ---------------
@@ -176,6 +178,7 @@ pub async fn fetch(
         Provider::Asana => asana::fetch(conn, sel, token).await?,
         Provider::Github => github::fetch(conn, sel, token).await?,
         Provider::Notion => notion::fetch(conn, sel, token).await?,
+        Provider::Gmail => gmail::fetch(conn, sel, token).await?,
     };
     let summary = summarize(&items);
     Ok(IntegrationFetch {
@@ -194,6 +197,7 @@ pub async fn validate(conn: &Connection, token: &str) -> Result<(), String> {
         Provider::Asana => asana::validate(conn, token).await,
         Provider::Github => github::validate(conn, token).await,
         Provider::Notion => notion::validate(conn, token).await,
+        Provider::Gmail => gmail::validate(conn, token).await,
     }
 }
 

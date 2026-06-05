@@ -10,6 +10,7 @@
     saveBriefIntegration,
     deleteBriefIntegration,
     testBriefConnection,
+    connectGmail,
   } from "$lib/tauri";
   import Icon from "./Icon.svelte";
   import ProviderTile from "./ProviderTile.svelte";
@@ -63,6 +64,11 @@
       jiraReady &&
       !idTaken,
   );
+  // Gmail connects via OAuth, not a pasted token — its readiness drops the token
+  // requirement (the account is discovered by the flow, not typed).
+  let canConnectGmail = $derived(
+    !busy && label.trim().length > 0 && effectiveId.length > 0 && !idTaken,
+  );
 
   // Already-connected accounts for the picked provider (offer to reuse).
   let existingForProvider = $derived(brief.connections.filter((c) => c.provider === provider));
@@ -82,7 +88,10 @@
   // a "Project page" feed is a single page — no Max-items cap.
   let isNotion = $derived(targetConn?.provider === "notion");
   let isNotionPage = $derived(isNotion && kind === "page");
-  let queryRequired = $derived(isNotion);
+  // Gmail's search query is the feed's assignment (like a Notion URL), so it's
+  // required, not an optional filter.
+  let isGmail = $derived(targetConn?.provider === "gmail");
+  let queryRequired = $derived(isNotion || isGmail);
   let canAddFeed = $derived(!busy && (!queryRequired || query.trim().length > 0));
 
   // --- header copy -----------------------------------------------------------
@@ -144,6 +153,32 @@
       startChoose(conn.id, "connect");
     } catch (e) {
       toasts.error(`Could not connect: ${e}`);
+    } finally {
+      busy = false;
+    }
+  }
+
+  // Gmail's step 1: run the OAuth desktop flow (opens the browser), then save the
+  // connection with the discovered account email and NO token (the grant lives
+  // under the account key in the keyring). Then carry on into step 2, like connect().
+  async function connectGmailAccount() {
+    if (!canConnectGmail) return;
+    busy = true;
+    try {
+      const email = await connectGmail();
+      const conn: Connection = {
+        id: effectiveId,
+        provider: "gmail",
+        label: label.trim() || `Gmail (${email})`,
+        baseUrl: null,
+        account: email,
+      };
+      const updated = await saveBriefConnection(brief.path, conn, "");
+      projects.upsert(updated);
+      toasts.success(`${email} connected ✓`);
+      startChoose(conn.id, "connect");
+    } catch (e) {
+      toasts.error(`Could not connect Gmail: ${e}`);
     } finally {
       busy = false;
     }
@@ -459,7 +494,7 @@
           </label>
         {/if}
 
-        {#if meta.needsAccount}
+        {#if meta.needsAccount && provider !== "gmail"}
           <label class="mb-3 flex flex-col gap-[5px]">
             <span class="text-[11px] text-[var(--fg3)]">
               {provider === "asana" ? "Workspace ID (optional)" : "Account email"}
@@ -489,20 +524,37 @@
           </label>
         {/if}
 
-        <label class="flex flex-col gap-[5px]">
-          <span class="text-[11px] text-[var(--fg3)]">API token</span>
-          <input
-            class="h-[34px] rounded-[9px] border px-[10px] text-[12.5px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
-            style="background: var(--input-bg); border-color: var(--border);"
-            type="password"
-            autocomplete="off"
-            placeholder="Paste your token"
-            bind:value={token}
-          />
-          <span class="text-[10.5px] text-[var(--fg3)]">
-            <Icon name="lock" size={12} class="-mt-px mr-0.5" />Stored in your OS keychain — never written to the brief.
-          </span>
-        </label>
+        {#if provider === "gmail"}
+          <!-- Gmail signs in via OAuth (opens your browser); no token to paste. -->
+          <button
+            class="inline-flex h-[38px] w-full items-center justify-center gap-[7px] rounded-lg bg-[var(--accent)] text-[12.5px] font-medium text-white transition-[filter] hover:brightness-[1.06] disabled:opacity-50"
+            onclick={connectGmailAccount}
+            disabled={!canConnectGmail}
+          >
+            <Icon name="open_in_new" size={15} />
+            {busy ? "Waiting for Google…" : "Connect Google account"}
+          </button>
+          <p class="mt-2 text-[10.5px] leading-[1.5] text-[var(--fg3)]">
+            Opens Google sign-in in your browser. WAID requests <strong class="text-[var(--fg2)]">read-only</strong>
+            Gmail access; the grant is stored in your OS keychain — never written to the brief. Set up your own
+            Google OAuth client in Settings first (one-time).
+          </p>
+        {:else}
+          <label class="flex flex-col gap-[5px]">
+            <span class="text-[11px] text-[var(--fg3)]">API token</span>
+            <input
+              class="h-[34px] rounded-[9px] border px-[10px] text-[12.5px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
+              style="background: var(--input-bg); border-color: var(--border);"
+              type="password"
+              autocomplete="off"
+              placeholder="Paste your token"
+              bind:value={token}
+            />
+            <span class="text-[10.5px] text-[var(--fg3)]">
+              <Icon name="lock" size={12} class="-mt-px mr-0.5" />Stored in your OS keychain — never written to the brief.
+            </span>
+          </label>
+        {/if}
       {:else if view === "choose" && targetConn}
         <!-- ============ CHOOSE (step 2) ============ -->
         <div
@@ -537,7 +589,7 @@
         <div class="grid gap-[10px] {isNotionPage ? 'grid-cols-1' : 'grid-cols-[1fr_88px]'}">
           <label class="flex flex-col gap-[5px]">
             <span class="text-[11px] text-[var(--fg3)]">
-              {#if isNotionPage}Notion page URL{:else if isNotion}Notion database URL{:else}Filter (optional){/if}
+              {#if isNotionPage}Notion page URL{:else if isNotion}Notion database URL{:else if isGmail}Gmail search query{:else}Filter (optional){/if}
             </span>
             <input
               class="h-[34px] rounded-[9px] border px-[10px] font-mono text-[11.5px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
@@ -565,6 +617,10 @@
             Its text becomes context for this brief's synthesised Current State. Share the page with your integration first.
           {:else if isNotion}
             Paste a database you've shared with this integration. Its rows show up as items.
+          {:else if isGmail}
+            A Gmail search — operators like <code>from:</code>, <code>subject:</code>, <code>label:</code>,
+            <code>newer_than:14d</code>, <code>is:unread</code>, <code>to:me</code>. Matching emails show up as items
+            (read-only; subjects &amp; snippets only).
           {:else}
             Leave the filter blank to pull {PROVIDERS[targetConn.provider].blurb.toLowerCase()}.
           {/if}
@@ -572,8 +628,9 @@
       {/if}
     </div>
 
-    <!-- Footer (only the two wizard steps have one) -->
-    {#if view === "connect"}
+    <!-- Footer (only the two wizard steps have one; Gmail's connect uses the
+         in-body OAuth button, so it has no footer). -->
+    {#if view === "connect" && provider !== "gmail"}
       <div class="flex items-center justify-between gap-3 border-t px-[18px] py-[13px]" style="border-color: var(--border);">
         <span class="inline-flex items-center gap-[5px] text-[10.5px] text-[var(--fg3)]">
           <Icon name="schedule" size={13} /> Takes ~10 seconds

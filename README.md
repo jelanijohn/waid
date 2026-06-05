@@ -137,10 +137,14 @@ links:
   - label: GitHub
     url: https://github.com/...
 webhooks:
-  - label: Deploy staging
+  - id: deploy-staging    # stable slug; scopes the keyring secret, survives relabel
+    label: Deploy staging
     url: https://...
     method: POST          # defaults to POST if omitted
     body: '{"env":"staging"}'   # optional; sent as JSON
+    headers:              # optional; one value may interpolate {{secret}} from the keyring
+      - name: Authorization
+        value: "Bearer {{secret}}"
 connections:              # PM connections owned by this brief (metadata only; tokens live in the keyring)
   - id: linear-personal
     provider: linear      # linear | jira | asana | github | notion
@@ -178,7 +182,12 @@ integrations](#project-management-integrations-optional) below.
 - **Link buttons** open URLs in your default browser (plus *Open in Obsidian*
   when the briefs folder is in a vault).
 - **Webhook buttons** fire GET/POST (and PUT/PATCH/DELETE) requests with a toast
-  on success/failure.
+  on success/failure. A *Manage webhooks* dialog adds/edits/deletes per-brief
+  webhooks, including **custom headers**; one header value may reference a
+  keyring-backed secret via a `{{secret}}` sentinel (e.g.
+  `Authorization: Bearer {{secret}}`), resolved server-side at fire time. The
+  header *shapes* live in the brief's frontmatter; the secret lives in the OS
+  keyring. Firing only makes an HTTP request — it never writes the `.md`.
 - **Quick capture** — press **⌘/Ctrl+K** (or the global **Ctrl+Shift+Space**) to
   pop a modal, pick a project, and append a timestamped note under its
   `## Captures` heading.
@@ -207,8 +216,9 @@ integrations](#project-management-integrations-optional) below.
   Display-only; same data-not-instructions guard as synthesis.
 - **Secret storage in the OS keyring** — tokens/keys for authenticated
   integrations (a GitHub token for private-repo sync, an Anthropic API key for
-  synthesis, and per-brief PM connection tokens) live in the platform keychain,
-  never in settings or env.
+  synthesis, per-brief PM connection tokens, and per-brief webhook secrets) live
+  in the platform keychain, never in settings or env. Keys: `github.token`,
+  `anthropic.api_key`, `bconn:<brief-path>:<id>`, and `whook:<brief-path>:<id>`.
 
 ### AI synthesis (optional)
 
@@ -288,7 +298,8 @@ waid/
 ├── src/                      # SvelteKit frontend
 │   ├── lib/
 │   │   ├── components/       # Sidebar, ProjectDetail, MarkdownView, QuickCapture, Toasts,
-│   │   │                     #   IntegrationPanel, IntegrationsModal, BriefingModal, BootstrapModal…
+│   │   │                     #   IntegrationPanel, IntegrationsModal, WebhooksModal,
+│   │   │                     #   BriefingModal, BootstrapModal…
 │   │   ├── stores/           # projects, settings, toasts, integrations
 │   │   ├── tauri.ts          # wrappers around invoke / plugins / secrets
 │   │   ├── types.ts          # Brief / Link / Webhook / Connection / Integration… types

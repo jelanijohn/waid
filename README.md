@@ -301,6 +301,13 @@ message bodies. Unlike the token-paste providers, Gmail signs in with **Google
 OAuth** (it opens your browser once per Gmail account; the grant is stored in the
 OS keyring and reused across every brief pointed at that account).
 
+Don't know Gmail's search operators? The feed form offers one-click **search
+templates** (recent unread, needs my reply, important, starred, …) and a
+**"describe it" box** that turns plain English ("unread from my manager this
+week") into a query via the configured synthesis LLM — display-only, it just
+fills the field for you to tweak. In the manage view you can also **rename a
+connection** and **edit a feed's query in place**.
+
 > **One-time Google Cloud setup (per the user, not WAID).** WAID ships no shared
 > Google credentials — you bring your own OAuth client:
 >

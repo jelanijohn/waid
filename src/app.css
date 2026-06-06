@@ -5,31 +5,32 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* =========================================================================
- * Tidewater theme tokens.
- * Driven by CSS variables so light/dark, accent, and density all live in one
- * place. `--accent` is overridable per-tree (set on the app shell), and the
- * derived tokens (`--hover`, `--link`, …) resolve it lazily, so changing the
- * accent recolors everything that references it.
+ * Tidewater · Refined theme tokens.
+ * A Mercury-influenced restraint pass: hairline dividers instead of boxed,
+ * colored cards; a more sophisticated neutral palette; tighter type; the
+ * accent used sparingly as a true accent — not as a fill. `--accent` is
+ * overridable per-tree (set on <html>), and the derived tokens resolve it
+ * lazily, so changing the accent recolors everything that references it.
  * ========================================================================= */
 :root {
-  --accent: #1e88e5; /* What's Next blue seed (overridable on the shell) */
+  --accent: #1e88e5; /* What's Next blue seed (overridable) — used sparingly */
   --wn-brand-green: #40a87e; /* the "W" mark, fixed */
 
-  /* status / rock priority palette (shared across light + dark) */
-  --status-active: #81c784;
-  --status-paused: #ffb74d;
-  --status-blocked: #e57373;
-  --status-archived: #bdbdbd;
+  /* status / rock priority palette (shared across light + dark) — muted */
+  --status-active: #3f9d63;
+  --status-paused: #d3982f;
+  --status-blocked: #d65a55;
+  --status-archived: #9aa0aa;
 
   /* density (comfortable default; `.dense` tightens the detail pane) */
-  --pad-y: 22px;
-  --pad-x: 30px;
-  --body-y: 24px;
-  --title-size: 24px;
-  --md-size: 14px;
+  --pane-px: 34px;
+  --pane-py: 26px;
+  --title-size: 20px;
+  --md-size: 13.5px;
 
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI",
     Roboto, Helvetica, Arial, sans-serif;
+  font-synthesis: none;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -37,59 +38,61 @@
 /* LIGHT */
 :root {
   --bg: #ffffff;
+  --side-bg: #fcfcfd;
+  --rail-bg: #fbfbfc;
   --bar-bg: #ffffff;
-  --side-bg: #f5f8fd;
-  --border: #e4ebf4;
-  --hover: color-mix(in srgb, var(--accent) 7%, transparent);
+  --border: #ececef;
+  --border-soft: #f2f2f5;
+  --hover: #f6f7f9;
+  --sel: #f4f5f7;
+  --sel-ring: #e7e8ec;
   --input-bg: #ffffff;
-  --chip-bg: #eaf1fb;
-  --fg: #1c2330;
-  --fg-body: #3a4150;
-  --fg2: #5e6675;
-  --fg3: #9aa2b1;
-  --code-bg: #eef2f8;
-  --code-fg: #334155;
-  --launch-bg: #1c2330;
-  --launch-fg: #ffffff;
-  --launch-bd: transparent;
-  --hook-bg: #fff6e8;
-  --hook-fg: #b45309;
-  --hook-bd: #fcd9a0;
-  --link: var(--accent);
-  --link-ul: color-mix(in srgb, var(--accent) 35%, transparent);
-  --quote-bar: color-mix(in srgb, var(--accent) 45%, #cdd8e6);
-  --quote-bg: #f5f8fd;
-  --sel-bg: #ffffff;
-  --sel-ring: var(--border);
+  --chip-bg: #f3f4f6;
+  --code-bg: #f5f6f8;
+  --code-fg: #41464f;
+  --fg: #15171c;
+  --fg-body: #3b404a;
+  --fg2: #6a6f7a;
+  --fg3: #9ca1ab;
+  --fg4: #b9bdc6;
+  --accent-tint: color-mix(in srgb, var(--accent) 9%, transparent);
+  --accent-line: color-mix(in srgb, var(--accent) 28%, transparent);
+  --hook-fg: #b27115;
+  --hook-bg: #faf3e6;
+  --hook-bd: #f0e2c4;
+  --shadow-pop: 0 12px 34px rgba(18, 28, 48, 0.14), 0 2px 8px rgba(18, 28, 48, 0.06);
+  --shadow-win: 0 1px 0 rgba(0, 0, 0, 0.04), 0 30px 70px -20px rgba(18, 28, 48, 0.3),
+    0 0 0 1px rgba(18, 28, 48, 0.06);
 }
 
 /* DARK — applied under .dark on <html> */
 .dark {
-  --bg: #0f1722;
-  --bar-bg: #122031;
-  --side-bg: #0c1320;
-  --border: #1e2d40;
-  --hover: color-mix(in srgb, var(--accent) 14%, transparent);
-  --input-bg: #0f1b2b;
-  --chip-bg: #15243a;
-  --fg: #e9eff7;
-  --fg-body: #bfcad9;
-  --fg2: #8794a6;
-  --fg3: #5a6678;
-  --code-bg: #15243a;
-  --code-fg: #bfcad9;
-  --launch-bg: #e9eff7;
-  --launch-fg: #0f1722;
-  --launch-bd: transparent;
-  --hook-bg: rgba(255, 183, 77, 0.12);
-  --hook-fg: #f0b860;
-  --hook-bd: rgba(255, 183, 77, 0.3);
-  --link: color-mix(in srgb, var(--accent) 75%, #fff);
-  --link-ul: color-mix(in srgb, var(--accent) 50%, transparent);
-  --quote-bar: var(--accent);
-  --quote-bg: color-mix(in srgb, var(--accent) 8%, transparent);
-  --sel-bg: color-mix(in srgb, var(--accent) 10%, transparent);
-  --sel-ring: transparent;
+  --bg: #0f1217;
+  --side-bg: #0c0e12;
+  --rail-bg: #0d1015;
+  --bar-bg: #0f1217;
+  --border: #1e222a;
+  --border-soft: #181b21;
+  --hover: rgba(255, 255, 255, 0.038);
+  --sel: rgba(255, 255, 255, 0.055);
+  --sel-ring: rgba(255, 255, 255, 0.08);
+  --input-bg: #12161c;
+  --chip-bg: rgba(255, 255, 255, 0.055);
+  --code-bg: rgba(255, 255, 255, 0.045);
+  --code-fg: #c2c8d2;
+  --fg: #e9ebef;
+  --fg-body: #b4bac4;
+  --fg2: #868c97;
+  --fg3: #5c626d;
+  --fg4: #474d57;
+  --accent: #54a3ec;
+  --accent-tint: color-mix(in srgb, var(--accent) 16%, transparent);
+  --accent-line: color-mix(in srgb, var(--accent) 42%, transparent);
+  --hook-fg: #e2b25e;
+  --hook-bg: rgba(226, 178, 94, 0.1);
+  --hook-bd: rgba(226, 178, 94, 0.22);
+  --shadow-pop: 0 16px 44px rgba(0, 0, 0, 0.5);
+  --shadow-win: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 40px 90px -25px rgba(0, 0, 0, 0.7);
 }
 
 html,
@@ -99,10 +102,9 @@ body {
 
 /* Density: tightens the detail pane (applied on the app shell in +page). */
 .dense {
-  --pad-y: 16px;
-  --pad-x: 24px;
-  --body-y: 18px;
-  --title-size: 21px;
+  --pane-px: 24px;
+  --pane-py: 18px;
+  --title-size: 18px;
   --md-size: 13px;
 }
 
@@ -116,62 +118,214 @@ body {
   vertical-align: middle;
   user-select: none;
   -webkit-font-smoothing: antialiased;
+  font-variation-settings: "opsz" 20, "wght" 400, "GRAD" 0;
+}
+.msym.fill {
+  font-variation-settings: "opsz" 20, "wght" 400, "FILL" 1, "GRAD" 0;
 }
 
 /* =========================================================================
- * Status pill / dot / rock helpers.
- * Each element sets `--sc` (its status color) inline; these rules derive the
+ * Buttons — Mercury-restraint: 1px hairline, accent only on the primary.
+ * ========================================================================= */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg2);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease,
+    filter 0.14s ease;
+}
+.btn:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.btn-sm {
+  height: 25px;
+  padding: 0 9px;
+  font-size: 12px;
+  border-radius: 7px;
+}
+.btn-icon {
+  display: inline-grid;
+  place-items: center;
+  height: 28px;
+  width: 28px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--fg2);
+  cursor: pointer;
+  transition: background 0.14s, color 0.14s;
+}
+.btn-icon:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.btn-icon:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.btn-primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: #fff;
+}
+.btn-primary:hover {
+  filter: brightness(1.07);
+  background: var(--accent);
+  color: #fff;
+}
+.btn-quiet {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  padding: 0 4px;
+  height: 26px;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.btn-quiet:hover {
+  background: var(--accent-tint);
+  border-radius: 6px;
+}
+
+/* =========================================================================
+ * Status pill / dot, chips, tags, section labels.
+ * Each pill/dot sets `--sc` (its status color) inline; the rules derive the
  * tinted fill + text from it, with a different mix in dark mode.
  * ========================================================================= */
 .pill {
-  font-size: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
   font-weight: 600;
-  padding: 1px 8px;
+  letter-spacing: 0.01em;
+  padding: 2px 8px 2px 7px;
   border-radius: 999px;
   text-transform: capitalize;
   flex-shrink: 0;
-  background: color-mix(in srgb, var(--sc) 20%, transparent);
-  color: color-mix(in srgb, var(--sc) 74%, #000);
+  background: color-mix(in srgb, var(--sc) 13%, transparent);
+  color: color-mix(in srgb, var(--sc) 72%, #1a1a1a);
 }
 .dark .pill {
-  background: color-mix(in srgb, var(--sc) 26%, transparent);
-  color: var(--sc);
+  background: color-mix(in srgb, var(--sc) 20%, transparent);
+  color: color-mix(in srgb, var(--sc) 80%, #fff);
+}
+.pill .dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--sc);
 }
 .sdot {
   border-radius: 50%;
   flex-shrink: 0;
   background: var(--sc);
 }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--fg2);
+  background: var(--chip-bg);
+  border-radius: 6px;
+  padding: 2px 8px;
+}
+.tag {
+  font-size: 11.5px;
+  color: var(--fg2);
+}
+.tag::before {
+  content: "#";
+  color: var(--fg4);
+}
+.label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg3);
+}
+
+/* Input field shell. */
+.field {
+  height: 32px;
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  border-radius: 8px;
+  padding: 0 10px;
+  font-size: 12.5px;
+  color: var(--fg);
+  outline: none;
+  transition: border-color 0.14s, box-shadow 0.14s;
+}
+.field:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+.field::placeholder {
+  color: var(--fg3);
+}
 
 /* =========================================================================
  * Custom scrollbars (sidebar list + detail body).
  * ========================================================================= */
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--fg3) 35%, transparent) transparent;
+}
 .scroll-thin::-webkit-scrollbar {
-  width: 9px;
+  width: 10px;
+  height: 10px;
 }
 .scroll-thin::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--fg3) 40%, transparent);
+  background: color-mix(in srgb, var(--fg3) 32%, transparent);
   border-radius: 9px;
   border: 3px solid transparent;
   background-clip: padding-box;
 }
+.scroll-thin::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--fg3) 52%, transparent);
+  background-clip: padding-box;
+}
 
 /* =========================================================================
- * Rendered-markdown styling (Tidewater). Applied to MarkdownView's container.
- * Tweak here to restyle every brief.
+ * Rendered-markdown styling (Tidewater · Refined). Applied to MarkdownView.
+ * Editorial, Mercury-calm: small uppercase headings, faint bullet dots,
+ * accent links with a hairline underline, a 2px accent-line blockquote rule.
  * ========================================================================= */
 .markdown {
   font-size: var(--md-size);
-  line-height: 1.7;
+  line-height: 1.72;
   color: var(--fg-body);
-  max-width: 66ch;
+  max-width: 70ch;
   word-wrap: break-word;
 }
 .markdown > :first-child {
   margin-top: 0;
 }
 .markdown p {
-  margin: 0 0 14px;
+  margin: 0 0 13px;
 }
 .markdown strong {
   font-weight: 600;
@@ -184,20 +338,21 @@ body {
 .markdown h2,
 .markdown h3,
 .markdown h4 {
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 600;
-  color: var(--fg);
+  color: var(--fg3);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin: 26px 0 10px;
+  letter-spacing: 0.08em;
+  margin: 28px 0 11px;
 }
 .markdown h1 {
-  font-size: 15px;
+  font-size: 12px;
+  color: var(--fg2);
 }
 .markdown ul,
 .markdown ol {
   margin: 0 0 14px;
-  padding-left: 18px;
+  padding-left: 17px;
 }
 .markdown ul {
   list-style: none;
@@ -213,15 +368,15 @@ body {
   content: "";
   position: absolute;
   left: -14px;
-  top: 0.62em;
+  top: 0.66em;
   width: 4px;
   height: 4px;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--fg4);
 }
 .markdown code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.84em;
+  font-size: 0.85em;
   background: var(--code-bg);
   color: var(--code-fg);
   padding: 1px 5px;
@@ -240,22 +395,22 @@ body {
   padding: 0;
 }
 .markdown a {
-  color: var(--link);
+  color: var(--accent);
   text-decoration: none;
-  border-bottom: 1px solid var(--link-ul);
+  border-bottom: 1px solid var(--accent-line);
   cursor: pointer;
 }
 .markdown a:hover {
-  border-bottom-color: var(--link);
+  border-bottom-color: var(--accent);
 }
 /* Obsidian-style wikilinks: resolved ones read like internal links, dangling
    ones are muted + dashed and non-interactive. */
 .markdown a.wikilink {
-  color: var(--link);
-  border-bottom: 1px solid var(--link-ul);
+  color: var(--accent);
+  border-bottom: 1px solid var(--accent-line);
 }
 .markdown a.wikilink:hover {
-  border-bottom-color: var(--link);
+  border-bottom-color: var(--accent);
 }
 .markdown a.wikilink-missing {
   color: var(--fg3);
@@ -265,17 +420,15 @@ body {
 }
 .markdown blockquote {
   margin: 0 0 16px;
-  padding: 10px 16px;
-  border-left: 3px solid var(--quote-bar);
-  background: var(--quote-bg);
+  padding: 4px 0 4px 15px;
+  border-left: 2px solid var(--accent-line);
   color: var(--fg2);
   font-style: italic;
-  border-radius: 0 8px 8px 0;
 }
 .markdown hr {
   border: none;
   border-top: 1px solid var(--border);
-  margin: 1.5em 0;
+  margin: 22px 0;
 }
 .markdown table {
   border-collapse: collapse;
@@ -329,7 +482,7 @@ body {
 }
 
 /* =========================================================================
- * Integrations — provider monogram tiles + the "needs a feed" pulse.
+ * Integrations — provider monogram tiles.
  * Brand colors are kept here (not inline) so dark-mode tweaks live in CSS.
  * ========================================================================= */
 .ptile {
@@ -339,6 +492,7 @@ body {
   font-weight: 700;
   color: #fff;
   line-height: 1;
+  border-radius: 7px;
 }
 .ptile-linear {
   background: #5e6ad2;
@@ -350,23 +504,20 @@ body {
   background: #f06a6a;
 }
 .ptile-github {
-  background: #2d333b;
+  background: #24292f;
 }
 .dark .ptile-github {
-  background: #444c56;
+  background: #373e47;
 }
 .ptile-notion {
-  background: #111;
+  background: #14140f;
 }
 .dark .ptile-notion {
-  background: #f4f4f2;
-  color: #111;
+  background: #ededeb;
+  color: #14140f;
 }
 .ptile-gmail {
   background: #ea4335;
-}
-.dark .ptile-gmail {
-  background: #f15b50;
 }
 
 /* Soft accent pulse on the safety-net "Add feed" button. */

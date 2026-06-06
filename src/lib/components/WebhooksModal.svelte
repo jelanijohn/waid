@@ -137,7 +137,7 @@
 
 <div
   class="anim-fade fixed inset-0 z-50 flex items-start justify-center"
-  style="background: rgba(10,20,40,0.45); padding-top: 8vh;"
+  style="background: color-mix(in srgb, var(--fg) 22%, transparent); backdrop-filter: blur(2px); padding-top: 8vh;"
   role="presentation"
   onclick={(e) => {
     if (e.target === e.currentTarget) onclose();
@@ -145,8 +145,8 @@
 >
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
-    class="anim-pop flex max-h-[84vh] w-[min(94%,600px)] flex-col overflow-hidden rounded-2xl border shadow-[0_24px_70px_rgba(10,20,40,0.45)]"
-    style="background: var(--bg); border-color: var(--border);"
+    class="anim-pop flex max-h-[84vh] w-[min(94%,600px)] flex-col overflow-hidden rounded-[16px] border"
+    style="background: var(--bg); border-color: var(--border); box-shadow: var(--shadow-pop);"
     onkeydown={onKeydown}
   >
     <!-- Header -->

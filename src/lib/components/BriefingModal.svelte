@@ -36,7 +36,7 @@
 {#if open}
   <div
     class="anim-fade fixed inset-0 z-50 flex items-start justify-center"
-    style="background: rgba(10,20,40,0.45); padding-top: 12vh;"
+    style="background: color-mix(in srgb, var(--fg) 22%, transparent); backdrop-filter: blur(2px); padding-top: 12vh;"
     role="presentation"
     onclick={(e) => {
       if (e.target === e.currentTarget) onclose();
@@ -44,8 +44,8 @@
   >
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
-      class="anim-pop flex max-h-[76vh] w-[min(92%,560px)] flex-col rounded-[14px] border shadow-[0_24px_60px_rgba(10,20,40,0.4)]"
-      style="background: var(--bg); border-color: var(--border);"
+      class="anim-pop flex max-h-[76vh] w-[min(92%,560px)] flex-col rounded-[16px] border"
+      style="background: var(--bg); border-color: var(--border); box-shadow: var(--shadow-pop);"
       onkeydown={onKeydown}
     >
       <div class="flex items-center justify-between gap-3 border-b px-4 py-3" style="border-color: var(--border);">

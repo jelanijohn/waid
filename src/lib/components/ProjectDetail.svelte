@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Brief, Webhook } from "$lib/types";
   import { projects, isSyncableBrief } from "$lib/stores/projects.svelte";
+  import { settings } from "$lib/stores/settings.svelte";
   import { toasts } from "$lib/stores/toasts.svelte";
   import { openExternal, fireWebhook } from "$lib/tauri";
   import { relativeTime } from "$lib/time";
@@ -9,7 +10,6 @@
   import MarkdownView from "./MarkdownView.svelte";
   import IntegrationPanel from "./IntegrationPanel.svelte";
   import IntegrationsModal from "./IntegrationsModal.svelte";
-  import WebhooksModal from "./WebhooksModal.svelte";
   import BootstrapModal from "./BootstrapModal.svelte";
   import Icon from "./Icon.svelte";
 
@@ -23,7 +23,6 @@
   let saving = $state(false);
   let syncing = $state(false);
   let integrationsOpen = $state(false);
-  let webhooksOpen = $state(false);
   // Auto-open Generate when this brief was just created (one-shot store signal).
   // {#key brief.path} remounts this component per selection, so reading +
   // clearing the flag here fires once for the new project and never again.
@@ -147,173 +146,183 @@
       save();
     }
   }
+
+  function manage() {
+    integrationsOpen = true;
+  }
 </script>
+
+<!-- A hairline section label with an optional right-aligned "Manage" link. -->
+{#snippet sectionLabel(text: string, withManage: boolean)}
+  <div class="mb-3 flex items-center">
+    <span class="label">{text}</span>
+    <span class="ml-3 h-px flex-1" style="background: var(--border);"></span>
+    {#if withManage}
+      <button class="btn-quiet" style="font-size: 11.5px;" onclick={manage}>Manage</button>
+    {/if}
+  </div>
+{/snippet}
+
+<!-- Stub-brief CTA: a compact accent-tinted card to draft the initial brief. -->
+{#snippet generateCTA()}
+  <div
+    class="mb-[22px] flex items-center gap-[13px] rounded-[13px] border"
+    style="border-color: var(--accent-line); background: var(--accent-tint); padding: 12px 14px;"
+  >
+    <span class="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-[10px] text-white" style="background: var(--accent);">
+      <Icon name="auto_awesome" size={18} />
+    </span>
+    <div class="min-w-0 flex-1">
+      <div class="text-[13px] font-semibold text-[var(--fg)]">Generate the initial brief</div>
+      <div class="mt-px text-[11.5px] leading-[1.45] text-[var(--fg2)]">
+        Draft from a folder, a repo, a few answers, or a pasted prompt — review before saving.
+      </div>
+    </div>
+    <button class="btn btn-primary btn-sm shrink-0" onclick={() => (bootstrapOpen = true)}>
+      <Icon name="bolt" size={14} fill={1} /> Generate
+    </button>
+  </div>
+{/snippet}
+
+<!-- The brief body plus its "Linked from" backlinks. -->
+{#snippet bodyAndBacklinks()}
+  <MarkdownView source={brief.body} />
+
+  {#if backlinks.length}
+    <section class="mt-[30px] border-t pt-[18px]" style="border-color: var(--border);">
+      <h3 class="label mb-[10px]">Linked from</h3>
+      <div class="flex flex-wrap gap-[7px]">
+        {#each backlinks as link (link.path)}
+          <button
+            class="chip cursor-pointer transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)]"
+            onclick={() => projects.select(link.path)}
+          >
+            <Icon name="subdirectory_arrow_right" size={13} /> {link.name}
+          </button>
+        {/each}
+      </div>
+    </section>
+  {/if}
+{/snippet}
 
 <div class="flex h-screen flex-col bg-[var(--bg)] text-[var(--fg)]">
   <!-- Header -->
-  <header
-    class="relative overflow-hidden border-b"
-    style="border-color: var(--border); padding: var(--pad-y) var(--pad-x) 16px;"
-  >
-    <!-- Faint diagonal accent wash -->
-    <div
-      class="pointer-events-none absolute inset-0"
-      style="background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 9%, transparent), transparent 55%);"
-    ></div>
-
-    <div class="relative">
-      <!-- Title row -->
-      <div class="flex items-start justify-between gap-4">
-        <div class="min-w-0">
-          <div class="flex items-center gap-[9px]">
-            {#if brief.status}
-              <span class="sdot h-2 w-2" style="--sc: {statusColor(brief.status)};"></span>
-            {/if}
-            <h2 class="truncate font-bold tracking-[-0.02em] text-[var(--fg)]" style="font-size: var(--title-size);">
-              {brief.name}
-            </h2>
-          </div>
-          {#if brief.description}
-            <p class="mt-[5px] max-w-[62ch] text-[13.5px] leading-[1.5] text-[var(--fg2)]">
-              {brief.description}
-            </p>
+  <header class="shrink-0 border-b" style="border-color: var(--border); padding: var(--pane-py) var(--pane-px) 16px;">
+    <!-- Title row -->
+    <div class="flex items-start justify-between gap-4">
+      <div class="min-w-0">
+        <div class="flex items-center gap-[9px]">
+          {#if brief.status}
+            <span class="sdot h-2 w-2" style="--sc: {statusColor(brief.status)};"></span>
           {/if}
+          <h2 class="truncate font-bold tracking-[-0.02em] text-[var(--fg)]" style="font-size: var(--title-size);">
+            {brief.name}
+          </h2>
         </div>
-
-        <div class="flex shrink-0 gap-2">
-          {#if editing}
-            <button
-              class="inline-flex h-[30px] items-center gap-[5px] rounded-lg border bg-[var(--bg)] px-3 text-[12.5px] font-medium text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)] disabled:opacity-50"
-              style="border-color: var(--border);"
-              onclick={cancel}
-              disabled={saving}
-            >
-              Cancel
-            </button>
-            <button
-              class="inline-flex h-[30px] items-center gap-[5px] rounded-lg border border-transparent bg-[var(--accent)] px-3 text-[12.5px] font-medium text-white transition-[filter] hover:brightness-[1.06] disabled:opacity-50"
-              onclick={save}
-              disabled={saving}
-            >
-              {saving ? "Saving…" : "Save"}
-            </button>
-          {:else}
-            {#if canRefresh}
-              <button
-                class="inline-flex h-[30px] items-center gap-[5px] rounded-lg border bg-[var(--bg)] px-3 text-[12.5px] font-medium text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)] disabled:opacity-50"
-                style="border-color: var(--border);"
-                title={canSynthesize
-                  ? "Refresh activity and re-synthesize Current State + Open Questions"
-                  : "Refresh synced data from linked integrations"}
-                onclick={refresh}
-                disabled={syncing}
-              >
-                <Icon name="sync" size={14} class={syncing ? "spin" : ""} />
-                {syncing ? "Refreshing…" : "Refresh"}
-              </button>
-            {/if}
-            <button
-              class="inline-flex h-[30px] items-center gap-[5px] rounded-lg border bg-[var(--bg)] px-3 text-[12.5px] font-medium text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)]"
-              style="border-color: var(--border);"
-              title="Manage this brief's integrations (Linear, Jira, …)"
-              onclick={() => (integrationsOpen = true)}
-            >
-              <Icon name="hub" size={14} /> Integrations
-              {#if brief.integrations.length}
-                <span class="rounded-full bg-[var(--chip-bg)] px-[6px] py-px text-[10px] font-semibold text-[var(--fg2)]">
-                  {brief.integrations.length}
-                </span>
-              {/if}
-            </button>
-            <button
-              class="inline-flex h-[30px] items-center gap-[5px] rounded-lg border bg-[var(--bg)] px-3 text-[12.5px] font-medium text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)]"
-              style="border-color: var(--border);"
-              title="Manage this brief's webhooks (custom headers, secrets)"
-              onclick={() => (webhooksOpen = true)}
-            >
-              <Icon name="bolt" size={14} /> Webhooks
-              {#if brief.webhooks.length}
-                <span class="rounded-full bg-[var(--chip-bg)] px-[6px] py-px text-[10px] font-semibold text-[var(--fg2)]">
-                  {brief.webhooks.length}
-                </span>
-              {/if}
-            </button>
-            {#if obsidianUri}
-              <button
-                class="inline-flex h-[30px] items-center gap-[5px] rounded-lg border bg-[var(--bg)] px-3 text-[12.5px] font-medium text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)]"
-                style="border-color: var(--border);"
-                title="Open this brief in Obsidian"
-                onclick={openInObsidian}
-              >
-                <Icon name="hub" size={14} /> Obsidian
-              </button>
-            {/if}
-            <button
-              class="inline-flex h-[30px] items-center gap-[5px] rounded-lg border bg-[var(--bg)] px-3 text-[12.5px] font-medium text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)]"
-              style="border-color: var(--border);"
-              onclick={() => {
-                draft = brief.raw;
-                editing = true;
-              }}
-            >
-              <Icon name="edit" size={14} /> Edit
-            </button>
-          {/if}
-        </div>
-      </div>
-
-      <!-- Tags + opened -->
-      <div class="mt-[14px] flex flex-wrap items-center gap-[7px]">
-        {#each brief.tags as tag (tag)}
-          <span class="rounded-md bg-[var(--chip-bg)] px-2 py-[2px] text-[11.5px] text-[var(--fg2)]">#{tag}</span>
-        {/each}
-        <span class="ml-[2px] inline-flex items-center gap-1 text-[11.5px] text-[var(--fg3)]">
-          <Icon name="schedule" size={13} /> Opened {relativeTime(brief.lastOpened)}
-        </span>
-        {#if brief.lastSynced}
-          <span class="inline-flex items-center gap-1 text-[11.5px] text-[var(--fg3)]">
-            <Icon name="sync" size={13} /> Synced {relativeTime(brief.lastSynced)}
-          </span>
+        {#if brief.description}
+          <p class="mt-[7px] max-w-[60ch] text-[13.5px] leading-[1.5] text-[var(--fg2)]">
+            {brief.description}
+          </p>
         {/if}
       </div>
 
-      <!-- Launch row: links + webhooks -->
-      {#if brief.links.length || brief.webhooks.length}
-        <div class="mt-4 flex flex-wrap gap-2">
-          {#each brief.links as link (link.url + link.label)}
+      <div class="flex shrink-0 gap-[6px]">
+        {#if editing}
+          <button class="btn" onclick={cancel} disabled={saving}>Cancel</button>
+          <button class="btn btn-primary" onclick={save} disabled={saving}>
+            {saving ? "Saving…" : "Save"}
+          </button>
+        {:else}
+          {#if canRefresh}
             <button
-              class="inline-flex h-[30px] items-center gap-[6px] rounded-lg border px-[11px] text-[12px] font-medium transition-[filter] hover:brightness-[1.08]"
-              style="background: var(--launch-bg); color: var(--launch-fg); border-color: var(--launch-bd);"
-              onclick={() => openLink(link.url)}
+              class="btn"
+              title={canSynthesize
+                ? "Refresh activity and re-synthesize Current State + Open Questions"
+                : "Refresh synced data from linked integrations"}
+              onclick={refresh}
+              disabled={syncing}
             >
-              <Icon name={iconForLink(link.label || link.url)} size={15} />
-              {link.label || link.url}
-              <Icon name="north_east" size={12} class="opacity-50" />
+              <Icon name="sync" size={14} class={syncing ? "spin" : ""} />
+              {syncing ? "Refreshing…" : "Refresh"}
             </button>
-          {/each}
-          {#each brief.webhooks as hook (hook.url + hook.label)}
-            <button
-              class="inline-flex h-[30px] items-center gap-[6px] rounded-lg border px-[11px] text-[12px] font-medium transition-[filter] hover:brightness-[1.08]"
-              style="background: var(--hook-bg); color: var(--hook-fg); border-color: var(--hook-bd);"
-              title={`${hook.method} ${hook.url}`}
-              onclick={() => fire(hook)}
-            >
-              <Icon name="bolt" size={15} fill={1} />
-              {hook.label || hook.url}
-              <span class="text-[9px] font-bold uppercase opacity-70">{hook.method}</span>
+          {/if}
+          <button class="btn" title="Manage this brief's integrations (Linear, Jira, …)" onclick={manage}>
+            <Icon name="hub" size={14} /> Integrations
+            {#if brief.integrations.length}
+              <span class="rounded-full bg-[var(--chip-bg)] px-[6px] text-[10px] font-semibold text-[var(--fg2)]">
+                {brief.integrations.length}
+              </span>
+            {/if}
+          </button>
+          {#if obsidianUri}
+            <button class="btn" title="Open this brief in Obsidian" onclick={openInObsidian}>
+              <Icon name="hub" size={14} /> Obsidian
             </button>
-          {/each}
-        </div>
+          {/if}
+          <button
+            class="btn"
+            onclick={() => {
+              draft = brief.raw;
+              editing = true;
+            }}
+          >
+            <Icon name="edit" size={14} /> Edit
+          </button>
+        {/if}
+      </div>
+    </div>
+
+    <!-- Tags + opened/synced meta -->
+    <div class="mt-[14px] flex flex-wrap items-center gap-3">
+      {#each brief.tags as tag (tag)}
+        <span class="tag">{tag}</span>
+      {/each}
+      <span class="inline-flex items-center gap-[5px] text-[11.5px] text-[var(--fg3)]">
+        <Icon name="schedule" size={13} /> Opened {relativeTime(brief.lastOpened)}
+      </span>
+      {#if brief.lastSynced}
+        <span class="inline-flex items-center gap-[5px] text-[11.5px] text-[var(--fg3)]">
+          <Icon name="sync" size={13} /> Synced {relativeTime(brief.lastSynced)}
+        </span>
       {/if}
     </div>
+
+    <!-- Launch row: links + webhooks -->
+    {#if brief.links.length || brief.webhooks.length}
+      <div class="mt-[14px] flex flex-wrap gap-[7px]">
+        {#each brief.links as link (link.url + link.label)}
+          <button
+            class="inline-flex h-[29px] items-center gap-[7px] rounded-[8px] border px-[11px] text-[12px] font-medium transition-colors hover:bg-[var(--hover)]"
+            style="border-color: var(--border); background: var(--bg); color: var(--fg-body);"
+            onclick={() => openLink(link.url)}
+          >
+            <Icon name={iconForLink(link.label || link.url)} size={14} class="text-[var(--fg2)]" />
+            {link.label || link.url}
+            <Icon name="north_east" size={11} class="text-[var(--fg4)]" />
+          </button>
+        {/each}
+        {#each brief.webhooks as hook (hook.url + hook.label)}
+          <button
+            class="inline-flex h-[29px] items-center gap-[7px] rounded-[8px] border px-[11px] text-[12px] font-medium transition-[filter] hover:brightness-[1.04]"
+            style="border-color: var(--hook-bd); background: var(--hook-bg); color: var(--hook-fg);"
+            title={`${hook.method} ${hook.url}`}
+            onclick={() => fire(hook)}
+          >
+            <Icon name="bolt" size={14} fill={1} />
+            {hook.label || hook.url}
+            <span class="text-[9px] font-bold uppercase opacity-70">{hook.method}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
   </header>
 
-  <!-- Body: rendered view or editor -->
-  <div class="scroll-thin flex-1 overflow-y-auto" style="padding: var(--body-y) var(--pad-x);">
-    {#if editing}
+  <!-- Body: editor, or one of the three live-state layouts -->
+  {#if editing}
+    <div class="scroll-thin min-h-0 flex-1 overflow-y-auto" style="padding: var(--pane-py) var(--pane-px);">
       <!-- svelte-ignore a11y_autofocus -->
       <textarea
-        class="h-full min-h-[56vh] w-full resize-none rounded-[10px] border p-4 font-mono text-[12.5px] leading-[1.65] text-[var(--fg-body)] outline-none focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
+        class="h-full min-h-[56vh] w-full resize-none rounded-[10px] border p-4 font-mono text-[12.5px] leading-[1.65] text-[var(--fg-body)] outline-none focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_var(--accent-tint)]"
         style="background: var(--input-bg); border-color: var(--border);"
         bind:value={draft}
         onkeydown={onEditorKeydown}
@@ -323,62 +332,48 @@
       <p class="mt-2 text-[11px] text-[var(--fg3)]">
         Editing the raw file (frontmatter + markdown). ⌘/Ctrl+S to save.
       </p>
-    {:else}
-      <IntegrationPanel {brief} onManage={() => (integrationsOpen = true)} />
-
-      {#if isStub}
-        <!-- Empty-state CTA: this brief is still on its create_brief stub. -->
-        <div
-          class="mb-5 flex items-center gap-[14px] overflow-hidden rounded-[13px] border p-[15px]"
-          style="border-color: var(--border); background: color-mix(in srgb, var(--accent) 7%, transparent);"
-        >
-          <span
-            class="grid h-[40px] w-[40px] shrink-0 place-items-center rounded-[12px] text-white"
-            style="background: var(--accent);"
-          >
-            <Icon name="auto_awesome" size={20} />
-          </span>
-          <div class="min-w-0 flex-1">
-            <div class="text-[13.5px] font-semibold text-[var(--fg)]">Generate the initial brief</div>
-            <div class="mt-px text-[11.5px] leading-[1.5] text-[var(--fg2)]">
-              Draft this brief from a folder, a GitHub repo, a few quick answers, or a paste-in prompt — then review
-              before saving.
-            </div>
-          </div>
-          <button
-            class="inline-flex h-[32px] shrink-0 items-center gap-[6px] rounded-lg bg-[var(--accent)] px-[13px] text-[12.5px] font-medium text-white transition-[filter] hover:brightness-[1.06]"
-            onclick={() => (bootstrapOpen = true)}
-          >
-            <Icon name="bolt" size={15} fill={1} /> Generate
-          </button>
+    </div>
+  {:else if settings.briefLayout === "two-col"}
+    <!-- Two-column: brief body left, live-state rail right. Scrolls as one. -->
+    <div class="scroll-thin min-h-0 flex-1 overflow-y-auto">
+      <div class="flex min-h-full items-stretch">
+        <div class="min-w-0 flex-1" style="padding: var(--pane-py) var(--pane-px);">
+          {#if isStub}{@render generateCTA()}{/if}
+          {@render bodyAndBacklinks()}
         </div>
-      {/if}
-
-      <MarkdownView source={brief.body} />
-
-      {#if backlinks.length}
-        <section class="mt-[30px] border-t pt-[18px]" style="border-color: var(--border);">
-          <h3 class="mb-[10px] text-[10.5px] font-semibold uppercase tracking-[0.08em] text-[var(--fg3)]">
-            Linked from
-          </h3>
-          <div class="flex flex-wrap gap-[7px]">
-            {#each backlinks as link (link.path)}
-              <button
-                class="inline-flex items-center gap-[5px] rounded-[7px] bg-[var(--chip-bg)] px-[10px] py-1 text-[11.5px] font-medium text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)]"
-                onclick={() => projects.select(link.path)}
-              >
-                <Icon name="subdirectory_arrow_right" size={13} /> {link.name}
-              </button>
-            {/each}
-          </div>
-        </section>
-      {/if}
-    {/if}
-  </div>
+        <aside
+          class="shrink-0 border-l"
+          style="width: 320px; border-color: var(--border); background: var(--rail-bg); padding: var(--pane-py) 22px;"
+        >
+          {@render sectionLabel("Live state", true)}
+          <IntegrationPanel {brief} narrow onManage={manage} />
+        </aside>
+      </div>
+    </div>
+  {:else if settings.briefLayout === "body"}
+    <!-- Body first, then the live-state block below a hairline divider. -->
+    <div class="scroll-thin min-h-0 flex-1 overflow-y-auto" style="padding: var(--pane-py) var(--pane-px);">
+      {#if isStub}{@render generateCTA()}{/if}
+      {@render bodyAndBacklinks()}
+      <div style="margin-top: 34px; padding-top: 26px; border-top: 1px solid var(--border);">
+        {@render sectionLabel("Live state", true)}
+        <IntegrationPanel {brief} onManage={manage} />
+      </div>
+    </div>
+  {:else}
+    <!-- Quiet top: a slim feed strip (or connect row), then the body. -->
+    <div class="scroll-thin min-h-0 flex-1 overflow-y-auto" style="padding: var(--pane-py) var(--pane-px);">
+      <div class="mb-[26px]">
+        <IntegrationPanel {brief} strip onManage={manage} />
+      </div>
+      {#if isStub}{@render generateCTA()}{/if}
+      {@render bodyAndBacklinks()}
+    </div>
+  {/if}
 
   <footer
     class="flex gap-[14px] border-t font-mono text-[10.5px] text-[var(--fg3)]"
-    style="border-color: var(--border); padding: 7px var(--pad-x);"
+    style="border-color: var(--border); padding: 7px var(--pane-px);"
   >
     <span class="truncate">{brief.path}</span>
     <span class="ml-auto shrink-0">⌘K capture · ⌘S save · ⌘F search</span>
@@ -387,10 +382,6 @@
 
 {#if integrationsOpen}
   <IntegrationsModal {brief} onclose={() => (integrationsOpen = false)} />
-{/if}
-
-{#if webhooksOpen}
-  <WebhooksModal {brief} onclose={() => (webhooksOpen = false)} />
 {/if}
 
 {#if bootstrapOpen}

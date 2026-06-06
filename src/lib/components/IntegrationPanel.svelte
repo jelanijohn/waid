@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import type { Brief, BriefIntegration, IntegrationFetch, IntegrationItem, Provider } from "$lib/types";
+  import type { Brief, BriefIntegration, IntegrationFetch, IntegrationItem } from "$lib/types";
   import { integrations } from "$lib/stores/integrations.svelte";
   import { projects } from "$lib/stores/projects.svelte";
   import { openExternal, appendCapture } from "$lib/tauri";
@@ -11,7 +11,17 @@
   import ProviderTile from "./ProviderTile.svelte";
   import Icon from "./Icon.svelte";
 
-  let { brief, onManage }: { brief: Brief; onManage?: () => void } = $props();
+  let {
+    brief,
+    onManage,
+    /** Two-column live rail: too narrow for the row CTA → compact stacked card. */
+    narrow = false,
+    /** Quiet-top layout: render the slim one-line feed strip instead of cards. */
+    strip = false,
+  }: { brief: Brief; onManage?: () => void; narrow?: boolean; strip?: boolean } = $props();
+
+  // Providers shown in the narrow connect card's overlapped glyph stack.
+  const NARROW_PROVIDERS = ["linear", "github", "notion", "gmail"] as const;
 
   // The AI digest layers over the local rollup; only offered when a synthesis
   // provider (Ollama / Anthropic) is configured.
@@ -71,12 +81,12 @@
 
   // Map an item status to a status-dot color (rock palette).
   function dotColor(status?: string | null): string {
-    if (!status) return "var(--fg3)";
+    if (!status) return "var(--fg4)";
     const s = status.toLowerCase();
-    if (/(done|closed|merged|complete|resolved|approved)/.test(s)) return "var(--status-active)";
-    if (/(progress|started|review|doing|mention)/.test(s)) return "var(--status-paused)";
-    if (/(block|fail|overdue|urgent|broke)/.test(s)) return "var(--status-blocked)";
-    return "var(--fg3)";
+    if (/(done|closed|merged|complete|resolved|approved|read)/.test(s)) return "var(--status-active)";
+    if (/(progress|started|review|doing|mention|todo)/.test(s)) return "var(--status-paused)";
+    if (/(block|fail|overdue|urgent|broke|unread)/.test(s)) return "var(--status-blocked)";
+    return "var(--fg4)";
   }
 
   async function refresh(ig: BriefIntegration) {
@@ -98,194 +108,211 @@
 </script>
 
 {#if brief.integrations.length}
-  <section class="mb-[26px] flex flex-col gap-[10px]">
-    {#if canDigest}
-      <!-- AI digest: natural-language layer over the local rollups -->
-      <div class="rounded-[11px] border" style="border-color: var(--border);">
-        <div class="flex items-center gap-2 px-[13px] py-[9px]">
-          <Icon name="auto_awesome" size={15} class="text-[var(--accent)]" />
-          <span class="text-[12.5px] font-semibold text-[var(--fg)]">AI digest</span>
-          {#if digest?.text}
-            <button
-              class="ml-auto inline-flex h-[26px] items-center gap-[5px] rounded-lg border bg-[var(--bg)] px-2.5 text-[11.5px] font-medium text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)]"
-              style="border-color: var(--border);"
-              title="Append this digest to the brief's Captures"
-              onclick={snapshotDigest}
-            >
-              <Icon name="bookmark_add" size={13} /> Snapshot
-            </button>
-            <button
-              class="grid h-[26px] w-[26px] place-items-center rounded-lg text-[var(--fg3)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)] disabled:opacity-50"
-              title="Regenerate"
-              aria-label="Regenerate digest"
-              onclick={runDigest}
-              disabled={digest?.loading}
-            >
-              <Icon name="sync" size={13} class={digest?.loading ? "spin" : ""} />
-            </button>
-          {:else}
-            <button
-              class="ml-auto inline-flex h-[26px] items-center gap-[5px] rounded-lg border bg-[var(--bg)] px-2.5 text-[11.5px] font-medium text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)] disabled:opacity-50"
-              style="border-color: var(--border);"
-              onclick={runDigest}
-              disabled={digest?.loading}
-            >
-              <Icon name="auto_awesome" size={13} class={digest?.loading ? "spin" : ""} />
-              {digest?.loading ? "Thinking…" : "Generate"}
-            </button>
-          {/if}
-        </div>
-        {#if digest?.text}
-          <div class="border-t px-[13px] py-2 text-[12.5px] leading-[1.55] text-[var(--fg-body)]" style="border-color: var(--border);">
-            <MarkdownView source={digest.text} />
-          </div>
-        {/if}
-        {#if digest?.error}
-          <div class="border-t px-[13px] py-2 text-[11.5px] text-[var(--status-blocked)]" style="border-color: var(--border);">
-            {digest.error}
-          </div>
-        {/if}
-      </div>
-    {/if}
-
-    {#each brief.integrations as ig (feedKey(ig))}
-      {@const conn = connFor(ig.connection)}
-      {@const entry = integrations.get(brief.path, ig.connection, ig.kind, ig.query)}
-      <div class="overflow-hidden rounded-[12px] border" style="border-color: var(--border);">
-        {#if !conn}
-          <!-- Redesigned "connection isn't set up" — amber reconnect banner. -->
-          <div class="flex items-center gap-[10px] px-3 py-[10px]">
-            <span
-              class="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-lg text-[var(--fg3)]"
-              style="background: var(--chip-bg);"
-            >
-              <Icon name="link_off" size={16} />
-            </span>
-            <div class="min-w-0 flex-1">
-              <div class="truncate text-[12.5px] font-semibold text-[var(--fg)]">{ig.connection}</div>
-              <div class="text-[11px] text-[var(--fg3)]">Account isn't connected anymore</div>
-            </div>
-          </div>
-          <div
-            class="flex items-center gap-2 border-t px-3 py-[9px]"
-            style="border-color: var(--border); background: color-mix(in srgb, var(--status-paused) 12%, transparent);"
+  {#if strip}
+    <!-- Quiet-top layout: a slim one-line rollup, one pill per connected feed. -->
+    <div class="flex items-center gap-3">
+      <div class="flex flex-wrap items-center gap-[10px]">
+        {#each brief.integrations as ig (feedKey(ig))}
+          {@const conn = connFor(ig.connection)}
+          {@const entry = integrations.get(brief.path, ig.connection, ig.kind, ig.query)}
+          <button
+            class="inline-flex items-center gap-2 rounded-full border bg-[var(--bg)] py-[5px] pl-[6px] pr-[10px] transition-colors hover:bg-[var(--hover)]"
+            style="border-color: var(--border);"
+            onclick={onManage}
           >
-            <Icon name="warning" size={15} fill={1} class="text-[var(--hook-fg)]" />
-            <span class="flex-1 text-[11.5px] text-[var(--fg2)]">This feed lost its account. Reconnect to keep pulling data.</span>
-            {#if onManage}
-              <button
-                class="inline-flex h-[26px] shrink-0 items-center rounded-[7px] bg-[var(--accent)] px-2.5 text-[11.5px] font-medium text-white transition-[filter] hover:brightness-[1.06]"
-                onclick={onManage}
-              >
-                Reconnect
-              </button>
+            {#if conn}
+              <ProviderTile provider={conn.provider} size={20} />
+            {:else}
+              <span class="grid h-[20px] w-[20px] place-items-center rounded-[7px] text-[var(--fg3)]" style="background: var(--chip-bg);">
+                <Icon name="link_off" size={12} />
+              </span>
             {/if}
-          </div>
-        {:else}
-          <!-- Feed header -->
-          <div class="flex items-center gap-[10px] px-3 py-[10px]">
-            <ProviderTile provider={conn.provider} size={30} />
-            <div class="min-w-0 flex-1">
-              <div class="flex items-center gap-[7px]">
-                <span class="truncate text-[12.5px] font-semibold text-[var(--fg)]">{conn.label}</span>
-                <span class="shrink-0 rounded-[5px] bg-[var(--chip-bg)] px-[6px] py-px text-[9.5px] font-semibold uppercase tracking-[0.04em] text-[var(--fg3)]">
-                  {kindLabel(ig.kind, conn.provider)}
-                </span>
-              </div>
-              {#if entry?.data}
-                <div class="mt-px truncate text-[11px] text-[var(--fg3)]">{summaryLine(entry.data)}</div>
-              {/if}
-            </div>
-            <button
-              class="grid h-[26px] w-[26px] shrink-0 place-items-center rounded-lg text-[var(--fg3)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)] disabled:opacity-50"
-              title="Refresh"
-              aria-label="Refresh {conn.label}"
-              onclick={() => refresh(ig)}
-              disabled={entry?.loading}
-            >
-              <Icon name="sync" size={15} class={entry?.loading ? "spin" : ""} />
-            </button>
-          </div>
-
-          <!-- Feed body: error / loading / empty / items -->
-          {#if entry?.error && !entry.data}
-            <div class="border-t px-3 py-[10px] text-[12px] text-[var(--status-blocked)]" style="border-color: var(--border);">
-              {entry.error}
-            </div>
-          {:else if entry?.loading && !entry.data}
-            <div class="flex items-center gap-2 border-t px-3 py-[10px] text-[12px] text-[var(--fg3)]" style="border-color: var(--border);">
-              <Icon name="sync" size={14} class="spin" /> Loading…
-            </div>
-          {:else if entry?.data && entry.data.items.length === 0}
-            <div class="border-t px-3 py-[10px] text-[12px] text-[var(--fg3)]" style="border-color: var(--border);">
-              Nothing assigned right now. 🎉
-            </div>
-          {:else if entry?.data}
-            {@const all = entry.data.items}
-            {@const isOpen = expanded[feedKey(ig)] ?? false}
-            {@const shown = isOpen ? all : all.slice(0, 3)}
-            <ul class="border-t" style="border-color: var(--border);">
-              {#each shown as item (item.id)}
-                <li class="border-t first:border-t-0" style="border-color: color-mix(in srgb, var(--border) 60%, transparent);">
-                  <button
-                    class="flex w-full items-center gap-[9px] px-3 py-[8px] text-left transition-colors hover:bg-[var(--hover)]"
-                    onclick={() => open(item)}
-                  >
-                    <span class="h-[7px] w-[7px] shrink-0 rounded-full" style="background: {dotColor(item.status)};"></span>
-                    <span class="min-w-0 flex-1 truncate text-[12px] text-[var(--fg-body)]">{item.title}</span>
-                    {#if item.status}
-                      <span class="shrink-0 text-[10px] text-[var(--fg3)]">{item.status}</span>
-                    {/if}
-                    <Icon name="north_east" size={11} class="shrink-0 text-[var(--fg3)] opacity-60" />
-                  </button>
-                </li>
-              {/each}
-            </ul>
-            {#if all.length > 3}
-              <button
-                class="w-full border-t px-3 py-[7px] text-left text-[11px] font-medium text-[var(--accent)] hover:underline"
-                style="border-color: color-mix(in srgb, var(--border) 60%, transparent);"
-                onclick={() => (expanded = { ...expanded, [feedKey(ig)]: !isOpen })}
-              >
-                {isOpen ? "Show less" : `+ ${all.length - 3} more in ${PROVIDERS[conn.provider].label}`}
-              </button>
-            {/if}
-            {#if entry.error}
-              <!-- Stale data shown above, but the latest refresh failed. -->
-              <div class="border-t px-3 py-[7px] text-[11px] text-[var(--status-blocked)]" style="border-color: var(--border);">
-                Couldn't refresh: {entry.error}
-              </div>
-            {/if}
-          {/if}
-        {/if}
-      </div>
-    {/each}
-  </section>
-{:else}
-  <!-- Empty state — invite the user to pull real work into the brief. -->
-  <section class="mb-[26px]">
-    <div
-      class="flex flex-col items-center gap-1 rounded-[14px] border border-dashed px-6 py-[26px] text-center"
-      style="border-color: var(--border);"
-    >
-      <div class="mb-[10px] flex gap-2">
-        {#each PROVIDER_ORDER as p (p)}
-          <ProviderTile provider={p} size={30} />
+            <span class="text-[12px] text-[var(--fg-body)]">
+              <strong class="font-semibold text-[var(--fg)] tabular-nums">{entry?.data?.items.length ?? 0}</strong>
+              {kindLabel(ig.kind, conn?.provider).toLowerCase()}
+            </span>
+          </button>
         {/each}
       </div>
-      <div class="text-[14px] font-semibold text-[var(--fg)]">Pull your real work into this brief</div>
-      <div class="mb-3 max-w-[42ch] text-[12px] leading-[1.5] text-[var(--fg3)]">
-        Connect Linear, Jira, Asana, or GitHub and WAID shows your open tasks and notifications right here — no
-        tab-switching.
-      </div>
       {#if onManage}
-        <button
-          class="inline-flex h-[30px] items-center gap-[5px] rounded-lg bg-[var(--accent)] px-3 text-[12.5px] font-medium text-white transition-[filter] hover:brightness-[1.06]"
-          onclick={onManage}
-        >
-          <Icon name="add" size={15} /> Connect a tool
-        </button>
+        <button class="btn-quiet ml-auto" style="font-size: 11.5px;" onclick={onManage}>View feeds</button>
       {/if}
     </div>
-  </section>
+  {:else}
+    <div class="flex flex-col gap-[10px]">
+      {#if canDigest}
+        <!-- AI digest: natural-language layer over the local rollups -->
+        <div class="rounded-[11px] border" style="border-color: var(--border);">
+          <div class="flex items-center gap-2 px-[13px] py-[9px]">
+            <Icon name="auto_awesome" size={15} class="text-[var(--accent)]" />
+            <span class="text-[12.5px] font-semibold text-[var(--fg)]">AI digest</span>
+            {#if digest?.text}
+              <button class="btn btn-sm ml-auto" title="Append this digest to the brief's Captures" onclick={snapshotDigest}>
+                <Icon name="bookmark_add" size={13} /> Snapshot
+              </button>
+              <button
+                class="btn-icon"
+                style="height: 26px; width: 26px;"
+                title="Regenerate"
+                aria-label="Regenerate digest"
+                onclick={runDigest}
+                disabled={digest?.loading}
+              >
+                <Icon name="sync" size={13} class={digest?.loading ? "spin" : ""} />
+              </button>
+            {:else}
+              <button class="btn btn-sm ml-auto" onclick={runDigest} disabled={digest?.loading}>
+                <Icon name="auto_awesome" size={13} class={digest?.loading ? "spin" : ""} />
+                {digest?.loading ? "Thinking…" : "Generate"}
+              </button>
+            {/if}
+          </div>
+          {#if digest?.text}
+            <div class="border-t px-[13px] py-2 text-[12.5px] leading-[1.55] text-[var(--fg-body)]" style="border-color: var(--border-soft);">
+              <MarkdownView source={digest.text} />
+            </div>
+          {/if}
+          {#if digest?.error}
+            <div class="border-t px-[13px] py-2 text-[11.5px] text-[var(--status-blocked)]" style="border-color: var(--border-soft);">
+              {digest.error}
+            </div>
+          {/if}
+        </div>
+      {/if}
+
+      {#each brief.integrations as ig (feedKey(ig))}
+        {@const conn = connFor(ig.connection)}
+        {@const entry = integrations.get(brief.path, ig.connection, ig.kind, ig.query)}
+        <div class="overflow-hidden rounded-[11px] border" style="border-color: var(--border);">
+          {#if !conn}
+            <!-- Connection isn't set up anymore — quiet reconnect banner. -->
+            <div class="flex items-center gap-[10px] px-3 py-[10px]">
+              <span class="grid h-[26px] w-[26px] shrink-0 place-items-center rounded-[7px] text-[var(--fg3)]" style="background: var(--chip-bg);">
+                <Icon name="link_off" size={15} />
+              </span>
+              <div class="min-w-0 flex-1">
+                <div class="truncate text-[12.5px] font-semibold text-[var(--fg)]">{ig.connection}</div>
+                <div class="text-[11px] text-[var(--fg3)]">Account isn't connected anymore</div>
+              </div>
+              {#if onManage}
+                <button class="btn btn-sm shrink-0" onclick={onManage}>Reconnect</button>
+              {/if}
+            </div>
+          {:else}
+            <!-- Feed header -->
+            <div class="flex items-center gap-[10px] px-3 py-[9px]">
+              <ProviderTile provider={conn.provider} size={26} />
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-[7px]">
+                  <span class="truncate text-[12.5px] font-semibold text-[var(--fg)]">{conn.label}</span>
+                  <span class="shrink-0 rounded-[5px] bg-[var(--chip-bg)] px-[6px] py-px text-[9.5px] font-semibold uppercase tracking-[0.04em] text-[var(--fg3)]">
+                    {kindLabel(ig.kind, conn.provider)}
+                  </span>
+                </div>
+                {#if entry?.data}
+                  <div class="mt-px truncate text-[11px] text-[var(--fg3)]">{summaryLine(entry.data)}</div>
+                {/if}
+              </div>
+              <button
+                class="btn-icon shrink-0"
+                style="height: 26px; width: 26px;"
+                title="Refresh"
+                aria-label="Refresh {conn.label}"
+                onclick={() => refresh(ig)}
+                disabled={entry?.loading}
+              >
+                <Icon name="sync" size={14} class={entry?.loading ? "spin" : ""} />
+              </button>
+            </div>
+
+            <!-- Feed body: error / loading / empty / items -->
+            {#if entry?.error && !entry.data}
+              <div class="border-t px-3 py-[10px] text-[12px] text-[var(--status-blocked)]" style="border-color: var(--border);">
+                {entry.error}
+              </div>
+            {:else if entry?.loading && !entry.data}
+              <div class="flex items-center gap-2 border-t px-3 py-[10px] text-[12px] text-[var(--fg3)]" style="border-color: var(--border);">
+                <Icon name="sync" size={14} class="spin" /> Loading…
+              </div>
+            {:else if entry?.data && entry.data.items.length === 0}
+              <div class="border-t px-3 py-[10px] text-[12px] text-[var(--fg3)]" style="border-color: var(--border);">
+                Nothing assigned right now. 🎉
+              </div>
+            {:else if entry?.data}
+              {@const all = entry.data.items}
+              {@const isOpen = expanded[feedKey(ig)] ?? false}
+              {@const shown = isOpen ? all : all.slice(0, 3)}
+              <ul class="border-t" style="border-color: var(--border);">
+                {#each shown as item (item.id)}
+                  <li class="border-t first:border-t-0" style="border-color: var(--border-soft);">
+                    <button
+                      class="flex w-full items-center gap-[9px] px-3 py-[8px] text-left transition-colors hover:bg-[var(--hover)]"
+                      onclick={() => open(item)}
+                    >
+                      <span class="h-[6px] w-[6px] shrink-0 rounded-full" style="background: {dotColor(item.status)};"></span>
+                      <span class="min-w-0 flex-1 truncate text-[12px] text-[var(--fg-body)]">{item.title}</span>
+                      {#if item.updatedAt}
+                        <span class="shrink-0 text-[10px] tabular-nums text-[var(--fg4)]">{relativeTime(item.updatedAt)}</span>
+                      {/if}
+                      <Icon name="north_east" size={11} class="shrink-0 text-[var(--fg4)]" />
+                    </button>
+                  </li>
+                {/each}
+              </ul>
+              {#if all.length > 3}
+                <button
+                  class="w-full border-t px-3 py-[7px] text-left text-[11px] font-medium text-[var(--accent)] hover:underline"
+                  style="border-color: var(--border-soft);"
+                  onclick={() => (expanded = { ...expanded, [feedKey(ig)]: !isOpen })}
+                >
+                  {isOpen ? "Show less" : `+ ${all.length - 3} more in ${PROVIDERS[conn.provider].label}`}
+                </button>
+              {/if}
+              {#if entry.error}
+                <!-- Stale data shown above, but the latest refresh failed. -->
+                <div class="border-t px-3 py-[7px] text-[11px] text-[var(--status-blocked)]" style="border-color: var(--border-soft);">
+                  Couldn't refresh: {entry.error}
+                </div>
+              {/if}
+            {/if}
+          {/if}
+        </div>
+      {/each}
+    </div>
+  {/if}
+{:else if narrow}
+  <!-- Empty state, two-column rail: a tidy compact stacked card. -->
+  <div class="flex flex-col gap-[10px] rounded-[12px] border bg-[var(--bg)] p-[14px]" style="border-color: var(--border);">
+    <div class="flex">
+      {#each NARROW_PROVIDERS as p, i (p)}
+        <span style="margin-left: {i ? -7 : 0}px; box-shadow: 0 0 0 2px var(--bg); border-radius: 7px;">
+          <ProviderTile provider={p} size={24} />
+        </span>
+      {/each}
+    </div>
+    <div>
+      <div class="text-[12.5px] font-semibold text-[var(--fg)]">Connect a tool</div>
+      <div class="mt-[2px] text-[11.5px] leading-[1.45] text-[var(--fg3)]">Pull open tasks &amp; notifications into this brief.</div>
+    </div>
+    <button class="btn btn-primary btn-sm w-full justify-center" onclick={onManage}>Connect</button>
+  </div>
+{:else}
+  <!-- Empty state, full width: a slim one-line row. -->
+  <button
+    class="flex w-full items-center gap-3 rounded-[11px] border bg-[var(--bg)] px-[13px] py-[10px] text-left transition-colors hover:bg-[var(--hover)]"
+    style="border-color: var(--border);"
+    onclick={onManage}
+  >
+    <span class="flex">
+      {#each PROVIDER_ORDER as p, i (p)}
+        <span style="margin-left: {i ? -6 : 0}px; box-shadow: 0 0 0 2px var(--bg); border-radius: 7px;">
+          <ProviderTile provider={p} size={22} />
+        </span>
+      {/each}
+    </span>
+    <span class="flex-1 text-[12.5px] text-[var(--fg2)]">Pull live tasks &amp; notifications into this brief</span>
+    <span class="inline-flex items-center gap-1 text-[12.5px] font-medium text-[var(--accent)]">
+      Connect <Icon name="arrow_forward" size={14} />
+    </span>
+  </button>
 {/if}

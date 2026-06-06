@@ -19,7 +19,13 @@
     setLlmSettings,
     listOllamaModels,
   } from "$lib/tauri";
-  import { settings, ACCENTS, type SidebarStyle, type Density } from "$lib/stores/settings.svelte";
+  import {
+    settings,
+    ACCENTS,
+    type SidebarStyle,
+    type Density,
+    type BriefLayout,
+  } from "$lib/stores/settings.svelte";
   import { STATUS_ORDER, STATUS_LABEL, statusColor } from "$lib/status";
   import StatusPill from "./StatusPill.svelte";
   import Icon from "./Icon.svelte";
@@ -356,6 +362,11 @@
     { value: "compact", label: "Compact" },
     { value: "rocks", label: "Rocks" },
   ];
+  const BRIEF_LAYOUTS: { value: BriefLayout; label: string }[] = [
+    { value: "two-col", label: "Two-column" },
+    { value: "body", label: "Body first" },
+    { value: "quiet", label: "Quiet top" },
+  ];
   const DENSITIES: { value: Density; label: string }[] = [
     { value: "comfortable", label: "Comfortable" },
     { value: "compact", label: "Compact" },
@@ -372,47 +383,42 @@
     style="border-color: var(--border);"
   >
     <div class="flex items-center gap-[10px]">
-      <BrandMark size={22} />
+      <span
+        class="grid h-7 w-7 place-items-center rounded-[9px] border"
+        style="background: var(--bg); border-color: var(--border);"
+      >
+        <BrandMark size={16} />
+      </span>
       <div>
-        <div class="text-[16px] font-bold leading-none tracking-[-0.01em] text-[var(--fg)]">WAID</div>
-        <div class="mt-[2px] text-[10.5px] text-[var(--fg3)]">What Am I Doing?</div>
+        <div class="text-[14.5px] font-bold leading-none tracking-[-0.01em] text-[var(--fg)]">WAID</div>
+        <div class="mt-[3px] text-[10px] text-[var(--fg3)]">What Am I Doing?</div>
       </div>
     </div>
-    <div class="relative flex items-center gap-1">
+    <div class="relative flex items-center gap-px">
       {#if projects.llmProvider}
         <button
-          class="grid h-7 w-7 place-items-center rounded-lg text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)]"
+          class="btn-icon"
           title="Morning briefing across all projects"
           aria-label="Morning briefing"
           onclick={() => (briefingOpen = true)}
         >
-          <Icon name="wb_sunny" size={17} />
+          <Icon name="wb_sunny" size={16} />
         </button>
       {/if}
       <button
-        class="grid h-7 w-7 place-items-center rounded-lg text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)] disabled:opacity-50"
+        class="btn-icon"
         title="Sync all projects"
         aria-label="Sync all projects"
         onclick={syncAllBriefs}
         disabled={syncingAll}
       >
-        <Icon name="sync" size={17} class={syncingAll ? "spin" : ""} />
+        <Icon name="sync" size={16} class={syncingAll ? "spin" : ""} />
       </button>
-      <button
-        class="grid h-7 w-7 place-items-center rounded-lg text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)]"
-        title="View & appearance"
-        aria-label="View & appearance"
-        onclick={toggleSettings}
-      >
-        <Icon name="tune" size={17} />
+      <button class="btn-icon" title="View & appearance" aria-label="View & appearance" onclick={toggleSettings}>
+        <Icon name="tune" size={16} />
       </button>
-      <button
-        class="grid h-7 w-7 place-items-center rounded-lg text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)]"
-        title="Toggle theme"
-        aria-label="Toggle theme"
-        onclick={() => settings.toggleDark()}
-      >
-        <Icon name={settings.dark ? "light_mode" : "dark_mode"} size={17} />
+      <button class="btn-icon" title="Toggle theme" aria-label="Toggle theme" onclick={() => settings.toggleDark()}>
+        <Icon name={settings.dark ? "light_mode" : "dark_mode"} size={16} />
       </button>
 
       {#if settingsOpen}
@@ -423,8 +429,8 @@
           onclick={() => (settingsOpen = false)}
         ></button>
         <div
-          class="anim-pop absolute right-0 top-[34px] z-50 max-h-[calc(100vh-56px)] w-[232px] overflow-y-auto overscroll-contain rounded-xl border p-3 shadow-[0_16px_40px_rgba(10,20,40,0.28)]"
-          style="background: var(--bg); border-color: var(--border);"
+          class="anim-pop absolute right-0 top-[34px] z-50 max-h-[calc(100vh-56px)] w-[232px] overflow-y-auto overscroll-contain rounded-[14px] border p-3"
+          style="background: var(--bg); border-color: var(--border); box-shadow: var(--shadow-pop);"
         >
           <!-- Project cards -->
           <div class="mb-1 text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--fg3)]">
@@ -438,6 +444,24 @@
                   ? 'bg-[var(--accent)] text-white'
                   : 'text-[var(--fg2)] hover:text-[var(--fg)]'}"
                 onclick={() => settings.setSidebarStyle(opt.value)}
+              >
+                {opt.label}
+              </button>
+            {/each}
+          </div>
+
+          <!-- Brief layout -->
+          <div class="mb-1 text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--fg3)]">
+            Brief layout
+          </div>
+          <div class="mb-3 flex rounded-lg border p-[2px]" style="border-color: var(--border);">
+            {#each BRIEF_LAYOUTS as opt (opt.value)}
+              <button
+                class="flex-1 rounded-md px-2 py-1 text-[11.5px] font-medium transition-colors {settings.briefLayout ===
+                opt.value
+                  ? 'bg-[var(--accent)] text-white'
+                  : 'text-[var(--fg2)] hover:text-[var(--fg)]'}"
+                onclick={() => settings.setBriefLayout(opt.value)}
               >
                 {opt.label}
               </button>
@@ -765,21 +789,21 @@
     {:else if settings.sidebarStyle === "rows"}
       <!-- a) ROWS — flat, detailed -->
       {#each projects.filtered as brief (brief.path)}
+        {@const sel = brief.path === projects.selectedPath}
         <button
-          class="mb-px w-full rounded-[9px] px-[11px] py-2 text-left transition-colors {brief.path ===
-          projects.selectedPath
-            ? 'bg-[var(--sel-bg)] shadow-[0_0_0_1px_var(--sel-ring),0_1px_3px_rgba(15,30,60,0.06)] dark:rounded-[0_9px_9px_0] dark:shadow-[inset_2px_0_0_var(--accent)]'
+          class="mb-px w-full rounded-[9px] px-[10px] py-2 text-left transition-colors {sel
+            ? 'bg-[var(--sel)] shadow-[inset_2px_0_0_var(--accent)]'
             : 'hover:bg-[var(--hover)]'}"
           onclick={() => projects.select(brief.path)}
         >
           <div class="flex items-center gap-2">
-            <span class="flex-1 truncate text-[13px] font-medium text-[var(--fg)]">{brief.name}</span>
+            <span class="flex-1 truncate text-[13px] text-[var(--fg)] {sel ? 'font-semibold' : 'font-medium'}">{brief.name}</span>
             <StatusPill status={brief.status} />
           </div>
           {#if brief.description}
-            <p class="mt-[2px] truncate text-[11.5px] text-[var(--fg3)]">{brief.description}</p>
+            <p class="mt-[3px] truncate text-[11.5px] text-[var(--fg3)]">{brief.description}</p>
           {/if}
-          <p class="mt-[3px] text-[10.5px] text-[var(--fg3)]">{relativeTime(brief.lastOpened)}</p>
+          <p class="mt-1 text-[10.5px] text-[var(--fg4)]">{relativeTime(brief.lastOpened)}</p>
         </button>
       {/each}
 
@@ -793,21 +817,16 @@
           <span class="ml-auto tabular-nums">{group.items.length}</span>
         </div>
         {#each group.items as brief (brief.path)}
+          {@const sel = brief.path === projects.selectedPath}
           <button
-            class="flex h-[30px] w-full items-center gap-[9px] rounded-[7px] px-[9px] text-left {brief.path ===
-            projects.selectedPath
-              ? 'bg-[var(--sel-bg)] rounded-[0_7px_7px_0] shadow-[inset_2px_0_0_var(--accent)]'
+            class="flex h-[30px] w-full items-center gap-[9px] rounded-[7px] px-[9px] text-left {sel
+              ? 'bg-[var(--sel)] shadow-[inset_2px_0_0_var(--accent)]'
               : 'hover:bg-[var(--hover)]'}"
             onclick={() => projects.select(brief.path)}
           >
-            <span class="sdot h-[7px] w-[7px]" style="--sc: {statusColor(brief.status)};"></span>
-            <span
-              class="flex-1 truncate text-[12.5px] text-[var(--fg)] {brief.path ===
-              projects.selectedPath
-                ? 'font-[550]'
-                : 'font-[450]'}"
-            >{brief.name}</span>
-            <span class="text-[10px] tabular-nums text-[var(--fg3)]">{relativeTime(brief.lastOpened)}</span>
+            <span class="sdot h-[6px] w-[6px]" style="--sc: {statusColor(brief.status)};"></span>
+            <span class="flex-1 truncate text-[12.5px] text-[var(--fg)] {sel ? 'font-semibold' : 'font-[450]'}">{brief.name}</span>
+            <span class="text-[10px] tabular-nums text-[var(--fg4)]">{relativeTime(brief.lastOpened)}</span>
           </button>
         {/each}
       {/each}
@@ -826,25 +845,25 @@
           {@const pc = statusColor(brief.status)}
           {@const sel = brief.path === projects.selectedPath}
           <button
-            class="mb-[7px] block w-full cursor-pointer rounded-[13px] border-solid bg-[var(--bg)] px-[11px] py-[9px] pl-[13px] text-left transition-[transform,box-shadow] hover:-translate-y-px dark:bg-white/[0.02]"
-            style="border-width: {sel ? '2px' : '1.5px'}; border-color: color-mix(in srgb, {pc} {sel
-              ? '85%'
-              : '38%'}, transparent); {sel
-              ? `box-shadow: 0 3px 12px color-mix(in srgb, ${pc} 28%, transparent);`
+            class="mb-[7px] block w-full cursor-pointer rounded-[13px] border-solid bg-[var(--bg)] px-[11px] py-[9px] pl-[12px] text-left transition-[transform,box-shadow] hover:-translate-y-px dark:bg-white/[0.02]"
+            style="border-width: {sel ? '1.5px' : '1px'}; border-color: {sel
+              ? `color-mix(in srgb, ${pc} 70%, transparent)`
+              : 'var(--border)'}; {sel
+              ? `box-shadow: 0 2px 10px color-mix(in srgb, ${pc} 22%, transparent);`
               : ''}"
             onclick={() => projects.select(brief.path)}
           >
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-[9px]">
               <span
                 class="grid h-[22px] w-[22px] flex-shrink-0 place-items-center"
                 style="border-radius: 8px 11px 9px 12px; background: color-mix(in srgb, {pc} {settings.dark
-                  ? '22%'
-                  : '16%'}, transparent);"
+                  ? '24%'
+                  : '14%'}, transparent);"
               >
-                <BrandMark size={13} color={pc} />
+                <BrandMark size={12} color={pc} />
               </span>
               <span class="flex-1 truncate text-[12.5px] font-semibold text-[var(--fg)]">{brief.name}</span>
-              <span class="text-[10px] text-[var(--fg3)]">{relativeTime(brief.lastOpened)}</span>
+              <span class="text-[10px] text-[var(--fg4)]">{relativeTime(brief.lastOpened)}</span>
             </div>
             {#if brief.description}
               <div

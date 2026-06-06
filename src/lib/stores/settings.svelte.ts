@@ -5,6 +5,8 @@
 
 export type SidebarStyle = "rows" | "compact" | "rocks";
 export type Density = "comfortable" | "compact";
+/** Where a brief's live state sits relative to its body (see ProjectDetail). */
+export type BriefLayout = "two-col" | "body" | "quiet";
 
 /** Curated accent options exposed in settings (blue, green, indigo, coral). */
 export const ACCENTS = ["#1E88E5", "#40A87E", "#6366F1", "#E57373"] as const;
@@ -16,6 +18,7 @@ interface Persisted {
   dark: boolean;
   accent: string;
   sidebarStyle: SidebarStyle;
+  briefLayout: BriefLayout;
   density: Density;
   autoSyncOnOpen: boolean;
 }
@@ -34,6 +37,7 @@ class Settings {
   dark = $state(false);
   accent = $state<string>(ACCENTS[0]);
   sidebarStyle = $state<SidebarStyle>("rows");
+  briefLayout = $state<BriefLayout>("two-col");
   density = $state<Density>("comfortable");
   /** Opt-in: auto-refresh a brief's sync block when it's opened. Off by
    *  default — sync is manual unless the user turns this on. */
@@ -55,6 +59,7 @@ class Settings {
     this.dark = saved.dark ?? legacyDark ?? systemDark;
     this.accent = saved.accent ?? ACCENTS[0];
     this.sidebarStyle = saved.sidebarStyle ?? "rows";
+    this.briefLayout = saved.briefLayout ?? "two-col";
     this.density = saved.density ?? "comfortable";
     this.autoSyncOnOpen = saved.autoSyncOnOpen ?? false;
     applyDark(this.dark);
@@ -66,6 +71,7 @@ class Settings {
       dark: this.dark,
       accent: this.accent,
       sidebarStyle: this.sidebarStyle,
+      briefLayout: this.briefLayout,
       density: this.density,
       autoSyncOnOpen: this.autoSyncOnOpen,
     };
@@ -90,6 +96,11 @@ class Settings {
 
   setSidebarStyle(style: SidebarStyle): void {
     this.sidebarStyle = style;
+    this.persist();
+  }
+
+  setBriefLayout(layout: BriefLayout): void {
+    this.briefLayout = layout;
     this.persist();
   }
 

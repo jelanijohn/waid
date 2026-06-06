@@ -11,6 +11,7 @@
     deleteBriefIntegration,
     testBriefConnection,
     connectGmail,
+    generateGmailQuery,
   } from "$lib/tauri";
   import Icon from "./Icon.svelte";
   import ProviderTile from "./ProviderTile.svelte";
@@ -44,6 +45,56 @@
   let limit = $state("20");
 
   let testing = $state<string | null>(null);
+
+  // --- inline edit (manage view) ---------------------------------------------
+  // Rename a connection's label or edit a feed's query in place. One open at a
+  // time. A feed's identity includes its query, so editing it = drop the old
+  // selector + save a new one (see saveEditFeed).
+  let editingConnId = $state<string | null>(null);
+  let editConnLabel = $state("");
+  let editingFeedKey = $state<string | null>(null);
+  let editFeedQuery = $state("");
+
+  const feedKey = (f: BriefIntegration) => `${f.connection}|${f.kind}|${f.query ?? ""}`;
+
+  // Focus a freshly-revealed edit input (no a11y autofocus warning).
+  function focusInput(node: HTMLInputElement) {
+    node.focus();
+    node.select();
+  }
+
+  // Starter Gmail searches for users who don't know Google's operators. Clicking
+  // a chip fills the query; they tweak from there. The first doubles as a useful
+  // default applied when a Gmail feed is started: recent unread, with the noisy
+  // Promotions/Social/Updates categories filtered out.
+  const GMAIL_TEMPLATES: { label: string; query: string }[] = [
+    { label: "Recent unread", query: "is:unread newer_than:7d -category:promotions -category:social -category:updates" },
+    { label: "Needs my reply", query: "to:me is:unread newer_than:14d -category:promotions -category:social" },
+    { label: "Important", query: "is:important newer_than:14d" },
+    { label: "Starred", query: "is:starred" },
+    { label: "Has attachment", query: "has:attachment newer_than:30d" },
+    { label: "From a person", query: "from:name@example.com newer_than:30d" },
+    { label: "By label", query: "label:my-label newer_than:30d" },
+  ];
+  const GMAIL_DEFAULT_QUERY = GMAIL_TEMPLATES[0].query;
+
+  // Natural-language → Gmail query via the configured synthesis LLM.
+  let aiPrompt = $state("");
+  let aiBusy = $state(false);
+
+  async function generateQuery() {
+    const p = aiPrompt.trim();
+    if (!p || aiBusy) return;
+    aiBusy = true;
+    try {
+      query = await generateGmailQuery(p);
+      toasts.success("Filter generated — tweak it if needed");
+    } catch (e) {
+      toasts.error(`Could not generate: ${e}`);
+    } finally {
+      aiBusy = false;
+    }
+  }
 
   function slugify(s: string): string {
     return s.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
@@ -129,7 +180,8 @@
     targetConnId = connId;
     const conn = brief.connections.find((c) => c.id === connId);
     kind = conn ? PROVIDERS[conn.provider].kinds[0] : "tasks";
-    query = "";
+    query = conn?.provider === "gmail" ? GMAIL_DEFAULT_QUERY : "";
+    aiPrompt = "";
     limit = "20";
     chooseReturn = ret;
     view = "choose";
@@ -234,6 +286,70 @@
     }
   }
 
+  function startEditConn(c: Connection) {
+    editingFeedKey = null;
+    editingConnId = c.id;
+    editConnLabel = c.label;
+  }
+
+  async function saveEditConn(c: Connection) {
+    const next = editConnLabel.trim();
+    if (!next || next === c.label) {
+      editingConnId = null;
+      return;
+    }
+    try {
+      // Gmail (and any existing connection) keeps its token on an empty string;
+      // save_brief_connection upserts by id, so only the label changes.
+      const updated = await saveBriefConnection(brief.path, { ...c, label: next }, "");
+      projects.upsert(updated);
+      editingConnId = null;
+      toasts.success("Renamed");
+    } catch (e) {
+      toasts.error(`Could not rename: ${e}`);
+    }
+  }
+
+  function startEditFeed(f: BriefIntegration) {
+    editingConnId = null;
+    editingFeedKey = feedKey(f);
+    editFeedQuery = f.query ?? "";
+  }
+
+  async function saveEditFeed(f: BriefIntegration, prov: Provider) {
+    const next = editFeedQuery.trim();
+    // Gmail and Notion require a query (it's the feed's target, not a filter).
+    if ((prov === "gmail" || prov === "notion") && !next) {
+      toasts.error("A search query is required.");
+      return;
+    }
+    const nextQuery = next || null;
+    if (nextQuery === (f.query ?? null)) {
+      editingFeedKey = null;
+      return;
+    }
+    try {
+      // Feed identity is (connection, kind, query), so an edited query is a new
+      // selector: drop the old one, then save the new (same kind + item cap).
+      await deleteBriefIntegration(brief.path, f.connection, f.kind, f.query ?? null);
+      const updated = await saveBriefIntegration(brief.path, {
+        connection: f.connection,
+        kind: f.kind,
+        query: nextQuery,
+        limit: f.limit ?? null,
+      });
+      projects.upsert(updated);
+      editingFeedKey = null;
+      toasts.success("Filter updated");
+      // Refresh the panel against the new query.
+      integrations
+        .fetch(brief.path, f.connection, f.kind, nextQuery, f.limit ?? null, true)
+        .catch(() => {});
+    } catch (e) {
+      toasts.error(`Could not update filter: ${e}`);
+    }
+  }
+
   async function testConn(c: Connection) {
     testing = c.id;
     try {
@@ -334,46 +450,123 @@
             <!-- Account card head -->
             <div class="flex items-center gap-[10px] px-[13px] py-[11px]" style="background: var(--side-bg);">
               <ProviderTile provider={g.conn.provider} size={28} />
-              <div class="min-w-0 flex-1">
-                <div class="truncate text-[12.5px] font-semibold text-[var(--fg)]">{g.conn.label}</div>
-                <div class="truncate text-[11px] text-[var(--fg3)]">{PROVIDERS[g.conn.provider].label}</div>
-              </div>
-              <button
-                class="inline-flex h-[26px] shrink-0 items-center gap-[5px] rounded-[7px] border bg-[var(--bg)] px-[9px] text-[11.5px] font-medium text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)] disabled:opacity-50"
-                style="border-color: var(--border);"
-                onclick={() => testConn(g.conn)}
-                disabled={testing === g.conn.id}
-              >
-                <Icon name="wifi_tethering" size={13} class={testing === g.conn.id ? "spin" : ""} />
-                {testing === g.conn.id ? "Testing…" : "Test"}
-              </button>
-              <button
-                class="grid h-[26px] w-[26px] shrink-0 place-items-center rounded-lg text-[var(--fg3)] transition-colors hover:text-[var(--status-blocked)]"
-                title="Remove tool"
-                aria-label="Remove {g.conn.label}"
-                onclick={() => removeConn(g.conn)}
-              >
-                <Icon name="delete" size={15} />
-              </button>
+              {#if editingConnId === g.conn.id}
+                <input
+                  class="h-[28px] min-w-0 flex-1 rounded-[7px] border px-[8px] text-[12.5px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
+                  style="background: var(--input-bg); border-color: var(--border);"
+                  bind:value={editConnLabel}
+                  use:focusInput
+                  aria-label="Connection label"
+                  onkeydown={(e) => {
+                    if (e.key === "Enter") saveEditConn(g.conn);
+                    else if (e.key === "Escape") editingConnId = null;
+                  }}
+                />
+                <button
+                  class="grid h-[26px] w-[26px] shrink-0 place-items-center rounded-lg text-[var(--accent)] transition-colors hover:bg-[var(--hover)]"
+                  title="Save"
+                  aria-label="Save label"
+                  onclick={() => saveEditConn(g.conn)}
+                >
+                  <Icon name="check" size={16} />
+                </button>
+                <button
+                  class="grid h-[26px] w-[26px] shrink-0 place-items-center rounded-lg text-[var(--fg3)] transition-colors hover:text-[var(--fg)]"
+                  title="Cancel"
+                  aria-label="Cancel rename"
+                  onclick={() => (editingConnId = null)}
+                >
+                  <Icon name="close" size={16} />
+                </button>
+              {:else}
+                <div class="min-w-0 flex-1">
+                  <div class="truncate text-[12.5px] font-semibold text-[var(--fg)]">{g.conn.label}</div>
+                  <div class="truncate text-[11px] text-[var(--fg3)]">{PROVIDERS[g.conn.provider].label}</div>
+                </div>
+                <button
+                  class="grid h-[26px] w-[26px] shrink-0 place-items-center rounded-lg text-[var(--fg3)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)]"
+                  title="Rename"
+                  aria-label="Rename {g.conn.label}"
+                  onclick={() => startEditConn(g.conn)}
+                >
+                  <Icon name="edit" size={14} />
+                </button>
+                <button
+                  class="inline-flex h-[26px] shrink-0 items-center gap-[5px] rounded-[7px] border bg-[var(--bg)] px-[9px] text-[11.5px] font-medium text-[var(--fg2)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--fg)] disabled:opacity-50"
+                  style="border-color: var(--border);"
+                  onclick={() => testConn(g.conn)}
+                  disabled={testing === g.conn.id}
+                >
+                  <Icon name="wifi_tethering" size={13} class={testing === g.conn.id ? "spin" : ""} />
+                  {testing === g.conn.id ? "Testing…" : "Test"}
+                </button>
+                <button
+                  class="grid h-[26px] w-[26px] shrink-0 place-items-center rounded-lg text-[var(--fg3)] transition-colors hover:text-[var(--status-blocked)]"
+                  title="Remove tool"
+                  aria-label="Remove {g.conn.label}"
+                  onclick={() => removeConn(g.conn)}
+                >
+                  <Icon name="delete" size={15} />
+                </button>
+              {/if}
             </div>
 
             {#if g.feeds.length}
               <!-- Nested feeds -->
-              {#each g.feeds as f (f.connection + f.kind + (f.query ?? ""))}
+              {#each g.feeds as f (feedKey(f))}
                 <div class="flex items-center gap-[10px] border-t px-[13px] py-[10px]" style="border-color: var(--border);">
                   <Icon name={kindIcon(f.kind, g.conn.provider)} size={15} class="text-[var(--fg3)]" />
-                  <span class="text-[12px] font-medium text-[var(--fg)]">{kindLabel(f.kind, g.conn.provider)}</span>
-                  {#if f.query}
-                    <span class="truncate rounded-[5px] bg-[var(--code-bg)] px-[6px] py-px font-mono text-[10.5px] text-[var(--fg3)]">{f.query}</span>
+                  <span class="shrink-0 text-[12px] font-medium text-[var(--fg)]">{kindLabel(f.kind, g.conn.provider)}</span>
+                  {#if editingFeedKey === feedKey(f)}
+                    <input
+                      class="h-[26px] min-w-0 flex-1 rounded-[6px] border px-[7px] font-mono text-[11px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
+                      style="background: var(--input-bg); border-color: var(--border);"
+                      bind:value={editFeedQuery}
+                      use:focusInput
+                      aria-label="Feed filter"
+                      placeholder={g.conn.provider === "gmail" ? "is:unread newer_than:7d" : "Filter"}
+                      onkeydown={(e) => {
+                        if (e.key === "Enter") saveEditFeed(f, g.conn.provider);
+                        else if (e.key === "Escape") editingFeedKey = null;
+                      }}
+                    />
+                    <button
+                      class="grid h-[24px] w-[24px] shrink-0 place-items-center rounded-md text-[var(--accent)] transition-colors hover:bg-[var(--hover)]"
+                      title="Save"
+                      aria-label="Save filter"
+                      onclick={() => saveEditFeed(f, g.conn.provider)}
+                    >
+                      <Icon name="check" size={15} />
+                    </button>
+                    <button
+                      class="grid h-[24px] w-[24px] shrink-0 place-items-center rounded-md text-[var(--fg3)] transition-colors hover:text-[var(--fg)]"
+                      title="Cancel"
+                      aria-label="Cancel edit"
+                      onclick={() => (editingFeedKey = null)}
+                    >
+                      <Icon name="close" size={15} />
+                    </button>
+                  {:else}
+                    {#if f.query}
+                      <span class="truncate rounded-[5px] bg-[var(--code-bg)] px-[6px] py-px font-mono text-[10.5px] text-[var(--fg3)]">{f.query}</span>
+                    {/if}
+                    <button
+                      class="ml-auto grid h-[24px] w-[24px] shrink-0 place-items-center rounded-md text-[var(--fg3)] transition-colors hover:text-[var(--fg)]"
+                      title="Edit filter"
+                      aria-label="Edit filter"
+                      onclick={() => startEditFeed(f)}
+                    >
+                      <Icon name="edit" size={14} />
+                    </button>
+                    <button
+                      class="grid h-[24px] w-[24px] shrink-0 place-items-center rounded-md text-[var(--fg3)] transition-colors hover:text-[var(--status-blocked)]"
+                      title="Remove feed"
+                      aria-label="Remove feed"
+                      onclick={() => removeFeed(f)}
+                    >
+                      <Icon name="close" size={15} />
+                    </button>
                   {/if}
-                  <button
-                    class="ml-auto grid h-[24px] w-[24px] shrink-0 place-items-center rounded-md text-[var(--fg3)] transition-colors hover:text-[var(--status-blocked)]"
-                    title="Remove feed"
-                    aria-label="Remove feed"
-                    onclick={() => removeFeed(f)}
-                  >
-                    <Icon name="close" size={15} />
-                  </button>
                 </div>
               {/each}
               <div class="border-t border-dashed px-[13px] py-[9px]" style="border-color: var(--border);">
@@ -612,6 +805,53 @@
             </label>
           {/if}
         </div>
+        {#if isGmail}
+          <div class="mt-[10px] flex flex-col gap-[6px]">
+            <span class="text-[10.5px] text-[var(--fg3)]">Templates — click to use, then tweak</span>
+            <div class="flex flex-wrap gap-[6px]">
+              {#each GMAIL_TEMPLATES as t (t.label)}
+                <button
+                  type="button"
+                  class="rounded-full border px-[9px] py-[3px] text-[11px] transition-colors {query === t.query
+                    ? 'border-[var(--accent)] bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] text-[var(--fg)]'
+                    : 'text-[var(--fg2)] hover:border-[var(--accent)] hover:text-[var(--fg)]'}"
+                  style="border-color: {query === t.query ? 'var(--accent)' : 'var(--border)'};"
+                  title={t.query}
+                  onclick={() => (query = t.query)}
+                >
+                  {t.label}
+                </button>
+              {/each}
+            </div>
+          </div>
+          <div class="mt-[10px] flex flex-col gap-[6px]">
+            <span class="text-[10.5px] text-[var(--fg3)]">Or describe it — AI builds the search</span>
+            <div class="flex gap-[6px]">
+              <input
+                class="h-[32px] min-w-0 flex-1 rounded-[8px] border px-[9px] text-[11.5px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
+                style="background: var(--input-bg); border-color: var(--border);"
+                placeholder="unread from my manager this week"
+                bind:value={aiPrompt}
+                onkeydown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    generateQuery();
+                  }
+                }}
+              />
+              <button
+                type="button"
+                class="inline-flex h-[32px] shrink-0 items-center gap-[5px] rounded-[8px] border px-[11px] text-[11.5px] font-medium text-[var(--fg2)] transition-colors hover:border-[var(--accent)] hover:text-[var(--fg)] disabled:opacity-50"
+                style="border-color: var(--border);"
+                onclick={generateQuery}
+                disabled={aiBusy || !aiPrompt.trim()}
+              >
+                <Icon name={aiBusy ? "progress_activity" : "auto_awesome"} size={14} class={aiBusy ? "spin" : ""} />
+                {aiBusy ? "Generating…" : "Generate"}
+              </button>
+            </div>
+          </div>
+        {/if}
         <span class="mt-[10px] block text-[11px] text-[var(--fg3)]">
           {#if isNotionPage}
             Its text becomes context for this brief's synthesised Current State. Share the page with your integration first.

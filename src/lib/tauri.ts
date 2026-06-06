@@ -167,6 +167,11 @@ export const connectGmail = () => invoke<string>("connect_gmail");
 export const digestIntegrations = (path: string) =>
   invoke<string>("digest_integrations", { path });
 
+/** Turn a plain-English description into a Gmail search query via the configured
+ *  synthesis LLM. Returns a single query line to drop into a feed's filter. */
+export const generateGmailQuery = (prompt: string) =>
+  invoke<string>("generate_gmail_query", { prompt });
+
 /** Generate a cross-brief "morning briefing" across all briefs' integrations. */
 export const morningBriefing = () => invoke<string>("morning_briefing");
 

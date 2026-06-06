@@ -423,7 +423,7 @@
           onclick={() => (settingsOpen = false)}
         ></button>
         <div
-          class="anim-pop absolute right-0 top-[34px] z-50 w-[232px] rounded-xl border p-3 shadow-[0_16px_40px_rgba(10,20,40,0.28)]"
+          class="anim-pop absolute right-0 top-[34px] z-50 max-h-[calc(100vh-56px)] w-[232px] overflow-y-auto overscroll-contain rounded-xl border p-3 shadow-[0_16px_40px_rgba(10,20,40,0.28)]"
           style="background: var(--bg); border-color: var(--border);"
         >
           <!-- Project cards -->

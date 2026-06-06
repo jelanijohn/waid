@@ -2109,6 +2109,71 @@ pulled across ALL their projects.",
     provider.complete(&system, &user).await
 }
 
+/// Turn a natural-language description into a Gmail search query using the
+/// configured synthesis LLM (Ollama or Anthropic). Returns a single query line,
+/// e.g. "unread from my manager this week" -> "is:unread from:manager newer_than:7d".
+/// Display-only: the caller drops the result into the feed's query field — nothing
+/// is fetched or written here.
+#[tauri::command]
+pub async fn generate_gmail_query(app: AppHandle, prompt: String) -> Result<String, String> {
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return Err("Describe the emails you want and I'll build the search.".into());
+    }
+    let provider = make_provider(&app)?;
+    let user = truncate_chars(prompt, provider.context_budget());
+    let raw = provider.complete(&gmail_query_system_prompt(), &user).await?;
+    let query = sanitize_gmail_query(&raw);
+    if query.is_empty() {
+        return Err("The model didn't return a usable search. Try rephrasing.".into());
+    }
+    Ok(query)
+}
+
+/// System prompt that converts a plain-English description into ONE Gmail search
+/// string. Unlike the digest prompts this is a transform of the user's own
+/// request, so there's no data-not-instructions guard — but the output is still
+/// pinned to a single query line so the result can drop straight into the field.
+fn gmail_query_system_prompt() -> String {
+    "You convert a person's plain-English description of emails they want to see into \
+a single Gmail search query built from Gmail's search operators.\n\n\
+RULES:\n\
+- Output ONLY the query, on one line. No explanation, no quotes, no code fences, no trailing period.\n\
+- Use Gmail operators where they fit: from:, to:, cc:, subject:, label:, \
+category:(primary|social|promotions|updates|forums), has:attachment, filename:, \
+is:(unread|read|starred|important), in:(inbox|anywhere), newer_than:Nd / older_than:Nd \
+(also h/m/y), after:YYYY/MM/DD, before:YYYY/MM/DD, larger:, smaller:, and -term to exclude. \
+Group OR alternatives with {a b} or parentheses.\n\
+- When the request implies 'recent' or a timeframe, add a bound like newer_than:7d.\n\
+- If it names a person or company but no address, use a bare name token (from:acme), never an invented email.\n\
+- If the request is vague, produce a sensible broad query rather than nothing.\n\
+- Never invent operators that don't exist."
+        .to_string()
+}
+
+/// Reduce an LLM response to a single clean Gmail query line: first non-empty
+/// line, with code fences, surrounding quotes/backticks, and a leading
+/// "Query:"/"Search:" label stripped (but real operators like `from:` kept).
+fn sanitize_gmail_query(raw: &str) -> String {
+    let mut line = raw
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with("```"))
+        .unwrap_or("")
+        .trim_matches(|c: char| c == '`' || c == '"' || c == '\'')
+        .trim()
+        .to_string();
+    if let Some((prefix, rest)) = line.split_once(':') {
+        if matches!(
+            prefix.trim().to_lowercase().as_str(),
+            "query" | "search" | "gmail" | "gmail search"
+        ) {
+            line = rest.trim().to_string();
+        }
+    }
+    line
+}
+
 // --- Brief bootstrap: the first agent that writes human-owned content -------
 //
 // When the user creates a project, bootstrap fills the *initial* brief (body
@@ -3388,7 +3453,17 @@ pub async fn connect_gmail(app: AppHandle) -> Result<String, String> {
 
     // Loopback redirect: bind an ephemeral port; Desktop OAuth clients auto-allow
     // `http://127.0.0.1:<any-port>`, so there's no redirect URI to register.
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+    //
+    // Under WSL the browser opens on the Windows host, so Google's redirect to
+    // `127.0.0.1` arrives via WSL2's localhost-forwarding relay, which forwards
+    // into the VM's eth0 address — a `127.0.0.1`-only socket would never see it.
+    // Bind `0.0.0.0` there so the forwarded connection lands. The `redirect_uri`
+    // stays `127.0.0.1` regardless (Google only allows loopback hosts, and it's
+    // just a matched string at token exchange — never connected to). PKCE + the
+    // unguessable `state` keep the briefly-LAN-reachable port safe. On every
+    // other platform we keep the tighter loopback-only bind.
+    let bind_addr = if is_wsl() { "0.0.0.0:0" } else { "127.0.0.1:0" };
+    let listener = tokio::net::TcpListener::bind(bind_addr)
         .await
         .map_err(|e| format!("could not start loopback listener: {e}"))?;
     let port = listener
@@ -4902,5 +4977,33 @@ mod tests {
         assert!(!meta.tags.contains(&"javascript".to_string()));
 
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn sanitizes_gmail_query_from_llm_output() {
+        // Plain single line passes through untouched.
+        assert_eq!(
+            sanitize_gmail_query("is:unread newer_than:7d"),
+            "is:unread newer_than:7d"
+        );
+        // Code fences + a chatty trailing line are dropped to the first query line.
+        assert_eq!(
+            sanitize_gmail_query("```\nfrom:acme is:unread\n```\nHope that helps!"),
+            "from:acme is:unread"
+        );
+        // Surrounding quotes/backticks are stripped.
+        assert_eq!(sanitize_gmail_query("`is:starred`"), "is:starred");
+        assert_eq!(sanitize_gmail_query("\"subject:invoice\""), "subject:invoice");
+        // A leading "Query:" label is removed, but real operators are preserved.
+        assert_eq!(
+            sanitize_gmail_query("Query: from:boss newer_than:14d"),
+            "from:boss newer_than:14d"
+        );
+        assert_eq!(
+            sanitize_gmail_query("from:boss is:unread"),
+            "from:boss is:unread"
+        );
+        // Empty / blank input yields empty (the command turns this into an error).
+        assert_eq!(sanitize_gmail_query("\n\n"), "");
     }
 }

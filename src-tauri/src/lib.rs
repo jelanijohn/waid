@@ -83,6 +83,7 @@ pub fn run() {
             commands::fetch_integration,
             commands::digest_integrations,
             commands::morning_briefing,
+            commands::generate_gmail_query,
             commands::bootstrap_from_folder,
             commands::bootstrap_from_github,
             commands::bootstrap_from_answers,

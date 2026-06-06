@@ -181,20 +181,23 @@ integrations](#project-management-integrations-optional) below.
   edit mode for review — nothing is written until you Save.
 - **Link buttons** open URLs in your default browser (plus *Open in Obsidian*
   when the briefs folder is in a vault).
-- **Webhook buttons** fire GET/POST (and PUT/PATCH/DELETE) requests with a toast
-  on success/failure. A *Manage webhooks* dialog adds/edits/deletes per-brief
-  webhooks, including **custom headers**; one header value may reference a
-  keyring-backed secret via a `{{secret}}` sentinel (e.g.
-  `Authorization: Bearer {{secret}}`), resolved server-side at fire time. The
-  header *shapes* live in the brief's frontmatter; the secret lives in the OS
-  keyring. Firing only makes an HTTP request — it never writes the `.md`.
+- **Webhook buttons** in the brief's launch row fire GET/POST (and
+  PUT/PATCH/DELETE) requests with a toast on success/failure. Webhooks carry
+  **custom headers**; one header value may reference a keyring-backed secret via a
+  `{{secret}}` sentinel (e.g. `Authorization: Bearer {{secret}}`), resolved
+  server-side at fire time. The header *shapes* live in the brief's frontmatter
+  (edited in Edit mode); the secret lives in the OS keyring. Firing only makes an
+  HTTP request — it never writes the `.md`.
 - **Quick capture** — press **⌘/Ctrl+K** (or the global **Ctrl+Shift+Space**) to
   pop a modal, pick a project, and append a timestamped note under its
   `## Captures` heading.
 - **Search & status filtering** — filter the sidebar by text (**⌘/Ctrl+F**) and
   by project status. Archived briefs are hidden by default; picking the
   "archived" status surfaces them (the archive view).
-- **Light/dark mode** toggle.
+- **Appearance** — a settings popover for light/dark, accent color, sidebar list
+  style (Rows / Compact / Rocks), density, and a **Brief layout** control that
+  places each brief's live-state panel as a right-hand **Two-column** rail,
+  **Body-first** (below the brief), or a **Quiet-top** summary strip.
 - **Brief sync** — pull live state (open PRs/issues, last push, CI, latest
   release) from a brief's GitHub link or explicit `sources` into a managed
   `## Activity` block. Deterministic; frontmatter and prose are never touched.

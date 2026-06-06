@@ -356,7 +356,7 @@ The full markdown brief lives here.
 waid/
 ├── src/                          # SvelteKit frontend
 │   ├── app.html
-│   ├── app.css                   # Tailwind import + "Tidewater" tokens + hand-rolled .markdown styles
+│   ├── app.css                   # Tailwind import + "Tidewater · Refined" tokens + hand-rolled .markdown styles
 │   ├── routes/                   # +layout(.ts/.svelte), +page (main two-pane view)
 │   └── lib/
 │       ├── components/           # Sidebar, ProjectDetail, MarkdownView, QuickCapture,
@@ -588,8 +588,10 @@ blank).
   (re-saved with an empty token, so only the label changes) and **edit a feed's
   query in place** — since feed identity is `(connection, kind, query)`, an edited
   query drops the old selector and saves a new one, then re-fetches the panel.
-- **Settings popover (`Sidebar.svelte`)** — besides the GitHub token / Anthropic
-  key / LLM-provider config, it manages the **bring-your-own Google OAuth client**
+- **Settings popover (`Sidebar.svelte`)** — besides the appearance controls
+  (light/dark, accent, sidebar list style, density, and the **Brief layout**
+  segmented control) and the GitHub token / Anthropic key / LLM-provider config,
+  it manages the **bring-your-own Google OAuth client**
   (`gmail.client_id` / `gmail.client_secret` in the keyring): save / clear, gated
   so Connect only works once a client is stored.
 - **`BriefingModal.svelte`** — the cross-brief "Morning briefing" view.
@@ -613,31 +615,46 @@ blank).
 
 The visual layer has a named theme and shares branding with What's Next.
 
-- **Theme: "Tidewater."** A CSS-variable token system in `app.css` drives
-  light/dark, accent, and density from one place. `--accent` (default
-  `#1e88e5`, the "What's Next blue" seed) is **overridable per-tree** on the app
-  shell; derived tokens (`--hover`, `--link`, `--quote-bar`, …) resolve it
-  lazily via `color-mix`, so changing the accent recolors everything.
+- **Theme: "Tidewater · Refined."** A CSS-variable token system in `app.css`
+  drives light/dark, accent, and density from one place — a Mercury-influenced
+  restraint pass over the original Tidewater tokens: **1px hairline dividers
+  instead of boxed/colored cards, a more neutral palette, tighter/smaller type,
+  and the accent used sparingly as a true accent (links, primary buttons,
+  selection bar) rather than as a fill.** `--accent` (default `#1e88e5`, the
+  "What's Next blue" seed) is **overridable per-tree** on the app shell; derived
+  tokens (`--hover`, `--accent-tint`, `--accent-line`, `--border-soft`, …) resolve
+  it lazily via `color-mix`, so changing the accent recolors everything.
 - **Fonts:** **Inter** (body), **Nunito** (brand/headings), and **Material
   Symbols Rounded** (icons, via `Icon.svelte` + the `.msym` class).
 - **Shared brand with What's Next.** A fixed green **"W" brand mark**
   (`BrandMark.svelte`, `--wn-brand-green: #40a87e`, a single `logo.svg` path via
   CSS mask so it can be recolored per surface) plus a **"rock priority" status
   motif** — WAID shares What's Next's branding system.
-- **Status palette (shared light + dark):** active `#81c784`, paused `#ffb74d`,
-  blocked `#e57373`, archived `#bdbdbd`. Each element sets `--sc` inline; `.pill`
-  / `.sdot` derive tinted fills from it (`status.ts` is the single source of
-  truth for order/color/label).
+- **Status palette (shared light + dark), muted in the refresh:** active
+  `#3f9d63`, paused `#d3982f`, blocked `#d65a55`, archived `#9aa0aa`. Each element
+  sets `--sc` inline; `.pill` / `.sdot` derive tinted fills from it (`status.ts`
+  keeps the same API — only the hex values changed — and stays the single source
+  of truth for order/color/label).
 - **Provider brand tiles.** Each PM provider gets a monogram tile in its own
   brand color via `.ptile-<provider>` classes in `app.css` (so dark-mode tweaks
   stay in CSS); `ProviderTile.svelte` + `providers.ts` drive label/monogram/blurb
   (Linear "L", Jira "J", Asana "A", GitHub "G", Notion "N", Gmail "@" — "G" is
   taken, and "@" reads as email).
 - **Density toggle.** Comfortable default; a `.dense` class on the shell tightens
-  the detail pane (padding, title size, markdown size).
+  the detail pane (the `--pane-px` / `--pane-py` / `--title-size` / `--md-size`
+  tokens).
+- **Brief layout (new setting).** Where a brief's live-state panel sits is
+  user-selectable from the settings popover — `briefLayout` in
+  `settings.svelte.ts` (`two-col` | `body` | `quiet`, default `two-col`):
+  a right-hand 320px `--rail-bg` rail, below the brief body under a hairline
+  divider, or a slim feed-strip across the top. Persisted to `localStorage`
+  alongside accent / sidebar style / density.
 - **Layout:** still **two-pane** — a sidebar (search/filter, project name, status
   pill, last-opened) and a detail pane (rendered brief body + link/webhook
-  buttons + sync/synthesis/bootstrap affordances + the integration panel).
+  buttons + sync/synthesis/bootstrap affordances + the integration panel, the
+  last placed per the brief-layout setting above). The empty-integrations state is
+  a slim provider-glyph **row** ("Connect →"), or a compact stacked card in the
+  two-column rail.
 - **Dependency-light, still true.** No Tailwind typography plugin; rendered-
   markdown styling is hand-rolled in `app.css` under `.markdown` (including
   wikilink + dangling-link styles). Tweaking that block restyles every brief.
@@ -660,13 +677,16 @@ The visual layer has a named theme and shares branding with What's Next.
   markers so a later Refresh regenerates them in place. *(See §2.)*
 - **Link buttons** — open URLs in the default browser; **Open in Obsidian** deep
   link when applicable.
-- **Webhook buttons** — fire GET/POST/PUT/PATCH/DELETE with a success/failure
-  toast. A **Manage webhooks** dialog (`WebhooksModal`) adds/edits/deletes
-  per-brief webhooks with **custom headers**; one header value may reference a
-  keyring-backed secret via a `{{secret}}` sentinel (resolved server-side at fire
-  time). Header *shapes* round-trip in frontmatter; the secret lives in the OS
-  keyring keyed `whook:<brief-path>:<id>`. Firing only makes an HTTP request —
-  never a write into the `.md`.
+- **Webhook buttons** — fire GET/POST/PUT/PATCH/DELETE from the brief's launch
+  row with a success/failure toast. Webhooks carry **custom headers**; one header
+  value may reference a keyring-backed secret via a `{{secret}}` sentinel
+  (resolved server-side at fire time). Header *shapes* round-trip in frontmatter
+  (edited in Edit mode); the secret lives in the OS keyring keyed
+  `whook:<brief-path>:<id>`. Firing only makes an HTTP request — never a write
+  into the `.md`. *(The "Tidewater · Refined" refresh removed the standalone
+  header **Manage webhooks** button for restraint; the `save_brief_webhook` /
+  `delete_brief_webhook` commands and `WebhooksModal` remain in the code but are
+  not currently surfaced in the UI.)*
 - **Quick capture** — `⌘/Ctrl+K` (or global `Ctrl+Shift+Space`) → modal → pick a
   project → append a timestamped note under its `## Captures` heading.
 - **Search & status filtering** — text filter (`⌘/Ctrl+F`) + status filter;
@@ -700,7 +720,9 @@ The visual layer has a named theme and shares branding with What's Next.
   `gmail.client_id` / `gmail.client_secret` (bring-your-own Google Desktop
   client), and `gmail.oauth:<account-email>` (the account-scoped grant, shared
   across briefs — not `bconn:`-keyed) — service `com.jelanijohn.waid`.
-- **Light/dark mode** toggle + density toggle.
+- **Appearance** — light/dark, accent, sidebar list style (Rows / Compact /
+  Rocks), density, and the **Brief layout** control (two-column rail / body-first
+  / quiet-top), all from the settings popover.
 
 ### Keyboard / shortcuts
 

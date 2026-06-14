@@ -56,13 +56,17 @@ export interface Connection {
   baseUrl?: string | null;
   /** e.g. a Jira account email — never the token. */
   account?: string | null;
+  /** GitHub only: scope this connection's feeds to these `owner/name` repos.
+   *  Empty/absent → every repo the token can reach (so a brief never pulls in
+   *  commits/PRs from unrelated projects). */
+  repos?: string[] | null;
 }
 
 /** A brief's reference to a connection plus a provider-specific selector. */
 export interface BriefIntegration {
   /** References Connection.id. */
   connection: string;
-  /** "tasks" | "notifications". */
+  /** e.g. "tasks" | "notifications" | "pulls" | "commits" (provider-specific). */
   kind: string;
   query?: string | null;
   limit?: number | null;

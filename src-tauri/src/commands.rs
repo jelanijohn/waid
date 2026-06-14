@@ -4548,6 +4548,7 @@ mod tests {
             label: "Linear (work)".into(),
             base_url: None,
             account: None,
+            repos: None,
         }];
         let integs = vec![BriefIntegration {
             connection: "linear-work".into(),

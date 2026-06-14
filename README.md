@@ -169,7 +169,10 @@ integrations](#project-management-integrations-optional) below.
 ## Features (v1)
 
 - **Two-pane layout** — sidebar of projects (name, status pill, last-opened) and
-  a detail pane.
+  a detail pane, under a **unified titlebar** that draws the app's own window
+  chrome (breadcrumb, *Sync all*, morning briefing, and the View & appearance
+  menu). macOS keeps its native traffic lights; Windows/Linux draw their own
+  caption buttons.
 - **Markdown rendering** of the brief body.
 - **Edit mode** — toggle to a raw textarea and save back to the `.md` file
   (round-trips the whole file, so your frontmatter is never mangled). ⌘/Ctrl+S
@@ -202,9 +205,9 @@ integrations](#project-management-integrations-optional) below.
   release) from a brief's GitHub link or explicit `sources` into a managed
   `## Activity` block. Deterministic; frontmatter and prose are never touched.
 - **Project-management integrations** — connect a brief to **Linear, Jira,
-  Asana, GitHub, Notion, or Gmail** and the detail pane shows your normalized
-  tasks / notifications (or a Notion database's rows, or recent Gmail matches)
-  with a local rollup. Deterministic
+  Asana, GitHub, Notion, Gmail, or Slack** and the detail pane shows your
+  normalized tasks / notifications (or a Notion database's rows, recent Gmail
+  matches, or matching Slack messages) with a local rollup. Deterministic
   and strictly additive — a failed fetch is a toast, never a write into the
   `.md`. See [Project-management integrations](#project-management-integrations-optional).
 - **AI synthesis** _(optional)_ — when an LLM provider is configured (local
@@ -252,7 +255,7 @@ synthesis*:
 - **Anthropic (cloud)** — set a model and save an API key (stored in the OS
   keyring). Sends evidence to the Anthropic API.
 
-Then hit **Refresh** on a brief (or *Sync all* in the sidebar). Synthesis is
+Then hit **Refresh** on a brief (or *Sync all* in the titlebar). Synthesis is
 manual — there's no auto-sync on open or timer.
 
 **Open Questions — known tradeoff:** the model regenerates only the *inner*
@@ -284,10 +287,15 @@ the OS keyring, scoped per brief. One connection can carry several feeds — e.g
 two Notion databases — since a feed's identity is `(connection, kind, query)`.
 
 Manage them from the **integrations** button on a brief: add/edit/delete
-connections and feeds, paste a token, and *Test connection* to validate it.
-Tokens are read-only API tokens you create in each provider; only GitHub exposes
-notifications, Jira needs a base URL + account email, Asana needs a workspace id,
-and GitHub Enterprise needs a base URL.
+connections and feeds, paste a token, and *Test connection* to validate it. A
+**help icon** beside each token field opens inline setup steps, the required
+scopes, and a link to that provider's docs. Tokens are read-only API tokens you
+create in each provider; only GitHub exposes notifications, Jira needs a base URL
++ account email, Asana needs a workspace id, and GitHub Enterprise needs a base
+URL. GitHub **notifications** require a *classic* personal access token with the
+`notifications` scope (fine-grained tokens can't reach the endpoint — WAID says
+so on a 403); the Enterprise base-URL field is ignored if you point it at public
+github.com.
 
 **Notion** is a little special: a connection (a Notion *internal integration*
 token) can pull a **database's rows** as items (`kind: tasks`), or treat a
@@ -374,9 +382,10 @@ error state — the brief renders fully regardless.
 waid/
 ├── src/                      # SvelteKit frontend
 │   ├── lib/
-│   │   ├── components/       # Sidebar, ProjectDetail, MarkdownView, QuickCapture, Toasts,
-│   │   │                     #   IntegrationPanel, IntegrationsModal, WebhooksModal,
-│   │   │                     #   BriefingModal, BootstrapModal…
+│   │   ├── components/       # Titlebar, AppMenu, Sidebar, ProjectDetail, MarkdownView,
+│   │   │                     #   QuickCapture, Toasts, CredentialHelp, IntegrationPanel,
+│   │   │                     #   IntegrationsModal, WebhooksModal, BriefingModal, BootstrapModal…
+│   │   ├── credentialHelp.ts # per-credential setup steps + scopes + docs links
 │   │   ├── stores/           # projects, settings, toasts, integrations
 │   │   ├── tauri.ts          # wrappers around invoke / plugins / secrets
 │   │   ├── types.ts          # Brief / Link / Webhook / Connection / Integration… types
@@ -390,7 +399,7 @@ waid/
 │       ├── lib.rs            # plugin + command registration, global shortcut
 │       ├── commands.rs       # briefs · webhooks · sync · LLM synthesis · keyring · settings ·
 │       │                     #   PM connections/selectors/digests · brief bootstrap
-│       └── provider/         # PM integrations (mod.rs + linear/jira/asana/github/notion/gmail)
+│       └── provider/         # PM integrations (mod.rs + linear/jira/asana/github/notion/gmail/slack)
 ├── briefs/                   # sample briefs (dev + bundled seed)
 └── README.md
 ```

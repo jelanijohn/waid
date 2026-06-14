@@ -37,6 +37,7 @@
   let token = $state("");
   let baseUrl = $state("");
   let account = $state("");
+  let repos = $state(""); // GitHub: comma-separated owner/name list (optional)
   let id = $state(""); // only surfaced on a slug collision
 
   // --- choose (step 2) form, targeting one connection ------------------------
@@ -121,12 +122,16 @@
   let jiraReady = $derived(
     provider !== "jira" || (baseUrl.trim().length > 0 && account.trim().length > 0),
   );
+  // GitHub feeds must name their repo(s) — without a scope, commits/PRs become a
+  // global public search across every repo you've touched. So a repo is required.
+  let githubReady = $derived(provider !== "github" || repos.trim().length > 0);
   let canConnect = $derived(
     !busy &&
       label.trim().length > 0 &&
       token.trim().length > 0 &&
       effectiveId.length > 0 &&
       jiraReady &&
+      githubReady &&
       !idTaken,
   );
   // Gmail connects via OAuth, not a pasted token — its readiness drops the token
@@ -192,8 +197,21 @@
     token = "";
     baseUrl = "";
     account = "";
+    // Prefill the repo scope from the brief's own GitHub link(s), so a feed
+    // defaults to *this project's* repo instead of every repo the token can see.
+    repos = p === "github" ? githubReposFromLinks() : "";
     id = "";
     view = "connect";
+  }
+
+  /** `owner/name` for every github.com link on this brief, comma-joined. */
+  function githubReposFromLinks(): string {
+    const seen = new Set<string>();
+    for (const l of brief.links ?? []) {
+      const m = l.url?.match(/github\.com\/([^/\s]+)\/([^/\s#?]+)/i);
+      if (m) seen.add(`${m[1]}/${m[2].replace(/\.git$/, "")}`);
+    }
+    return [...seen].join(", ");
   }
 
   function startChoose(connId: string, ret: View) {
@@ -222,6 +240,10 @@
         label: label.trim(),
         baseUrl: meta.needsBaseUrl && baseUrl.trim() ? baseUrl.trim() : null,
         account: meta.needsAccount && account.trim() ? account.trim() : null,
+        repos:
+          provider === "github" && repos.trim()
+            ? repos.split(",").map((r) => r.trim()).filter(Boolean)
+            : null,
       };
       const updated = await saveBriefConnection(brief.path, conn, token.trim());
       projects.upsert(updated);
@@ -755,6 +777,22 @@
           </label>
         {/if}
 
+        {#if provider === "github"}
+          <label class="mb-3 flex flex-col gap-[5px]">
+            <span class="text-[11px] text-[var(--fg3)]">Repositories</span>
+            <input
+              class="h-[34px] rounded-[9px] border px-[10px] font-mono text-[12px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
+              style="background: var(--input-bg); border-color: var(--border);"
+              placeholder="jelanijohn/waid"
+              bind:value={repos}
+            />
+            <span class="text-[10.5px] text-[var(--fg3)]">
+              Required — comma-separated <code>owner/name</code>. Scopes every feed to these
+              repos so it never runs a broad search across unrelated projects.
+            </span>
+          </label>
+        {/if}
+
         {#if meta.needsAccount && provider !== "gmail"}
           <label class="mb-3 flex flex-col gap-[5px]">
             <span class="text-[11px] text-[var(--fg3)]">
@@ -824,7 +862,11 @@
             <input
               class="h-[34px] rounded-[9px] border px-[10px] font-mono text-[11.5px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
               style="background: var(--input-bg); border-color: var(--border);"
-              placeholder={isNotionPage ? "https://www.notion.so/My-Page-…" : PROVIDERS[targetConn.provider].queryPlaceholder}
+              placeholder={isNotionPage
+                ? "https://www.notion.so/My-Page-…"
+                : targetConn.provider === "github" && kind === "commits"
+                  ? "repo:acme/waid author:@me"
+                  : PROVIDERS[targetConn.provider].queryPlaceholder}
               bind:value={query}
             />
           </label>

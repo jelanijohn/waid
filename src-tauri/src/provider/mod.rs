@@ -95,6 +95,12 @@ pub struct Connection {
     /// e.g. a Jira account email — never the token.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
+    /// GitHub only: the `owner/name` repos this connection's feeds are scoped to.
+    /// **Required** for GitHub — a feed with no repo scope is rejected rather than
+    /// run as a global search, so a brief never pulls commits/PRs from unrelated
+    /// projects (a token's repo grant can't prevent public search from doing so).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repos: Option<Vec<String>>,
 }
 
 /// A brief's reference to a connection plus a provider-specific selector. Parsed
@@ -105,7 +111,8 @@ pub struct Connection {
 pub struct BriefIntegration {
     /// References `Connection.id`.
     pub connection: String,
-    /// `"tasks"` | `"notifications"`. Defaults to tasks when omitted.
+    /// e.g. `"tasks"` | `"notifications"` | `"pulls"` | `"commits"` (GitHub).
+    /// Provider-specific; defaults to tasks when omitted.
     #[serde(default = "default_kind")]
     pub kind: String,
     /// Provider-specific selector (e.g. a Linear query). Optional.

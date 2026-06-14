@@ -29,7 +29,8 @@ It lists your projects, renders each project's context **brief**, and lets you
 launch into work — open a Claude project, open a repo, fire a webhook, or jot a
 quick note. It can **pull live state** from a project's integrations (GitHub
 deterministically, plus first-class **project-management connectors**: Linear,
-Jira, Asana, GitHub, **Notion**, and **Gmail**) and, optionally, **synthesize**
+Jira, Asana, GitHub, **Notion**, **Gmail**, and **Slack**) and, optionally,
+**synthesize**
 prose with a local or cloud LLM — both a per-brief status summary and a
 cross-brief **morning briefing**. New projects can be **bootstrapped** into an initial brief from a
 folder, a GitHub repo, a guided interview, or a pasted prompt. It is a **personal
@@ -171,6 +172,7 @@ Registered in `src-tauri/src/lib.rs`, implemented in `commands.rs`:
 | `digest_integrations` | **(PM, LLM)** Prose digest of *one* brief's live items (display-only; Notion `page` feeds excluded) |
 | `morning_briefing` | **(PM, LLM)** Cross-brief "morning briefing" over every brief's live items (Notion `page` feeds excluded) |
 | `generate_gmail_query` | **(PM, Gmail, LLM)** Turn a plain-English description into a single Gmail search query via the synthesis provider; display-only (the result drops into a feed's `query` field — nothing fetched or written) |
+| `generate_slack_query` | **(PM, Slack, LLM)** Turn a plain-English description into a single Slack search query via the synthesis provider; display-only, same shape as `generate_gmail_query` |
 | `bootstrap_from_folder` | **(bootstrap)** Draft an initial brief from a local folder/repo (README + manifest + file tree); returns a proposed raw file, never writes |
 | `bootstrap_from_github` | **(bootstrap)** Draft an initial brief from a GitHub repo URL (description/topics/README) |
 | `bootstrap_from_answers` | **(bootstrap)** Compose an initial brief from a 3-question guided interview (composes locally without a provider) |
@@ -229,7 +231,7 @@ interface BootstrapAnswers {     // guided-interview answers for brief bootstrap
 }
 
 // --- PM integrations -------------------------------------------------------
-type Provider = "linear" | "jira" | "asana" | "github" | "notion" | "gmail";
+type Provider = "linear" | "jira" | "asana" | "github" | "notion" | "gmail" | "slack";
 interface Connection {           // account-level metadata; token lives in the keyring
   id: string;                    // stable slug, e.g. "linear-personal"; part of the keyring key
   provider: Provider;
@@ -239,7 +241,7 @@ interface Connection {           // account-level metadata; token lives in the k
 }
 interface BriefIntegration {     // a brief's selector referencing one of its connections
   connection: string;            // -> Connection.id
-  kind: string;                  // "tasks" | "notifications" | "page" (Notion) | "email" (Gmail); defaults to tasks
+  kind: string;                  // "tasks" | "notifications" | "page" (Notion) | "email" (Gmail) | "messages" (Slack); defaults to tasks
   query?: string | null;         // part of the feed's identity (Gmail: a required search string)
   limit?: number | null;
 }
@@ -300,6 +302,9 @@ connections:              # PM connections owned by THIS brief (metadata only)
     provider: gmail       # OAuth, not a token; `account` is set by the connect flow
     label: Gmail
     account: me@gmail.com
+  - id: slack-work
+    provider: slack       # token-paste (xoxp- user token, search:read scope)
+    label: Slack
 integrations:             # selectors referencing the connections above
   - connection: linear-personal
     kind: tasks
@@ -314,6 +319,9 @@ integrations:             # selectors referencing the connections above
   - connection: gmail-personal
     kind: email           # recent Gmail matches → panel items (required search query)
     query: "from:acme.com newer_than:14d"
+  - connection: slack-work
+    kind: messages        # search.messages results → panel items (required search query)
+    query: "in:#waid after:2026-06-01"
 last_opened: 2026-05-31T10:00:00Z
 ---
 
@@ -359,12 +367,13 @@ waid/
 │   ├── app.css                   # Tailwind import + "Tidewater · Refined" tokens + hand-rolled .markdown styles
 │   ├── routes/                   # +layout(.ts/.svelte), +page (main two-pane view)
 │   └── lib/
-│       ├── components/           # Sidebar, ProjectDetail, MarkdownView, QuickCapture,
-│       │                         #   StatusPill, Toasts, Icon, BrandMark,
-│       │                         #   IntegrationPanel, IntegrationsModal, WebhooksModal,
-│       │                         #   BriefingModal, BootstrapModal, ProviderTile
+│       ├── components/           # Titlebar, AppMenu, Sidebar, ProjectDetail, MarkdownView,
+│       │                         #   QuickCapture, StatusPill, Toasts, Icon, BrandMark,
+│       │                         #   CredentialHelp, IntegrationPanel, IntegrationsModal,
+│       │                         #   WebhooksModal, BriefingModal, BootstrapModal, ProviderTile
 │       ├── stores/               # projects / settings / toasts / integrations (all .svelte.ts runes)
 │       ├── tauri.ts              # wrappers around invoke / plugins / secrets / PM + bootstrap commands
+│       ├── credentialHelp.ts     # per-credential setup steps + scopes + docs links (CredentialHelp data)
 │       ├── types.ts              # Brief / Link / Webhook / SyncSource / SyncOutcome / LlmSettings /
 │       │                         #   VaultInfo / BootstrapAnswers / Provider / Connection /
 │       │                         #   BriefIntegration / Integration*
@@ -376,7 +385,7 @@ waid/
 ├── src-tauri/                    # Rust backend
 │   └── src/
 │       ├── main.rs               # calls run()
-│       ├── lib.rs                # plugin + command registration, global shortcut
+│       ├── lib.rs                # plugin + command registration, global shortcut, window chrome
 │       ├── commands.rs           # briefs · webhooks · sync · LLM synthesis · keyring · settings ·
 │       │                         #   PM connections/selectors/digests · brief bootstrap
 │       └── provider/             # PM-integrations module (pure, network-only)
@@ -387,7 +396,8 @@ waid/
 │           ├── asana.rs
 │           ├── github.rs
 │           ├── notion.rs         # database rows (fetch) + page-as-evidence (fetch_page_text)
-│           └── gmail.rs          # recent emails (metadata-only) → items; pure, takes a bearer token
+│           ├── gmail.rs          # recent emails (metadata-only) → items; pure, takes a bearer token
+│           └── slack.rs          # search.messages → items; token-paste, check_ok maps 200-OK errors
 ├── briefs/                       # sample briefs (dev + bundled seed; generic placeholders)
 ├── CLAUDE.md                     # guidance for Claude Code working in the repo
 └── README.md
@@ -433,7 +443,8 @@ connectors**, living in `src-tauri/src/provider/`.
 
 ### Design
 
-- **Providers:** **Linear, Jira, Asana, GitHub, Notion, Gmail** — dispatched on
+- **Providers:** **Linear, Jira, Asana, GitHub, Notion, Gmail, Slack** —
+  dispatched on
   `Connection.provider`. Each provider is a plain authenticated JSON request,
   normalised into a common `IntegrationItem` (id, title, url, status, assignee,
   `updatedAt`, kind, free-form `meta`). Each submodule has a pure,
@@ -446,7 +457,8 @@ connectors**, living in `src-tauri/src/provider/`.
   so two briefs can reuse the same connection id without colliding. (Renaming a
   brief file orphans its tokens — harmless; you just re-enter them.)
 - **Selectors.** A brief's `integrations:` entries each reference one of its own
-  connections by id, plus a `kind` (`tasks` | `notifications` | `page`), optional
+  connections by id, plus a `kind` (`tasks` | `notifications` | `page` | `email` |
+  `messages`), optional
   `query` and `limit`. **Feed identity is `(connection, kind, query)`**, so one
   connection can carry multiple feeds (e.g. several Notion databases/pages).
 - **The `provider` module is pure / network-only.** It never touches disk or the
@@ -540,21 +552,55 @@ ever receives a ready bearer token and maps the response (`map_message`) into
   line by `sanitize_gmail_query`). Both are **display-only**: they fill the field;
   nothing is fetched or written until you save the feed.
 
+### Slack connector (the token-paste search provider)
+
+Slack rides the **unchanged `bconn:` token-paste flow** (unlike Gmail's OAuth):
+the user pastes a **user token** (`xoxp-…` with the `search:read` scope) and
+*Test connection* validates it; no browser dance. Like every other module
+`provider/slack.rs` is **pure / network-only** — the token is loaded from the
+keyring by `commands.rs` and passed in.
+
+- **One feed kind: `messages`.** The selector's `query` is a **Slack search
+  string** (e.g. `in:#waid from:@dana after:2026-06-01`), run through
+  `search.messages` over **whatever the *user* can see** — scoped by the query,
+  not by bot membership. Matching messages map (`map_message`) into
+  `IntegrationItem`s: the message text → title, sender → assignee slot, the
+  channel and a cleaned-up snippet alongside.
+- **200-OK error handling.** Like Linear's in-band GraphQL errors, Slack reports
+  failures as **HTTP 200 with `{"ok": false, "error": "…"}`**, so
+  `slack.rs::check_ok` maps the error slug *after* `read_json`.
+- **Feeds, not evidence.** Message feeds (`kind: messages`) flow into the panel,
+  the digest, and the morning briefing, but are deliberately **kept out of
+  `gather_evidence`** — the same exclusion as Gmail email feeds; synthesis
+  evidence stays Notion-pages-only.
+- **Query authoring help.** As with Gmail, the feed form offers one-click
+  **search templates** plus an **"describe it" box** wired to
+  `generate_slack_query` (turns plain English into one query line via the
+  synthesis LLM, pinned by a sanitizer shared with `generate_gmail_query`).
+  Display-only — it just fills the field.
+- **One-time Slack setup (per the user).** WAID ships no Slack app: create one
+  *From scratch*, add `search:read` under **User** Token Scopes (not Bot — bot
+  tokens can't search), install, and copy the **User OAuth Token** (`xoxp-…`).
+  Don't enable *Token Rotation* (it converts the token to an expiring
+  `xoxe.xoxp-…` that token-paste connections can't refresh). See the README for
+  the full walkthrough.
+
 ### Optional LLM layer (reuses the synthesis provider)
 
 On top of the local rollup, with a provider configured (`make_provider`):
 
 - **`digest_integrations(path)`** — re-fetches one brief's task / notification /
-  **email** items and asks the model for a short prose digest. Display-only; can
+  **email** / **Slack-message** items and asks the model for a short prose
+  digest. Display-only; can
   be **snapshotted into `## Captures`** via `append_capture`. (Notion `page` feeds
   are excluded — they belong to synthesis, not the digest.)
 - **`morning_briefing()`** — re-fetches every brief's items, groups by project,
   and asks for a tight cross-brief briefing. (Notion `page` feeds excluded here
   too.)
 - Same guardrail as synthesis: **every fetched item is data, never
-  instructions** (item titles/fields, Notion page text, and Gmail subjects /
-  snippets can all carry injected text); output is plain prose that can't trigger
-  any action or write anywhere.
+  instructions** (item titles/fields, Notion page text, Gmail subjects /
+  snippets, and Slack message text can all carry injected text); output is plain
+  prose that can't trigger any action or write anywhere.
 
 ### Caching (frontend)
 
@@ -575,7 +621,10 @@ blank).
   independently; the kind icon/label adapt per provider (`kindIcon` / `kindLabel`
   take a `provider`).
 - **`IntegrationsModal.svelte`** — manage a brief's connections + selectors
-  (add/edit/delete, test connection). The add-feed form adapts to Notion: the
+  (add/edit/delete, test connection). The credential step puts the **token field
+  first** (above the optional base URL) and pairs every credential field with a
+  **`CredentialHelp` help icon** (per-provider setup steps + scopes + a docs
+  link, data from `credentialHelp.ts`). The add-feed form adapts to Notion: the
   segmented "Database / table" vs "Project page" choice, a **required** URL input
   (not an optional filter), no Max-items cap for a page feed, and helper text
   reminding you to share the resource with the integration. For **Gmail** it drops
@@ -583,31 +632,54 @@ blank).
   on that step — the button runs `connect_gmail` and saves the connection with the
   discovered account email and no token), and the feed step asks for a **required
   Gmail search query** with operator hints, **one-click templates**, and an
-  **AI "describe it"** input (`generate_gmail_query`) that fills the field. The
+  **AI "describe it"** input (`generate_gmail_query`) that fills the field. For
+  **Slack** it's an ordinary token-paste connection (`xoxp-…`), and the feed step
+  asks for a **required Slack search query** with the same templates + AI
+  "describe it" input (`generate_slack_query`). The
   **manage view** also supports inline edits: **rename a connection's label**
   (re-saved with an empty token, so only the label changes) and **edit a feed's
   query in place** — since feed identity is `(connection, kind, query)`, an edited
   query drops the old selector and saves a new one, then re-fetches the panel.
-- **Settings popover (`Sidebar.svelte`)** — besides the appearance controls
-  (light/dark, accent, sidebar list style, density, and the **Brief layout**
-  segmented control) and the GitHub token / Anthropic key / LLM-provider config,
-  it manages the **bring-your-own Google OAuth client**
+- **Unified titlebar (`Titlebar.svelte` + `AppMenu.svelte`)** — the app draws its
+  own window chrome across the full width (breadcrumb of the selected brief,
+  *Sync all*, the morning-briefing trigger, and the View & appearance menu),
+  replacing the stock OS title bar and the sidebar's old brand header. Window
+  controls flip by platform (sniffed from the webview `userAgent`): **macOS**
+  keeps its native traffic lights via the **Overlay** title-bar style
+  (`titleBarStyle: "Overlay"` + `hiddenTitle` in `tauri.conf.json`); **Windows
+  and Linux/WSL** turn OS decorations off (`set_decorations(false)` in `lib.rs`,
+  guarded `#[cfg(not(target_os = "macos"))]`) and draw their own
+  minimize/maximize/close caption buttons (the extra `core:window:*` capabilities
+  are allow-listed in `capabilities/default.json`).
+- **View & appearance menu (`AppMenu.svelte`)** — anchored to the titlebar's
+  `tune` button (moved out of the sidebar's old brand header). Besides the
+  appearance controls (light/dark, accent, sidebar list style, density, and the
+  **Brief layout** segmented control) and the GitHub token / Anthropic key /
+  LLM-provider config, it manages the **bring-your-own Google OAuth client**
   (`gmail.client_id` / `gmail.client_secret` in the keyring): save / clear, gated
-  so Connect only works once a client is stored.
+  so Connect only works once a client is stored. Token fields here carry the same
+  **`CredentialHelp`** icons as the integrations modal.
 - **`BriefingModal.svelte`** — the cross-brief "Morning briefing" view.
 - **`ProviderTile.svelte`** — a provider monogram tile in the provider's brand
   color (`.ptile-<provider>` classes in `app.css`, so dark-mode tweaks stay in
   CSS). All provider **display metadata** — label, monogram, query placeholder,
   which kinds each provider exposes (`tasks` / `notifications` / `page` /
-  `email`), and which form fields it needs (`needsBaseUrl` / `needsAccount`) —
+  `email` / `messages`), and which form fields it needs (`needsBaseUrl` /
+  `needsAccount`) —
   lives in the frontend-only **`providers.ts`** `PROVIDERS` registry +
   `PROVIDER_ORDER`, along with the `Kind` type and the provider-aware `kindIcon` /
   `kindLabel` helpers (for Notion, `tasks` → "Database / table", `page` →
-  "Project page"; for Gmail, `email` → "Email" with a `mail` glyph). The Rust
+  "Project page"; for Gmail, `email` → "Email" with a `mail` glyph; for Slack,
+  `messages` → "Messages" with a `chat` glyph). The Rust
   side still owns the actual fetch/validate; this is purely display + form shape.
   (Only GitHub exposes notifications; Notion exposes `tasks` + `page`; Gmail
-  exposes `email`; Jira needs base URL + account, Asana needs an account/workspace
-  id, GitHub needs a base URL.)
+  exposes `email`; Slack exposes `messages`; Jira needs base URL + account, Asana
+  needs an account/workspace id, GitHub needs a base URL.) GitHub is hardened on
+  two common setup mistakes: `github.rs::api_base` **ignores a `base_url` that
+  points at public github.com** (the field is Enterprise-only — it won't be
+  turned into a `…/api/v3` URL that 404s), and a notifications fetch that 403s
+  returns a clear "use a **classic** PAT with the `notifications` scope" error
+  (fine-grained tokens can't reach that endpoint).
 
 ---
 
@@ -639,17 +711,19 @@ The visual layer has a named theme and shares branding with What's Next.
   brand color via `.ptile-<provider>` classes in `app.css` (so dark-mode tweaks
   stay in CSS); `ProviderTile.svelte` + `providers.ts` drive label/monogram/blurb
   (Linear "L", Jira "J", Asana "A", GitHub "G", Notion "N", Gmail "@" — "G" is
-  taken, and "@" reads as email).
+  taken, and "@" reads as email — and Slack "S").
 - **Density toggle.** Comfortable default; a `.dense` class on the shell tightens
   the detail pane (the `--pane-px` / `--pane-py` / `--title-size` / `--md-size`
   tokens).
 - **Brief layout (new setting).** Where a brief's live-state panel sits is
-  user-selectable from the settings popover — `briefLayout` in
+  user-selectable from the titlebar's View & appearance menu — `briefLayout` in
   `settings.svelte.ts` (`two-col` | `body` | `quiet`, default `two-col`):
   a right-hand 320px `--rail-bg` rail, below the brief body under a hairline
   divider, or a slim feed-strip across the top. Persisted to `localStorage`
   alongside accent / sidebar style / density.
-- **Layout:** still **two-pane** — a sidebar (search/filter, project name, status
+- **Layout:** a **unified titlebar** (the app's own window chrome — breadcrumb,
+  *Sync all*, briefing, View & appearance menu) over a still **two-pane** body —
+  a sidebar (search/filter, project name, status
   pill, last-opened) and a detail pane (rendered brief body + link/webhook
   buttons + sync/synthesis/bootstrap affordances + the integration panel, the
   last placed per the brief-layout setting above). The empty-integrations state is
@@ -697,8 +771,9 @@ The visual layer has a named theme and shares branding with What's Next.
   explicit `sources` into the managed `## Activity` block. Frontmatter and prose
   are never touched.
 - **PM integrations (deterministic)** — per-brief Linear / Jira / Asana / GitHub
-  / Notion / Gmail connections + selectors; the detail-pane panel shows normalized
-  tasks / notifications / Notion-database rows / recent Gmail matches and a local
+  / Notion / Gmail / Slack connections + selectors; the detail-pane panel shows
+  normalized tasks / notifications / Notion-database rows / recent Gmail matches /
+  matching Slack messages and a local
   rollup. One connection can host several feeds. Tokens live in the OS keyring;
   Gmail instead signs in via **Google OAuth** (read-only, metadata-only) with an
   account-scoped grant in the keyring. *(See §5.)*
@@ -722,7 +797,7 @@ The visual layer has a named theme and shares branding with What's Next.
   across briefs — not `bconn:`-keyed) — service `com.jelanijohn.waid`.
 - **Appearance** — light/dark, accent, sidebar list style (Rows / Compact /
   Rocks), density, and the **Brief layout** control (two-column rail / body-first
-  / quiet-top), all from the settings popover.
+  / quiet-top), all from the **View & appearance** menu in the titlebar.
 
 ### Keyboard / shortcuts
 
@@ -739,7 +814,8 @@ The visual layer has a named theme and shares branding with What's Next.
 
 Several earlier "planned" items have now **shipped** — Obsidian vault storage,
 encrypted/keyring secret storage, search + status filters + archive view,
-sanitized seed briefs, the dedicated Linear / Asana / Jira / **Notion** / **Gmail**
+sanitized seed briefs, the dedicated Linear / Asana / Jira / **Notion** /
+**Gmail** / **Slack**
 connectors (plus a richer GitHub connector — Gmail via Google OAuth), **and brief
 bootstrap** (folder / GitHub / interview / paste). Remaining planned:
 

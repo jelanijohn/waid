@@ -6,7 +6,7 @@
 
 import type { Provider } from "./types";
 
-export type Kind = "tasks" | "notifications" | "page" | "email" | "messages";
+export type Kind = "tasks" | "notifications" | "pulls" | "commits" | "page" | "email" | "messages";
 
 export interface ProviderMeta {
   label: string;
@@ -16,7 +16,7 @@ export interface ProviderMeta {
   blurb: string;
   /** Mono placeholder for the "Filter (optional)" / query input. */
   queryPlaceholder: string;
-  /** Kinds this provider can pull. Only GitHub exposes notifications today. */
+  /** Kinds this provider can pull. Only GitHub exposes notifications/pulls/commits. */
   kinds: Kind[];
   /** Jira cloud instance / GitHub Enterprise base URL. */
   needsBaseUrl: boolean;
@@ -55,9 +55,9 @@ export const PROVIDERS: Record<Provider, ProviderMeta> = {
   github: {
     label: "GitHub",
     mono: "G",
-    blurb: "Issues, PRs & notifications",
+    blurb: "Issues, PRs, commits & notifications",
     queryPlaceholder: "is:open assignee:@me",
-    kinds: ["tasks", "notifications"],
+    kinds: ["tasks", "notifications", "pulls", "commits"],
     needsBaseUrl: true,
     needsAccount: false,
   },
@@ -99,6 +99,8 @@ export const PROVIDER_ORDER: Provider[] = ["linear", "jira", "asana", "github", 
 export function kindIcon(kind: string, provider?: Provider): string {
   if (kind === "email") return "mail";
   if (kind === "messages") return "chat";
+  if (kind === "pulls") return "merge";
+  if (kind === "commits") return "commit";
   if (provider === "notion") return kind === "page" ? "description" : "table";
   return kind === "notifications" ? "notifications" : "checklist";
 }
@@ -107,6 +109,8 @@ export function kindIcon(kind: string, provider?: Provider): string {
 export function kindLabel(kind: string, provider?: Provider): string {
   if (kind === "email") return "Email";
   if (kind === "messages") return "Messages";
+  if (kind === "pulls") return "Pull requests";
+  if (kind === "commits") return "Commits";
   if (provider === "notion") return kind === "page" ? "Project page" : "Database / table";
   return kind === "notifications" ? "Notifications" : "Tasks";
 }

@@ -15,6 +15,18 @@ pub fn run() {
 
     builder
         .setup(|app| {
+            // Custom unified toolbar (Titlebar.svelte) draws the window chrome.
+            // macOS keeps its native traffic lights via the Overlay title-bar
+            // style (set in tauri.conf.json); every other platform draws its own
+            // min/maximize/close caption buttons, so turn the OS frame off there.
+            #[cfg(not(target_os = "macos"))]
+            {
+                use tauri::Manager;
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.set_decorations(false);
+                }
+            }
+
             // Register a system-wide hotkey that surfaces the window and opens
             // quick-capture. On some Linux window managers global shortcuts may
             // be intercepted by the WM — that's a known limitation, not a bug.

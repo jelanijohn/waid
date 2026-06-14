@@ -4,6 +4,7 @@
   import { toasts } from "$lib/stores/toasts.svelte";
   import { saveBriefWebhook, deleteBriefWebhook } from "$lib/tauri";
   import Icon from "./Icon.svelte";
+  import CredentialHelp from "./CredentialHelp.svelte";
 
   // Mounted under {#if webhooksOpen} by ProjectDetail, so this is freshly
   // constructed each open — the start view derives from the brief once.
@@ -324,7 +325,10 @@
         <!-- Secret (only when a header references it) -->
         {#if usesSecret}
           <label class="mb-3 flex flex-col gap-[5px]">
-            <span class="text-[11px] text-[var(--fg3)]">Secret (for <code>{SECRET_TOKEN}</code>)</span>
+            <span class="flex items-center justify-between text-[11px] text-[var(--fg3)]">
+              <span>Secret (for <code>{SECRET_TOKEN}</code>)</span>
+              <CredentialHelp topic="webhook-secret" />
+            </span>
             <input
               class="h-[34px] rounded-[9px] border px-[10px] text-[12.5px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
               style="background: var(--input-bg); border-color: var(--border);"

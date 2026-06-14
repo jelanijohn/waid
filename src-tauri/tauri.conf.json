@@ -12,11 +12,13 @@
   "app": {
     "windows": [
       {
-        "title": "WAID — What Am I Doing?",
+        "title": "WAID",
         "width": 1100,
         "height": 720,
         "minWidth": 720,
-        "minHeight": 480
+        "minHeight": 480,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
       }
     ],
     "security": {

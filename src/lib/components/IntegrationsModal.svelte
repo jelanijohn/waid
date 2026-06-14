@@ -15,6 +15,7 @@
     generateSlackQuery,
   } from "$lib/tauri";
   import Icon from "./Icon.svelte";
+  import CredentialHelp from "./CredentialHelp.svelte";
   import ProviderTile from "./ProviderTile.svelte";
 
   // Mounted under {#if open} by ProjectDetail, so this is freshly constructed
@@ -701,6 +702,45 @@
           />
         </label>
 
+        {#if provider === "gmail"}
+          <!-- Gmail signs in via OAuth (opens your browser); no token to paste. -->
+          <div class="mb-[5px] flex items-center justify-between text-[11px] text-[var(--fg3)]">
+            Google account
+            <CredentialHelp topic="gmail" />
+          </div>
+          <button
+            class="inline-flex h-[38px] w-full items-center justify-center gap-[7px] rounded-lg bg-[var(--accent)] text-[12.5px] font-medium text-white transition-[filter] hover:brightness-[1.06] disabled:opacity-50"
+            onclick={connectGmailAccount}
+            disabled={!canConnectGmail}
+          >
+            <Icon name="open_in_new" size={15} />
+            {busy ? "Waiting for Google…" : "Connect Google account"}
+          </button>
+          <p class="mt-2 text-[10.5px] leading-[1.5] text-[var(--fg3)]">
+            Opens Google sign-in in your browser. WAID requests <strong class="text-[var(--fg2)]">read-only</strong>
+            Gmail access; the grant is stored in your OS keychain — never written to the brief. Set up your own
+            Google OAuth client in Settings first (one-time).
+          </p>
+        {:else}
+          <label class="mb-3 flex flex-col gap-[5px]">
+            <span class="flex items-center justify-between text-[11px] text-[var(--fg3)]">
+              API token
+              <CredentialHelp topic={provider} />
+            </span>
+            <input
+              class="h-[34px] rounded-[9px] border px-[10px] text-[12.5px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
+              style="background: var(--input-bg); border-color: var(--border);"
+              type="password"
+              autocomplete="off"
+              placeholder="Paste your token"
+              bind:value={token}
+            />
+            <span class="text-[10.5px] text-[var(--fg3)]">
+              <Icon name="lock" size={12} class="-mt-px mr-0.5" />Stored in your OS keychain — never written to the brief.
+            </span>
+          </label>
+        {/if}
+
         {#if meta.needsBaseUrl}
           <label class="mb-3 flex flex-col gap-[5px]">
             <span class="text-[11px] text-[var(--fg3)]">
@@ -745,37 +785,6 @@
           </label>
         {/if}
 
-        {#if provider === "gmail"}
-          <!-- Gmail signs in via OAuth (opens your browser); no token to paste. -->
-          <button
-            class="inline-flex h-[38px] w-full items-center justify-center gap-[7px] rounded-lg bg-[var(--accent)] text-[12.5px] font-medium text-white transition-[filter] hover:brightness-[1.06] disabled:opacity-50"
-            onclick={connectGmailAccount}
-            disabled={!canConnectGmail}
-          >
-            <Icon name="open_in_new" size={15} />
-            {busy ? "Waiting for Google…" : "Connect Google account"}
-          </button>
-          <p class="mt-2 text-[10.5px] leading-[1.5] text-[var(--fg3)]">
-            Opens Google sign-in in your browser. WAID requests <strong class="text-[var(--fg2)]">read-only</strong>
-            Gmail access; the grant is stored in your OS keychain — never written to the brief. Set up your own
-            Google OAuth client in Settings first (one-time).
-          </p>
-        {:else}
-          <label class="flex flex-col gap-[5px]">
-            <span class="text-[11px] text-[var(--fg3)]">API token</span>
-            <input
-              class="h-[34px] rounded-[9px] border px-[10px] text-[12.5px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
-              style="background: var(--input-bg); border-color: var(--border);"
-              type="password"
-              autocomplete="off"
-              placeholder="Paste your token"
-              bind:value={token}
-            />
-            <span class="text-[10.5px] text-[var(--fg3)]">
-              <Icon name="lock" size={12} class="-mt-px mr-0.5" />Stored in your OS keychain — never written to the brief.
-            </span>
-          </label>
-        {/if}
       {:else if view === "choose" && targetConn}
         <!-- ============ CHOOSE (step 2) ============ -->
         <div

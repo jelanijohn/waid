@@ -10,14 +10,34 @@ use super::{BriefIntegration, Connection, IntegrationItem};
 const DEFAULT_API: &str = "https://api.github.com";
 
 /// REST API base for the connection: api.github.com, or `{base}/api/v3` for
-/// Enterprise when `base_url` is set.
+/// Enterprise when `base_url` is set. A `base_url` that points at public GitHub
+/// (a common mix-up — the field is Enterprise-only) is ignored rather than
+/// turned into a `…/api/v3` URL that 404s every call.
 fn api_base(conn: &Connection) -> String {
     conn.base_url
         .as_deref()
         .map(|s| s.trim().trim_end_matches('/'))
         .filter(|s| !s.is_empty())
+        .filter(|s| !is_public_github(s))
         .map(|b| format!("{b}/api/v3"))
         .unwrap_or_else(|| DEFAULT_API.to_string())
+}
+
+/// Whether a `base_url` is really public github.com (or its API host) — in which
+/// case there's no Enterprise instance and the default API base applies.
+fn is_public_github(base: &str) -> bool {
+    let host = base
+        .trim()
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(
+        host.as_str(),
+        "github.com" | "www.github.com" | "api.github.com"
+    )
 }
 
 pub async fn fetch(
@@ -40,7 +60,16 @@ pub async fn fetch(
         }
         "notifications" => {
             let url = format!("{base}/notifications?per_page={max}");
-            let json = get(&client, &url, token).await?;
+            let resp = send(&client, &url, token).await?;
+            // Fine-grained PATs can't reach this endpoint at all (403); steer the
+            // user to a classic token rather than the generic "bad credentials".
+            if resp.status() == reqwest::StatusCode::FORBIDDEN {
+                return Err("GitHub notifications need a classic personal access token \
+                    with the `notifications` scope — fine-grained tokens can't access \
+                    this endpoint."
+                    .to_string());
+            }
+            let json = super::read_json(resp, "GitHub").await?;
             let arr = json
                 .as_array()
                 .ok_or("unexpected GitHub response (expected an array)")?;
@@ -59,20 +88,30 @@ pub async fn validate(conn: &Connection, token: &str) -> Result<(), String> {
         .map(|_| ())
 }
 
-/// GET a GitHub API URL with the required headers + bearer token.
-async fn get(
+/// GET a GitHub API URL with the required headers + bearer token, returning the
+/// raw response so callers can inspect the status before parsing.
+async fn send(
     client: &reqwest::Client,
     url: &str,
     token: &str,
-) -> Result<serde_json::Value, String> {
-    let resp = client
+) -> Result<reqwest::Response, String> {
+    client
         .get(url)
         .header(reqwest::header::USER_AGENT, "WAID")
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
         .bearer_auth(token)
         .send()
         .await
-        .map_err(|e| format!("request failed: {e}"))?;
+        .map_err(|e| format!("request failed: {e}"))
+}
+
+/// GET and parse a GitHub API URL as JSON, mapping non-2xx via `read_json`.
+async fn get(
+    client: &reqwest::Client,
+    url: &str,
+    token: &str,
+) -> Result<serde_json::Value, String> {
+    let resp = send(client, url, token).await?;
     super::read_json(resp, "GitHub").await
 }
 
@@ -176,6 +215,46 @@ fn map_notification(n: &serde_json::Value) -> IntegrationItem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::Provider;
+
+    fn conn_with_base(base: Option<&str>) -> Connection {
+        Connection {
+            id: "gh".into(),
+            provider: Provider::Github,
+            label: "GitHub".into(),
+            base_url: base.map(String::from),
+            account: None,
+        }
+    }
+
+    #[test]
+    fn api_base_defaults_to_public_api() {
+        assert_eq!(api_base(&conn_with_base(None)), DEFAULT_API);
+        assert_eq!(api_base(&conn_with_base(Some("   "))), DEFAULT_API);
+    }
+
+    #[test]
+    fn api_base_ignores_public_github_in_base_url() {
+        // The field is Enterprise-only; a public-GitHub value must not become
+        // a `…/api/v3` URL (which 404s every call).
+        for b in [
+            "https://github.com",
+            "https://github.com/",
+            "https://api.github.com",
+            "http://www.github.com",
+            "github.com/jelanijohn/waid",
+        ] {
+            assert_eq!(api_base(&conn_with_base(Some(b))), DEFAULT_API, "base={b}");
+        }
+    }
+
+    #[test]
+    fn api_base_builds_enterprise_path() {
+        assert_eq!(
+            api_base(&conn_with_base(Some("https://github.example.com"))),
+            "https://github.example.com/api/v3"
+        );
+    }
 
     #[test]
     fn maps_assigned_pr() {

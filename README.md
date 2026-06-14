@@ -7,7 +7,7 @@ right now?"). WAID answers: **"what's the state of all my projects?"**
 It lists your projects, renders each project's context **brief**, and lets you
 launch into work — open a Claude project, a repo, fire a webhook, or jot a quick
 note. It can pull live state from a project's integrations (GitHub, plus
-project-management connectors: Linear, Jira, Asana, GitHub, Notion, and Gmail),
+project-management connectors: Linear, Jira, Asana, GitHub, Notion, Gmail, and Slack),
 optionally synthesize prose with a local or cloud LLM, and bootstrap a new
 project's brief from a folder, a GitHub repo, an interview, or a pasted prompt.
 Personal tool, not a team tool.
@@ -147,11 +147,11 @@ webhooks:
         value: "Bearer {{secret}}"
 connections:              # PM connections owned by this brief (metadata only; tokens live in the keyring)
   - id: linear-personal
-    provider: linear      # linear | jira | asana | github | notion | gmail
+    provider: linear      # linear | jira | asana | github | notion | gmail | slack
     label: Linear (personal)
 integrations:             # selectors referencing the connections above
   - connection: linear-personal
-    kind: tasks           # tasks | notifications | page (Notion) | email (Gmail)
+    kind: tasks           # tasks | notifications | page (Notion) | email (Gmail) | messages (Slack)
     query: "assignee:me"
     limit: 10
 last_opened: 2026-05-31T10:00:00Z
@@ -272,7 +272,8 @@ untouched.
 
 Connect a brief to a PM tool and the detail pane shows your live tasks /
 notifications inline, with a one-line local rollup (counts by status, recently
-updated). Supported providers: **Linear, Jira, Asana, GitHub, Notion, Gmail**.
+updated). Supported providers: **Linear, Jira, Asana, GitHub, Notion, Gmail,
+Slack**.
 
 **How it's wired.** A brief owns one or more **connections** (account-level
 metadata: provider, label, and where needed a base URL or account) and one or
@@ -333,6 +334,35 @@ connection** and **edit a feed's query in place**.
 > Then, on a brief, pick **Gmail** in the integrations modal, click **Connect
 > Google account**, approve in the browser, and add an email feed with a search
 > query.
+
+**Slack** surfaces recent messages matching a search (`kind: messages`): the
+selector's `query` is a **Slack search string** (`in:#waid from:@dana
+after:2026-06-01`), and matching messages appear as items (the message text as
+the title, sender in the assignee slot, the channel and a cleaned-up snippet
+alongside). The read path is `search.messages` over whatever the *user* can see —
+scoped by the query, not by bot membership. Message feeds flow into the panel,
+digest, and morning briefing, but never into synthesis evidence (same deliberate
+exclusion as Gmail). Unlike Gmail, Slack is a plain **token-paste** provider:
+you paste a user token and *Test connection*, no OAuth dance. As with Gmail, the
+feed form offers one-click **search templates** and a **"describe it" box** that
+turns plain English into a query via the configured synthesis LLM.
+
+> **One-time Slack setup (per the user, not WAID).** WAID ships no shared Slack
+> app:
+>
+> 1. Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps) →
+>    *From scratch*, in your workspace.
+> 2. **OAuth & Permissions → User Token Scopes** → add `search:read`. (User Token
+>    Scopes, **not** Bot Token Scopes — bot tokens can't search.)
+> 3. **Install to Workspace**, approve, and copy the **User OAuth Token**
+>    (`xoxp-…`) from the same page.
+> 4. Paste it as the token when adding a Slack connection in WAID.
+>
+> ⚠️ Do **not** enable the app's *Token Rotation* setting — it converts the token
+> to an expiring `xoxe.xoxp-…` that dies in 12 hours, and WAID's token-paste
+> connections don't refresh. Without rotation the token lives until you revoke it
+> or uninstall the app. One app per workspace; a second workspace means repeating
+> these steps there.
 
 Everything here is deterministic and **strictly additive**: fetches never write
 into your `.md`, so a failed or auth-walled fetch is just a toast and a panel

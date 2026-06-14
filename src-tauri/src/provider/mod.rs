@@ -1,4 +1,5 @@
-//! Project-management provider integrations (Linear, Jira, Asana, GitHub, Notion).
+//! Project-management provider integrations (Linear, Jira, Asana, GitHub,
+//! Notion, Gmail, Slack).
 //!
 //! An account-level **connection** (metadata in `settings.json`, token in the OS
 //! keyring) plus a per-brief **selector** drive a fetch against a provider's API,
@@ -23,6 +24,7 @@ pub mod gmail;
 pub mod jira;
 pub mod linear;
 pub mod notion;
+pub mod slack;
 
 /// The supported providers. Serialized lowercase (`"linear"`) to mirror the
 /// `Provider` string union in `types.ts`.
@@ -35,6 +37,7 @@ pub enum Provider {
     Github,
     Notion,
     Gmail,
+    Slack,
 }
 
 // --- Shared HTTP helpers (used by every provider submodule) ---------------
@@ -179,6 +182,7 @@ pub async fn fetch(
         Provider::Github => github::fetch(conn, sel, token).await?,
         Provider::Notion => notion::fetch(conn, sel, token).await?,
         Provider::Gmail => gmail::fetch(conn, sel, token).await?,
+        Provider::Slack => slack::fetch(conn, sel, token).await?,
     };
     let summary = summarize(&items);
     Ok(IntegrationFetch {
@@ -198,6 +202,7 @@ pub async fn validate(conn: &Connection, token: &str) -> Result<(), String> {
         Provider::Github => github::validate(conn, token).await,
         Provider::Notion => notion::validate(conn, token).await,
         Provider::Gmail => gmail::validate(conn, token).await,
+        Provider::Slack => slack::validate(conn, token).await,
     }
 }
 

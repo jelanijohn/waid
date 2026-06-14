@@ -12,6 +12,7 @@
     testBriefConnection,
     connectGmail,
     generateGmailQuery,
+    generateSlackQuery,
   } from "$lib/tauri";
   import Icon from "./Icon.svelte";
   import ProviderTile from "./ProviderTile.svelte";
@@ -78,7 +79,19 @@
   ];
   const GMAIL_DEFAULT_QUERY = GMAIL_TEMPLATES[0].query;
 
-  // Natural-language → Gmail query via the configured synthesis LLM.
+  // Starter Slack searches — same idea as the Gmail chips. The first doubles as
+  // the default applied when a Slack feed is started.
+  const SLACK_TEMPLATES: { label: string; query: string }[] = [
+    { label: "Mentions of me", query: "to:me after:Yesterday" },
+    { label: "In a channel", query: "in:#general after:Yesterday" },
+    { label: "From a person", query: "from:@name after:Yesterday" },
+    { label: "With links", query: "has:link after:Yesterday" },
+    { label: "In threads", query: "is:thread after:Yesterday" },
+  ];
+  const SLACK_DEFAULT_QUERY = SLACK_TEMPLATES[0].query;
+
+  // Natural-language → search query via the configured synthesis LLM, dispatched
+  // on the target provider (Gmail vs Slack).
   let aiPrompt = $state("");
   let aiBusy = $state(false);
 
@@ -87,7 +100,7 @@
     if (!p || aiBusy) return;
     aiBusy = true;
     try {
-      query = await generateGmailQuery(p);
+      query = isSlack ? await generateSlackQuery(p) : await generateGmailQuery(p);
       toasts.success("Filter generated — tweak it if needed");
     } catch (e) {
       toasts.error(`Could not generate: ${e}`);
@@ -142,8 +155,14 @@
   // Gmail's search query is the feed's assignment (like a Notion URL), so it's
   // required, not an optional filter.
   let isGmail = $derived(targetConn?.provider === "gmail");
-  let queryRequired = $derived(isNotion || isGmail);
+  // Slack's search query is the feed's assignment (like Gmail's), so required.
+  let isSlack = $derived(targetConn?.provider === "slack");
+  let queryRequired = $derived(isNotion || isGmail || isSlack);
   let canAddFeed = $derived(!busy && (!queryRequired || query.trim().length > 0));
+
+  // The query-builder helpers (templates chips + "describe it" AI box) are shared
+  // by the search providers; the chip set is provider-keyed.
+  let searchTemplates = $derived(isGmail ? GMAIL_TEMPLATES : isSlack ? SLACK_TEMPLATES : []);
 
   // --- header copy -----------------------------------------------------------
   let headerTitle = $derived(
@@ -180,7 +199,12 @@
     targetConnId = connId;
     const conn = brief.connections.find((c) => c.id === connId);
     kind = conn ? PROVIDERS[conn.provider].kinds[0] : "tasks";
-    query = conn?.provider === "gmail" ? GMAIL_DEFAULT_QUERY : "";
+    query =
+      conn?.provider === "gmail"
+        ? GMAIL_DEFAULT_QUERY
+        : conn?.provider === "slack"
+          ? SLACK_DEFAULT_QUERY
+          : "";
     aiPrompt = "";
     limit = "20";
     chooseReturn = ret;
@@ -319,7 +343,7 @@
   async function saveEditFeed(f: BriefIntegration, prov: Provider) {
     const next = editFeedQuery.trim();
     // Gmail and Notion require a query (it's the feed's target, not a filter).
-    if ((prov === "gmail" || prov === "notion") && !next) {
+    if ((prov === "gmail" || prov === "notion" || prov === "slack") && !next) {
       toasts.error("A search query is required.");
       return;
     }
@@ -524,7 +548,11 @@
                       bind:value={editFeedQuery}
                       use:focusInput
                       aria-label="Feed filter"
-                      placeholder={g.conn.provider === "gmail" ? "is:unread newer_than:7d" : "Filter"}
+                      placeholder={g.conn.provider === "gmail"
+                        ? "is:unread newer_than:7d"
+                        : g.conn.provider === "slack"
+                          ? "in:#waid after:2026-06-01"
+                          : "Filter"}
                       onkeydown={(e) => {
                         if (e.key === "Enter") saveEditFeed(f, g.conn.provider);
                         else if (e.key === "Escape") editingFeedKey = null;
@@ -782,7 +810,7 @@
         <div class="grid gap-[10px] {isNotionPage ? 'grid-cols-1' : 'grid-cols-[1fr_88px]'}">
           <label class="flex flex-col gap-[5px]">
             <span class="text-[11px] text-[var(--fg3)]">
-              {#if isNotionPage}Notion page URL{:else if isNotion}Notion database URL{:else if isGmail}Gmail search query{:else}Filter (optional){/if}
+              {#if isNotionPage}Notion page URL{:else if isNotion}Notion database URL{:else if isGmail}Gmail search query{:else if isSlack}Slack search query{:else}Filter (optional){/if}
             </span>
             <input
               class="h-[34px] rounded-[9px] border px-[10px] font-mono text-[11.5px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
@@ -805,11 +833,11 @@
             </label>
           {/if}
         </div>
-        {#if isGmail}
+        {#if isGmail || isSlack}
           <div class="mt-[10px] flex flex-col gap-[6px]">
             <span class="text-[10.5px] text-[var(--fg3)]">Templates — click to use, then tweak</span>
             <div class="flex flex-wrap gap-[6px]">
-              {#each GMAIL_TEMPLATES as t (t.label)}
+              {#each searchTemplates as t (t.label)}
                 <button
                   type="button"
                   class="rounded-full border px-[9px] py-[3px] text-[11px] transition-colors {query === t.query
@@ -830,7 +858,7 @@
               <input
                 class="h-[32px] min-w-0 flex-1 rounded-[8px] border px-[9px] text-[11.5px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
                 style="background: var(--input-bg); border-color: var(--border);"
-                placeholder="unread from my manager this week"
+                placeholder={isSlack ? "messages from dana about the launch this week" : "unread from my manager this week"}
                 bind:value={aiPrompt}
                 onkeydown={(e) => {
                   if (e.key === "Enter") {
@@ -861,6 +889,10 @@
             A Gmail search — operators like <code>from:</code>, <code>subject:</code>, <code>label:</code>,
             <code>newer_than:14d</code>, <code>is:unread</code>, <code>to:me</code>. Matching emails show up as items
             (read-only; subjects &amp; snippets only).
+          {:else if isSlack}
+            A Slack search — operators like <code>in:#channel</code>, <code>from:@user</code>,
+            <code>after:YYYY-MM-DD</code>, <code>has:link</code>, <code>is:thread</code>. Matching messages show up as
+            items (read-only).
           {:else}
             Leave the filter blank to pull {PROVIDERS[targetConn.provider].blurb.toLowerCase()}.
           {/if}

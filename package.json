@@ -10,7 +10,8 @@
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "tauri": "tauri",
-    "tauri:wsl": "WEBKIT_DISABLE_DMABUF_RENDERER=1 tauri dev"
+    "tauri:wsl": "WEBKIT_DISABLE_DMABUF_RENDERER=1 tauri dev",
+    "tauri:dev2": "WAID_DEV_PORT=1430 WEBKIT_DISABLE_DMABUF_RENDERER=1 tauri dev --config '{\"build\":{\"devUrl\":\"http://localhost:1430\"}}'"
   },
   "license": "MIT",
   "dependencies": {

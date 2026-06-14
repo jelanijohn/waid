@@ -244,18 +244,44 @@
               {@const shown = isOpen ? all : all.slice(0, 3)}
               <ul class="border-t" style="border-color: var(--border);">
                 {#each shown as item (item.id)}
-                  <li class="border-t first:border-t-0" style="border-color: var(--border-soft);">
+                  <!-- `group` so the row reveals its excerpt on hover OR keyboard focus -->
+                  <li class="group border-t first:border-t-0" style="border-color: var(--border-soft);">
                     <button
-                      class="flex w-full items-center gap-[9px] px-3 py-[8px] text-left transition-colors hover:bg-[var(--hover)]"
+                      class="flex w-full items-center gap-[9px] px-3 py-[8px] text-left transition-colors group-hover:bg-[var(--hover)]"
                       onclick={() => open(item)}
                     >
                       <span class="h-[6px] w-[6px] shrink-0 rounded-full" style="background: {dotColor(item.status)};"></span>
+                      <!-- Who initiated it: sender (Slack username) / assignee / From -->
+                      {#if item.assignee}
+                        <span class="max-w-[40%] shrink-0 truncate text-[12px] font-semibold text-[var(--fg)]">{item.assignee}</span>
+                      {/if}
                       <span class="min-w-0 flex-1 truncate text-[12px] text-[var(--fg-body)]">{item.title}</span>
                       {#if item.updatedAt}
                         <span class="shrink-0 text-[10px] tabular-nums text-[var(--fg4)]">{relativeTime(item.updatedAt)}</span>
                       {/if}
                       <Icon name="north_east" size={11} class="shrink-0 text-[var(--fg4)]" />
                     </button>
+                    <!-- Larger excerpt — slides open on hover/focus, stays collapsed otherwise -->
+                    {#if item.meta?.snippet || item.meta?.channel}
+                      <div
+                        class="max-h-0 overflow-hidden opacity-0 transition-[max-height,opacity] duration-200 ease-out group-hover:max-h-[240px] group-hover:opacity-100 group-focus-within:max-h-[240px] group-focus-within:opacity-100"
+                      >
+                        <div class="flex items-center gap-[7px] px-3 pl-[27px] pt-px">
+                          {#if item.assignee}
+                            <span class="text-[11px] font-semibold text-[var(--fg2)]">{item.assignee}</span>
+                          {/if}
+                          {#if item.meta?.channel}
+                            <span class="rounded-[5px] bg-[var(--chip-bg)] px-[6px] py-px text-[10px] font-semibold text-[var(--fg3)]">{item.meta.channel}</span>
+                          {/if}
+                          {#if item.updatedAt}
+                            <span class="ml-auto text-[10px] tabular-nums text-[var(--fg4)]">{relativeTime(item.updatedAt)}</span>
+                          {/if}
+                        </div>
+                        <p class="px-3 pb-[10px] pl-[27px] pt-[3px] text-[11.5px] leading-[1.5] text-[var(--fg2)] [text-wrap:pretty]">
+                          {item.meta?.snippet ?? item.title}
+                        </p>
+                      </div>
+                    {/if}
                   </li>
                 {/each}
               </ul>

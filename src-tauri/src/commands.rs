@@ -2062,8 +2062,8 @@ pub async fn digest_integrations(app: AppHandle, path: String) -> Result<String,
     }
 
     let system = digest_system_prompt(
-        "You summarise the live tasks/notifications a maintainer pulled from their \
-project-management tools for ONE project.",
+        "You summarise the live items (tasks, notifications, messages, emails) a maintainer \
+pulled from their project-management tools for ONE project.",
     );
     let user = truncate_chars(&build_digest_prompt(&brief, &sections), provider.context_budget());
     provider.complete(&system, &user).await
@@ -2102,8 +2102,8 @@ pub async fn morning_briefing(app: AppHandle) -> Result<String, String> {
     }
 
     let system = digest_system_prompt(
-        "You write a maintainer's morning briefing from the live tasks/notifications \
-pulled across ALL their projects.",
+        "You write a maintainer's morning briefing from the live items (tasks, notifications, \
+messages, emails) pulled across ALL their projects.",
     );
     let user = truncate_chars(&build_briefing_prompt(&groups), provider.context_budget());
     provider.complete(&system, &user).await
@@ -2123,11 +2123,48 @@ pub async fn generate_gmail_query(app: AppHandle, prompt: String) -> Result<Stri
     let provider = make_provider(&app)?;
     let user = truncate_chars(prompt, provider.context_budget());
     let raw = provider.complete(&gmail_query_system_prompt(), &user).await?;
-    let query = sanitize_gmail_query(&raw);
+    let query = sanitize_search_query(&raw);
     if query.is_empty() {
         return Err("The model didn't return a usable search. Try rephrasing.".into());
     }
     Ok(query)
+}
+
+/// Turn a natural-language description into a Slack search query using the
+/// configured synthesis LLM. Sibling of `generate_gmail_query`; display-only —
+/// the caller drops the result into the feed's query field.
+#[tauri::command]
+pub async fn generate_slack_query(app: AppHandle, prompt: String) -> Result<String, String> {
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return Err("Describe the messages you want and I'll build the search.".into());
+    }
+    let provider = make_provider(&app)?;
+    let user = truncate_chars(prompt, provider.context_budget());
+    let raw = provider.complete(&slack_query_system_prompt(), &user).await?;
+    let query = sanitize_search_query(&raw);
+    if query.is_empty() {
+        return Err("The model didn't return a usable search. Try rephrasing.".into());
+    }
+    Ok(query)
+}
+
+/// System prompt that converts a plain-English description into ONE Slack search
+/// string. Like `gmail_query_system_prompt`, the output is pinned to a single
+/// query line so it can drop straight into the field.
+fn slack_query_system_prompt() -> String {
+    "You convert a person's plain-English description of Slack messages they want to see into \
+a single Slack search query built from Slack's search operators.\n\n\
+RULES:\n\
+- Output ONLY the query, on one line. No explanation, no quotes, no code fences, no trailing period.\n\
+- Use Slack operators where they fit: in:#channel, in:@user (DMs), from:@user, to:@user, \
+with:@user, before:YYYY-MM-DD, after:YYYY-MM-DD, on:YYYY-MM-DD, during:Month (dates may also be \
+Yesterday/Today), has:link, has:reaction, has:pin, is:thread, \"quoted phrases\", and -term to exclude.\n\
+- When the request implies 'recent' or a timeframe, add a bound like after:YYYY-MM-DD.\n\
+- If it names a person or channel, use from:@name / in:#name; never invent ids.\n\
+- If the request is vague, produce a sensible broad query rather than nothing.\n\
+- Never invent operators that don't exist."
+        .to_string()
 }
 
 /// System prompt that converts a plain-English description into ONE Gmail search
@@ -2151,10 +2188,11 @@ Group OR alternatives with {a b} or parentheses.\n\
         .to_string()
 }
 
-/// Reduce an LLM response to a single clean Gmail query line: first non-empty
+/// Reduce an LLM response to a single clean search-query line: first non-empty
 /// line, with code fences, surrounding quotes/backticks, and a leading
 /// "Query:"/"Search:" label stripped (but real operators like `from:` kept).
-fn sanitize_gmail_query(raw: &str) -> String {
+/// Shared by `generate_gmail_query` and `generate_slack_query`.
+fn sanitize_search_query(raw: &str) -> String {
     let mut line = raw
         .lines()
         .map(str::trim)
@@ -2166,7 +2204,7 @@ fn sanitize_gmail_query(raw: &str) -> String {
     if let Some((prefix, rest)) = line.split_once(':') {
         if matches!(
             prefix.trim().to_lowercase().as_str(),
-            "query" | "search" | "gmail" | "gmail search"
+            "query" | "search" | "gmail" | "gmail search" | "slack" | "slack search"
         ) {
             line = rest.trim().to_string();
         }
@@ -4983,27 +5021,32 @@ mod tests {
     fn sanitizes_gmail_query_from_llm_output() {
         // Plain single line passes through untouched.
         assert_eq!(
-            sanitize_gmail_query("is:unread newer_than:7d"),
+            sanitize_search_query("is:unread newer_than:7d"),
             "is:unread newer_than:7d"
         );
         // Code fences + a chatty trailing line are dropped to the first query line.
         assert_eq!(
-            sanitize_gmail_query("```\nfrom:acme is:unread\n```\nHope that helps!"),
+            sanitize_search_query("```\nfrom:acme is:unread\n```\nHope that helps!"),
             "from:acme is:unread"
         );
         // Surrounding quotes/backticks are stripped.
-        assert_eq!(sanitize_gmail_query("`is:starred`"), "is:starred");
-        assert_eq!(sanitize_gmail_query("\"subject:invoice\""), "subject:invoice");
+        assert_eq!(sanitize_search_query("`is:starred`"), "is:starred");
+        assert_eq!(sanitize_search_query("\"subject:invoice\""), "subject:invoice");
         // A leading "Query:" label is removed, but real operators are preserved.
         assert_eq!(
-            sanitize_gmail_query("Query: from:boss newer_than:14d"),
+            sanitize_search_query("Query: from:boss newer_than:14d"),
             "from:boss newer_than:14d"
         );
         assert_eq!(
-            sanitize_gmail_query("from:boss is:unread"),
+            sanitize_search_query("from:boss is:unread"),
             "from:boss is:unread"
         );
+        // A "Slack search:" label is stripped too (shared by generate_slack_query).
+        assert_eq!(
+            sanitize_search_query("Slack search: in:#waid after:2026-06-01"),
+            "in:#waid after:2026-06-01"
+        );
         // Empty / blank input yields empty (the command turns this into an error).
-        assert_eq!(sanitize_gmail_query("\n\n"), "");
+        assert_eq!(sanitize_search_query("\n\n"), "");
     }
 }

@@ -43,7 +43,7 @@ export interface SyncOutcome {
 }
 
 /** A supported project-management provider (see src-tauri/src/provider). */
-export type Provider = "linear" | "jira" | "asana" | "github" | "notion" | "gmail";
+export type Provider = "linear" | "jira" | "asana" | "github" | "notion" | "gmail" | "slack";
 
 /** An account-level connection to a provider. Metadata only — the API token
  *  lives in the OS keyring keyed by `id`, never here or in a brief. */

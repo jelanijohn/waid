@@ -519,6 +519,13 @@ body {
 .ptile-gmail {
   background: #ea4335;
 }
+.ptile-slack {
+  background: #4a154b;
+}
+.dark .ptile-slack {
+  /* The aubergine is already dark; lift it slightly so the monogram pops. */
+  background: #611f69;
+}
 
 /* Soft accent pulse on the safety-net "Add feed" button. */
 @keyframes tw-pulse {

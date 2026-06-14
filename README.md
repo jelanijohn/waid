@@ -151,7 +151,7 @@ connections:              # PM connections owned by this brief (metadata only; t
     label: Linear (personal)
 integrations:             # selectors referencing the connections above
   - connection: linear-personal
-    kind: tasks           # tasks | notifications | page (Notion) | email (Gmail) | messages (Slack)
+    kind: tasks           # tasks | notifications | pulls | commits (GitHub) | page (Notion) | email (Gmail) | messages (Slack)
     query: "assignee:me"
     limit: 10
 last_opened: 2026-05-31T10:00:00Z
@@ -280,8 +280,8 @@ Slack**.
 
 **How it's wired.** A brief owns one or more **connections** (account-level
 metadata: provider, label, and where needed a base URL or account) and one or
-more **integration selectors** (a `kind` — `tasks`, `notifications`, or Notion's
-`page` — plus an optional `query` and `limit`). A connection's *metadata* lives
+more **integration selectors** (a `kind` — `tasks`, `notifications`, GitHub's
+`pulls` / `commits`, or Notion's `page` — plus an optional `query` and `limit`). A connection's *metadata* lives
 in the brief's frontmatter and round-trips with the file; its *token* lives in
 the OS keyring, scoped per brief. One connection can carry several feeds — e.g.
 two Notion databases — since a feed's identity is `(connection, kind, query)`.
@@ -296,6 +296,19 @@ URL. GitHub **notifications** require a *classic* personal access token with the
 `notifications` scope (fine-grained tokens can't reach the endpoint — WAID says
 so on a 403); the Enterprise base-URL field is ignored if you point it at public
 github.com.
+
+**GitHub** has four feed kinds. `tasks` and `notifications` hit the REST API
+(open issues/PRs assigned to you; unread notifications). `pulls` and `commits`
+are **search-backed** — `pulls` lists PRs matching a `query` (default `is:pr
+is:open author:@me`) and `commits` lists commits matching a `query` (default
+`author:@me`); they're independent feeds, so a brief can carry either, both, or
+neither. Because GitHub search returns *public* matches regardless of a token's
+repo grant, **every GitHub feed must name its repos** — set one or more
+`owner/name` repos on the connection. WAID injects them as `repo:` qualifiers on
+search feeds and filters the REST feeds down to them; an unscoped feed is
+**rejected**, never silently broadened to every repo you've ever touched. (A
+power-user `query` that already pins scope with a `repo:` / `org:` / `user:`
+qualifier is honored verbatim.)
 
 **Notion** is a little special: a connection (a Notion *internal integration*
 token) can pull a **database's rows** as items (`kind: tasks`), or treat a

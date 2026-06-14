@@ -238,10 +238,11 @@ interface Connection {           // account-level metadata; token lives in the k
   label: string;
   baseUrl?: string | null;       // Jira cloud instance / GitHub Enterprise base URL
   account?: string | null;       // e.g. a Jira email — or the OAuth'd Gmail address; never the token
+  repos?: string[] | null;       // GitHub only: owner/name repos this connection's feeds are scoped to (required for GitHub)
 }
 interface BriefIntegration {     // a brief's selector referencing one of its connections
   connection: string;            // -> Connection.id
-  kind: string;                  // "tasks" | "notifications" | "page" (Notion) | "email" (Gmail) | "messages" (Slack); defaults to tasks
+  kind: string;                  // "tasks" | "notifications" | "pulls" | "commits" (GitHub) | "page" (Notion) | "email" (Gmail) | "messages" (Slack); defaults to tasks
   query?: string | null;         // part of the feed's identity (Gmail: a required search string)
   limit?: number | null;
 }
@@ -249,7 +250,7 @@ interface IntegrationItem {      // normalized task/notification from any provid
   id: string; title: string; url: string;
   status?: string | null; assignee?: string | null;
   updatedAt?: string | null;     // ISO; render with time.ts
-  kind: string;                  // "task" | "notification"
+  kind: string;                  // "task" | "notification" | "commit"
   meta?: Record<string, string>; // provider extras (priority, project, …)
 }
 interface IntegrationSummary {   // local (no-LLM) rollup
@@ -305,11 +306,19 @@ connections:              # PM connections owned by THIS brief (metadata only)
   - id: slack-work
     provider: slack       # token-paste (xoxp- user token, search:read scope)
     label: Slack
+  - id: github-work
+    provider: github
+    label: GitHub
+    repos:                # REQUIRED for GitHub — scopes every feed to these repos
+      - owner/waid
 integrations:             # selectors referencing the connections above
   - connection: linear-personal
     kind: tasks
     query: "assignee:me"
     limit: 10
+  - connection: github-work
+    kind: commits         # commits matching a search → panel items (repo-scoped)
+    query: "author:@me"
   - connection: notion-work
     kind: tasks           # a Notion database's rows → panel items
     query: "https://www.notion.so/My-DB-…"
@@ -457,8 +466,8 @@ connectors**, living in `src-tauri/src/provider/`.
   so two briefs can reuse the same connection id without colliding. (Renaming a
   brief file orphans its tokens — harmless; you just re-enter them.)
 - **Selectors.** A brief's `integrations:` entries each reference one of its own
-  connections by id, plus a `kind` (`tasks` | `notifications` | `page` | `email` |
-  `messages`), optional
+  connections by id, plus a `kind` (`tasks` | `notifications` | `pulls` |
+  `commits` | `page` | `email` | `messages`), optional
   `query` and `limit`. **Feed identity is `(connection, kind, query)`**, so one
   connection can carry multiple feeds (e.g. several Notion databases/pages).
 - **The `provider` module is pure / network-only.** It never touches disk or the
@@ -470,6 +479,39 @@ connectors**, living in `src-tauri/src/provider/`.
 - **Strictly additive / bounded blast radius.** A failed fetch is a toast and a
   panel error state — **never** a write into the `.md`. The brief renders fully
   regardless.
+
+### GitHub connector (REST + search, repo-scoped)
+
+GitHub is a `Bearer <token>` (PAT) REST connector with **four feed kinds**, and
+the only provider that **requires repo scoping** on its connection.
+
+- **Two REST feeds.** `tasks` lists open issues & PRs assigned to the user
+  (`/issues?filter=assigned`); `notifications` lists unread notifications. Both
+  are cross-repo endpoints, so WAID filters their items down to the connection's
+  `repos` after mapping (`retain_by_repos`).
+- **Two search feeds.** `pulls` lists PRs matching a `query` (default `is:pr
+  is:open author:@me`, via `/search/issues` — search-issue items share the issue
+  shape, so `map_issue` applies); `commits` lists commits matching a `query`
+  (default `author:@me`, via `/search/commits`, mapped by the fixture-tested
+  `map_commit` — subject → title, short SHA + repo in `meta`, author login → the
+  assignee slot). They're **independent feeds**, not a toggle: a brief can carry
+  either, both, or neither.
+- **Required repo scoping.** `/search/...` returns *public* matches regardless of
+  the token's repo grant, so a bare `author:@me` would surface a user's activity
+  across every repo they've touched — a token's scope can't prevent it. WAID
+  therefore makes scope **mandatory**: the connection names one or more
+  `owner/name` `repos`, injected as leading `repo:` qualifiers on the search
+  feeds (`prepend_repo_qualifiers`, capped at `MAX_INJECTED_REPOS = 10`) and used
+  to filter the REST feeds. An **unscoped feed is rejected** (`require_repos` →
+  the `UNSCOPED_ERR` toast), never silently broadened. A `query` that already
+  pins scope with a `repo:` / `org:` / `user:` qualifier (`has_scope_qualifier`)
+  is an explicit power-user opt-in and is honored verbatim. `normalize_repo`
+  tolerates a pasted URL, a `.git` suffix, and stray slashes; these helpers are
+  pure and unit-tested.
+- **Setup hardening.** `github.rs::api_base` **ignores a `base_url` pointing at
+  public github.com** (the field is Enterprise-only), and a notifications fetch
+  that 403s returns a clear "use a **classic** PAT with the `notifications`
+  scope" error (fine-grained tokens can't reach that endpoint).
 
 ### Notion connector (the newest provider)
 
@@ -663,23 +705,22 @@ blank).
 - **`ProviderTile.svelte`** — a provider monogram tile in the provider's brand
   color (`.ptile-<provider>` classes in `app.css`, so dark-mode tweaks stay in
   CSS). All provider **display metadata** — label, monogram, query placeholder,
-  which kinds each provider exposes (`tasks` / `notifications` / `page` /
-  `email` / `messages`), and which form fields it needs (`needsBaseUrl` /
-  `needsAccount`) —
+  which kinds each provider exposes (`tasks` / `notifications` / `pulls` /
+  `commits` / `page` / `email` / `messages`), and which form fields it needs
+  (`needsBaseUrl` / `needsAccount`) —
   lives in the frontend-only **`providers.ts`** `PROVIDERS` registry +
   `PROVIDER_ORDER`, along with the `Kind` type and the provider-aware `kindIcon` /
   `kindLabel` helpers (for Notion, `tasks` → "Database / table", `page` →
   "Project page"; for Gmail, `email` → "Email" with a `mail` glyph; for Slack,
-  `messages` → "Messages" with a `chat` glyph). The Rust
+  `messages` → "Messages" with a `chat` glyph; for GitHub, `pulls` → "Pull
+  requests" / `merge` glyph and `commits` → "Commits" / `commit` glyph). The Rust
   side still owns the actual fetch/validate; this is purely display + form shape.
-  (Only GitHub exposes notifications; Notion exposes `tasks` + `page`; Gmail
-  exposes `email`; Slack exposes `messages`; Jira needs base URL + account, Asana
-  needs an account/workspace id, GitHub needs a base URL.) GitHub is hardened on
-  two common setup mistakes: `github.rs::api_base` **ignores a `base_url` that
-  points at public github.com** (the field is Enterprise-only — it won't be
-  turned into a `…/api/v3` URL that 404s), and a notifications fetch that 403s
-  returns a clear "use a **classic** PAT with the `notifications` scope" error
-  (fine-grained tokens can't reach that endpoint).
+  (GitHub exposes `tasks` / `notifications` / `pulls` / `commits`; Notion exposes
+  `tasks` + `page`; Gmail exposes `email`; Slack exposes `messages`; Jira needs
+  base URL + account, Asana needs an account/workspace id, GitHub needs a base
+  URL.) GitHub's required repo scoping and setup hardening (Enterprise-only
+  `base_url`, the classic-PAT notifications error) are covered in §5's GitHub
+  connector subsection.
 
 ---
 

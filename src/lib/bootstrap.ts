@@ -23,7 +23,7 @@ export function isStubBrief(brief: Brief): boolean {
 /** A minimal starter brief: the existing frontmatter (preserved verbatim so
  *  unknown keys / last_opened survive) plus a skeleton body that showcases the
  *  sections the brief format outlines — an overview, the optional Goals/Stack/
- *  Notes blocks, and the Current State / Open Questions sections. Hands into
+ *  Notes blocks, and the Captured State / Captured Questions sections. Hands into
  *  edit mode for the user to fill in; the app-managed Activity/Captures regions
  *  are left out (WAID writes those). */
 export function blankTemplate(brief: Brief): string {
@@ -59,11 +59,11 @@ A one-sentence overview of what this project is and why it exists.
 
 - Key tools, languages, or services.
 
-## Current State
+## Captured State
 
 Where the project stands right now — a couple of sentences.
 
-## Open Questions
+## Captured Questions
 
 - The next thing a maintainer should resolve.
 

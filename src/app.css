@@ -61,8 +61,7 @@
   --hook-bg: #faf3e6;
   --hook-bd: #f0e2c4;
   --shadow-pop: 0 12px 34px rgba(18, 28, 48, 0.14), 0 2px 8px rgba(18, 28, 48, 0.06);
-  --shadow-win: 0 1px 0 rgba(0, 0, 0, 0.04), 0 30px 70px -20px rgba(18, 28, 48, 0.3),
-    0 0 0 1px rgba(18, 28, 48, 0.06);
+  --shadow-win: 0 0 0 1px rgba(18, 28, 48, 0.06);
 }
 
 /* DARK — applied under .dark on <html> */
@@ -92,12 +91,15 @@
   --hook-bg: rgba(226, 178, 94, 0.1);
   --hook-bd: rgba(226, 178, 94, 0.22);
   --shadow-pop: 0 16px 44px rgba(0, 0, 0, 0.5);
-  --shadow-win: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 40px 90px -25px rgba(0, 0, 0, 0.7);
+  --shadow-win: 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
 html,
 body {
   height: 100%;
+  /* Transparent so the borderless, transparent Tauri window shows the desktop
+     through the app panel's rounded corners; the panel paints --bg itself. */
+  background: transparent;
 }
 
 /* Density: tightens the detail pane (applied on the app shell in +page). */

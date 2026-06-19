@@ -35,7 +35,7 @@
 
 {#if open}
   <div
-    class="anim-fade fixed inset-0 z-50 flex items-start justify-center"
+    class="anim-fade fixed inset-[14px] z-50 flex items-start justify-center overflow-hidden rounded-[12px]"
     style="background: color-mix(in srgb, var(--fg) 22%, transparent); backdrop-filter: blur(2px); padding-top: 12vh;"
     role="presentation"
     onclick={(e) => {

@@ -53,7 +53,7 @@
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div
       use:portal
-      class="anim-fade fixed inset-0 z-[60] flex items-start justify-center"
+      class="anim-fade fixed inset-[14px] z-[60] flex items-start justify-center overflow-hidden rounded-[12px]"
       style="background: color-mix(in srgb, var(--fg) 22%, transparent); backdrop-filter: blur(2px); padding-top: 12vh;"
       role="presentation"
       tabindex="-1"

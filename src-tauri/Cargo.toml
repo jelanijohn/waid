@@ -44,6 +44,12 @@ tokio = { version = "1", features = ["net", "time", "io-util"] }
 sha2 = "0.10"
 base64 = "0.22"
 getrandom = "0.3"
+# Read-only access to NeuroSkill's local SQLite (eeg_timeseries + labels) for the
+# `## Mind State` region. `bundled` compiles SQLite in-tree so there's no system
+# libsqlite dependency. WAID opens these DBs read-only and never links any
+# NeuroSkill/GPL code — it stays at the file boundary (the `label` write goes
+# over NeuroSkill's local WebSocket, hand-rolled in neuroskill/ws.rs).
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [dev-dependencies]
 # Async runtime for ignored, on-demand live-integration diagnostics (the app

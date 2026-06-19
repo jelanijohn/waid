@@ -7,7 +7,8 @@ right now?"). WAID answers: **"what's the state of all my projects?"**
 It lists your projects, renders each project's context **brief**, and lets you
 launch into work — open a Claude project, a repo, fire a webhook, or jot a quick
 note. It can pull live state from a project's integrations (GitHub, plus
-project-management connectors: Linear, Jira, Asana, GitHub, Notion, Gmail, Slack, and Figma),
+project-management connectors: Linear, Jira, Asana, GitHub, Notion, Gmail, Slack, and Figma,
+plus a local NeuroSkill EEG link that writes a `## Mind State` region),
 optionally synthesize prose with a local or cloud LLM, and bootstrap a new
 project's brief from a folder, a GitHub repo, an interview, or a pasted prompt.
 Personal tool, not a team tool.
@@ -147,11 +148,11 @@ webhooks:
         value: "Bearer {{secret}}"
 connections:              # PM connections owned by this brief (metadata only; tokens live in the keyring)
   - id: linear-personal
-    provider: linear      # linear | jira | asana | github | notion | gmail | slack | figma
+    provider: linear      # linear | jira | asana | github | notion | gmail | slack | figma | neuroskill
     label: Linear (personal)
 integrations:             # selectors referencing the connections above
   - connection: linear-personal
-    kind: tasks           # tasks | notifications | pulls | commits (GitHub) | page (Notion) | email (Gmail) | messages (Slack) | comments (Figma)
+    kind: tasks           # tasks | notifications | pulls | commits (GitHub) | page (Notion) | email (Gmail) | messages (Slack) | comments (Figma) | mind (NeuroSkill)
     query: "assignee:me"
     limit: 10
 last_opened: 2026-05-31T10:00:00Z
@@ -212,10 +213,19 @@ integrations](#project-management-integrations-optional) below.
   rollup. Deterministic
   and strictly additive — a failed fetch is a toast, never a write into the
   `.md`. See [Project-management integrations](#project-management-integrations-optional).
+- **Mind State** _(optional, local)_ — connect a brief to a local **NeuroSkill**
+  EEG dashboard and a deterministic `## Mind State` region shows a rolling-window
+  (default 14d) aggregate of focus / engagement / mood over the project's
+  **labeled** work sessions. WAID authors attribution by writing session labels
+  into NeuroSkill when you launch / end work — no guessing from window or terminal
+  data. Reads NeuroSkill's local SQLite read-only (EEG + your WAID labels only);
+  the only write is a session label over localhost. No LLM, no token. See
+  [Mind State](#mind-state-neuroskill-optional) below.
 - **AI synthesis** _(optional)_ — when an LLM provider is configured (local
   **Ollama** or **Anthropic**), Refresh also synthesizes a `## Current State`
   summary and an `## Open Questions` list from the brief's links, Notion page
-  text, and your `## Captures` notes. The model only ever writes those two
+  text, your `## Captures` notes, and (if connected) the NeuroSkill Mind State
+  rollup. The model only ever writes those two
   app-owned regions — never status, links, tags, webhooks, frontmatter, or
   Captures — and all fetched content is treated as data, never instructions. See
   [AI synthesis](#ai-synthesis-optional) below.
@@ -278,7 +288,8 @@ untouched.
 Connect a brief to a PM tool and the detail pane shows your live tasks /
 notifications inline, with a one-line local rollup (counts by status, recently
 updated). Supported providers: **Linear, Jira, Asana, GitHub, Notion, Gmail,
-Slack, Figma**.
+Slack, Figma** — plus **NeuroSkill**, a local EEG link that writes a `## Mind
+State` body region instead of panel items ([see below](#mind-state-neuroskill-optional)).
 
 **How it's wired.** A brief owns one or more **connections** (account-level
 metadata: provider, label, and where needed a base URL or account) and one or
@@ -417,6 +428,60 @@ Everything here is deterministic and **strictly additive**: fetches never write
 into your `.md`, so a failed or auth-walled fetch is just a toast and a panel
 error state — the brief renders fully regardless.
 
+### Mind State (NeuroSkill, optional)
+
+Connect a brief to a local **[NeuroSkill](https://github.com/neuroskill/neuroskill)**
+EEG dashboard and WAID maintains a deterministic `## Mind State` region in the
+brief — a rolling-window (`today` / `7d` / `14d` / `30d`, default **14d**)
+aggregate of your focus / engagement / mood / relaxation over that project's
+**labeled** work sessions, with a per-metric trend and your deepest-focus block:
+
+```markdown
+## Mind State
+_Rolling 14 days · 4 sessions · 3.2 hrs tracked · updated 2026-06-19_
+
+| Metric      | Mean | Trend |
+|-------------|-----:|:-----:|
+| Focus       |   41 |   ↑   |
+| Engagement  |   37 |   ↑   |
+| Mood        |   62 |   →   |
+
+Deepest focus: Tue 2pm–3pm (focus 58).
+```
+
+The hard problem is **attribution** — an EEG reading at 2:47pm is about you, not a
+project. WAID solves it by *authoring* the answer: when you launch into work on a
+brief (open a link/webhook, or hit **Start session**) it writes a
+`waid:brief=<slug>:start` label into NeuroSkill, and a matching `:end` when you end
+the session, navigate away, or close the app. `## Mind State` then aggregates only
+the EEG epochs inside those labeled windows. (There's no guessing from window /
+terminal / browser activity — that's deliberately out of scope.)
+
+It's unusual among the connectors:
+
+- **No token, no auth** — NeuroSkill is local. Just pick it in the integrations
+  modal; optionally override the data directory or WebSocket URL.
+- **Read-only and tightly scoped** — WAID reads NeuroSkill's local SQLite
+  read-only and touches **only** the EEG timeseries and your own WAID session
+  labels. It never reads window titles, terminal/browser history, clipboard, or
+  files, so toggling NeuroSkill's capture settings on/off makes no difference. The
+  only thing it *writes* is the session label, over localhost.
+- **A body region, not panel items** — the feed shows as a slim status row with a
+  refresh that regenerates `## Mind State` (like `## Activity`), not a list of
+  cards. It's deterministic (no LLM) and replaced in place, so frontmatter and the
+  rest of your brief are preserved byte-for-byte.
+- **Feeds AI synthesis (optional)** — if you have an LLM provider configured, the
+  Mind State rollup also joins the evidence behind `## Current State` as a short
+  *descriptive* readout (worded trends, no raw data), so a synthesized summary can
+  note when you've been deep in focus on this project. Only for briefs with a
+  NeuroSkill feed; numbers only, framed as context rather than a directive.
+- **WSL2 note** — NeuroSkill runs on the Windows host; point the data directory at
+  the `/mnt/c/...AppData/Local/NeuroSkill` path and, if needed, the WebSocket URL
+  at the host loopback.
+
+NeuroSkill is GPL-3.0 and WAID is MIT; WAID stays strictly at the process/file
+boundary (reads its data files, calls its local WebSocket) and links no GPL code.
+
 ## Project structure
 
 ```
@@ -440,8 +505,9 @@ waid/
 │   └── src/
 │       ├── lib.rs            # plugin + command registration, global shortcut
 │       ├── commands.rs       # briefs · webhooks · sync · LLM synthesis · keyring · settings ·
-│       │                     #   PM connections/selectors/digests · brief bootstrap
-│       └── provider/         # PM integrations (mod.rs + linear/jira/asana/github/notion/gmail/slack/figma)
+│       │                     #   PM connections/selectors/digests · mind state · brief bootstrap
+│       ├── provider/         # PM integrations (mod.rs + linear/jira/asana/github/notion/gmail/slack/figma)
+│       └── neuroskill/       # NeuroSkill EEG → ## Mind State (local SQLite read + WS write; mod/aggregate/labels/eeg/ws)
 ├── briefs/                   # sample briefs (dev + bundled seed)
 └── README.md
 ```

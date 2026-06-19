@@ -40,6 +40,13 @@ pub enum Provider {
     Gmail,
     Slack,
     Figma,
+    /// Local EEG dashboard (NeuroSkill). Unlike every other variant this is **not**
+    /// a panel feed and is **not** dispatched through this module's network fetch —
+    /// it reads local SQLite and writes the `## Mind State` body region via the
+    /// `crate::neuroskill` module / `sync_mind_state`. It lives in the enum only so
+    /// connections parse from frontmatter and share the connection/selector
+    /// plumbing. No token, no keyring entry (localhost, no auth).
+    Neuroskill,
 }
 
 // --- Shared HTTP helpers (used by every provider submodule) ---------------
@@ -103,6 +110,15 @@ pub struct Connection {
     /// projects (a token's repo grant can't prevent public search from doing so).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repos: Option<Vec<String>>,
+    /// NeuroSkill only: the local WebSocket endpoint the `label` write targets
+    /// (default `ws://127.0.0.1:8375`). Overridable for the WSL2↔Windows-host
+    /// split. Not a secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ws_url: Option<String>,
+    /// NeuroSkill only: the directory holding `activity.sqlite` / `labels.sqlite`
+    /// (default the WSL-translated AppData path). Overridable. Not a secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_dir: Option<String>,
 }
 
 /// A brief's reference to a connection plus a provider-specific selector. Parsed
@@ -193,6 +209,13 @@ pub async fn fetch(
         Provider::Gmail => gmail::fetch(conn, sel, token).await?,
         Provider::Slack => slack::fetch(conn, sel, token).await?,
         Provider::Figma => figma::fetch(conn, sel, token).await?,
+        // NeuroSkill is not a panel feed — it syncs into the `## Mind State` body
+        // region via `sync_mind_state`, not through this network dispatch.
+        Provider::Neuroskill => {
+            return Err("NeuroSkill mind-state feeds aren't panel items — they sync into \
+the ## Mind State region via sync_mind_state."
+                .into())
+        }
     };
     let summary = summarize(&items);
     Ok(IntegrationFetch {
@@ -214,6 +237,9 @@ pub async fn validate(conn: &Connection, token: &str) -> Result<(), String> {
         Provider::Gmail => gmail::validate(conn, token).await,
         Provider::Slack => slack::validate(conn, token).await,
         Provider::Figma => figma::validate(conn, token).await,
+        // No auth to validate (localhost, no token). Real reachability of the
+        // SQLite store / WebSocket daemon surfaces when the region is synced.
+        Provider::Neuroskill => Ok(()),
     }
 }
 

@@ -62,12 +62,31 @@
 
   // Mounted under {#key brief.path} (via ProjectDetail), so this runs once per
   // brief: lazily fetch each selector. A failed fetch is swallowed here — the
-  // panel renders its own error state.
+  // panel renders its own error state. `mind` feeds aren't panel items (they
+  // write the ## Mind State body region), so they're skipped here.
   onMount(() => {
     for (const ig of brief.integrations) {
+      if (ig.kind === "mind") continue;
       integrations.fetch(brief.path, ig.connection, ig.kind, ig.query, ig.limit).catch(() => {});
     }
   });
+
+  // NeuroSkill `mind` feeds sync a deterministic body region instead of caching
+  // items — track per-feed sync state and call the dedicated command.
+  let mindSyncing = $state<Record<string, boolean>>({});
+  async function syncMind(ig: BriefIntegration) {
+    const key = feedKey(ig);
+    if (mindSyncing[key]) return;
+    mindSyncing = { ...mindSyncing, [key]: true };
+    try {
+      await projects.syncMind(brief.path);
+      toasts.success("Mind State updated");
+    } catch (e) {
+      toasts.error(`Mind State sync failed: ${e}`);
+    } finally {
+      mindSyncing = { ...mindSyncing, [key]: false };
+    }
+  }
 
   // Build the rollup line from the local summary (no LLM).
   function summaryLine(f: IntegrationFetch): string {
@@ -128,8 +147,12 @@
               </span>
             {/if}
             <span class="text-[12px] text-[var(--fg-body)]">
-              <strong class="font-semibold text-[var(--fg)] tabular-nums">{entry?.data?.items.length ?? 0}</strong>
-              {kindLabel(ig.kind, conn?.provider).toLowerCase()}
+              {#if ig.kind === "mind"}
+                mind state
+              {:else}
+                <strong class="font-semibold text-[var(--fg)] tabular-nums">{entry?.data?.items.length ?? 0}</strong>
+                {kindLabel(ig.kind, conn?.provider).toLowerCase()}
+              {/if}
             </span>
           </button>
         {/each}
@@ -197,6 +220,34 @@
               {#if onManage}
                 <button class="btn btn-sm shrink-0" onclick={onManage}>Reconnect</button>
               {/if}
+            </div>
+          {:else if ig.kind === "mind"}
+            <!-- NeuroSkill mind state: not panel items. A slim status line whose
+                 refresh regenerates the deterministic ## Mind State body region. -->
+            <div class="flex items-center gap-[10px] px-3 py-[9px]">
+              <ProviderTile provider={conn.provider} size={26} />
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-[7px]">
+                  <span class="truncate text-[12.5px] font-semibold text-[var(--fg)]">{conn.label}</span>
+                  <span class="shrink-0 rounded-[5px] bg-[var(--chip-bg)] px-[6px] py-px text-[9.5px] font-semibold uppercase tracking-[0.04em] text-[var(--fg3)]">
+                    {kindLabel(ig.kind, conn.provider)}
+                  </span>
+                </div>
+                <div class="mt-px truncate text-[11px] text-[var(--fg3)]">
+                  {brief.body.includes("waid:mind:start") ? "Synced to ## Mind State" : "Not synced yet"}
+                  · {ig.query ?? "14d"}
+                </div>
+              </div>
+              <button
+                class="btn-icon shrink-0"
+                style="height: 26px; width: 26px;"
+                title="Regenerate ## Mind State"
+                aria-label="Regenerate Mind State for {conn.label}"
+                onclick={() => syncMind(ig)}
+                disabled={mindSyncing[feedKey(ig)]}
+              >
+                <Icon name="sync" size={14} class={mindSyncing[feedKey(ig)] ? "spin" : ""} />
+              </button>
             </div>
           {:else}
             <!-- Feed header -->

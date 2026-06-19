@@ -1,4 +1,5 @@
 mod commands;
+mod neuroskill;
 mod provider;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -93,6 +94,8 @@ pub fn run() {
             commands::test_brief_connection,
             commands::connect_gmail,
             commands::fetch_integration,
+            commands::sync_mind_state,
+            commands::mark_brief_session,
             commands::digest_integrations,
             commands::morning_briefing,
             commands::generate_gmail_query,

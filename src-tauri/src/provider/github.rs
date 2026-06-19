@@ -447,6 +447,8 @@ mod tests {
             base_url: base.map(String::from),
             account: None,
             repos: None,
+            ws_url: None,
+            data_dir: None,
         }
     }
 

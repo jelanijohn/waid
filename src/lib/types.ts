@@ -43,7 +43,7 @@ export interface SyncOutcome {
 }
 
 /** A supported project-management provider (see src-tauri/src/provider). */
-export type Provider = "linear" | "jira" | "asana" | "github" | "notion" | "gmail" | "slack" | "figma";
+export type Provider = "linear" | "jira" | "asana" | "github" | "notion" | "gmail" | "slack" | "figma" | "neuroskill";
 
 /** An account-level connection to a provider. Metadata only — the API token
  *  lives in the OS keyring keyed by `id`, never here or in a brief. */
@@ -60,6 +60,12 @@ export interface Connection {
    *  Empty/absent → every repo the token can reach (so a brief never pulls in
    *  commits/PRs from unrelated projects). */
   repos?: string[] | null;
+  /** NeuroSkill only: local WebSocket endpoint for the `label` write
+   *  (default ws://127.0.0.1:8375). Overridable for WSL2↔Windows-host. */
+  wsUrl?: string | null;
+  /** NeuroSkill only: directory holding activity.sqlite / labels.sqlite
+   *  (default the WSL-translated AppData path). Not a secret. */
+  dataDir?: string | null;
 }
 
 /** A brief's reference to a connection plus a provider-specific selector. */

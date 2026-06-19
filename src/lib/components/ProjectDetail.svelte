@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import type { Brief, Webhook } from "$lib/types";
   import { projects, isSyncableBrief } from "$lib/stores/projects.svelte";
   import { settings } from "$lib/stores/settings.svelte";
@@ -102,7 +103,36 @@
     editing = false;
   }
 
+  // --- NeuroSkill labeled sessions ---------------------------------------
+  // A brief with a NeuroSkill connection can mark a labeled work session, so
+  // its EEG epochs attribute to this project. Start is fired at the moment of
+  // intent (the first launch/open action, or the explicit button); end is fired
+  // by the explicit button and, as safety nets, on navigating away (onDestroy)
+  // — the backend's session cap is the final backstop.
+  let hasNeuro = $derived(brief.connections.some((c) => c.provider === "neuroskill"));
+  let sessionActive = $state(false);
+
+  function startSession() {
+    if (!hasNeuro || sessionActive) return;
+    sessionActive = true;
+    projects.markSession(brief.path, "start");
+  }
+
+  function endSession() {
+    if (!sessionActive) return;
+    sessionActive = false;
+    projects.markSession(brief.path, "end");
+  }
+
+  // Safety net: end an open session when this brief is closed/switched away
+  // (the component remounts per selection under {#key brief.path}) or on app close.
+  onDestroy(() => {
+    if (sessionActive) projects.markSession(brief.path, "end");
+  });
+
   async function openLink(url: string) {
+    // Opening a link IS launching into work — start the labeled session once.
+    startSession();
     try {
       await openExternal(url);
     } catch (e) {
@@ -111,6 +141,7 @@
   }
 
   async function fire(hook: Webhook) {
+    startSession();
     try {
       const res = await fireWebhook(brief.path, hook);
       if (res.ok) {
@@ -254,6 +285,25 @@
               </span>
             {/if}
           </button>
+          {#if hasNeuro}
+            {#if sessionActive}
+              <button
+                class="btn"
+                title="End the labeled NeuroSkill work session for this project"
+                onclick={endSession}
+              >
+                <Icon name="stop_circle" size={14} fill={1} /> End session
+              </button>
+            {:else}
+              <button
+                class="btn"
+                title="Start a labeled NeuroSkill work session so EEG attributes to this project"
+                onclick={startSession}
+              >
+                <Icon name="neurology" size={14} /> Start session
+              </button>
+            {/if}
+          {/if}
           {#if obsidianUri}
             <button class="btn" title="Open this brief in Obsidian" onclick={openInObsidian}>
               <Icon name="hub" size={14} /> Obsidian

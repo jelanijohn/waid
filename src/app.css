@@ -531,6 +531,12 @@ body {
 .ptile-figma {
   background: #f24e1e;
 }
+.ptile-neuroskill {
+  background: #6d28d9;
+}
+.dark .ptile-neuroskill {
+  background: #7c3aed;
+}
 
 /* Soft accent pulse on the safety-net "Add feed" button. */
 @keyframes tw-pulse {

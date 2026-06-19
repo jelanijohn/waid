@@ -6,7 +6,7 @@
 
 import type { Provider } from "./types";
 
-export type Kind = "tasks" | "notifications" | "pulls" | "commits" | "page" | "email" | "messages" | "comments";
+export type Kind = "tasks" | "notifications" | "pulls" | "commits" | "page" | "email" | "messages" | "comments" | "mind";
 
 export interface ProviderMeta {
   label: string;
@@ -99,9 +99,18 @@ export const PROVIDERS: Record<Provider, ProviderMeta> = {
     needsBaseUrl: false,
     needsAccount: false,
   },
+  neuroskill: {
+    label: "NeuroSkill",
+    mono: "🧠",
+    blurb: "EEG focus/mood over labeled sessions → ## Mind State",
+    queryPlaceholder: "14d",
+    kinds: ["mind"],
+    needsBaseUrl: false,
+    needsAccount: false,
+  },
 };
 
-export const PROVIDER_ORDER: Provider[] = ["linear", "jira", "asana", "github", "notion", "gmail", "slack", "figma"];
+export const PROVIDER_ORDER: Provider[] = ["linear", "jira", "asana", "github", "notion", "gmail", "slack", "figma", "neuroskill"];
 
 /** Material glyph for a kind (used in segmented controls + feed rows). For Notion
  *  the same `kind` values mean "database" vs "page", so they render differently. */
@@ -109,6 +118,7 @@ export function kindIcon(kind: string, provider?: Provider): string {
   if (kind === "email") return "mail";
   if (kind === "messages") return "chat";
   if (kind === "comments") return "comment";
+  if (kind === "mind") return "psychology";
   if (kind === "pulls") return "merge";
   if (kind === "commits") return "commit";
   if (provider === "notion") return kind === "page" ? "description" : "table";
@@ -120,6 +130,7 @@ export function kindLabel(kind: string, provider?: Provider): string {
   if (kind === "email") return "Email";
   if (kind === "messages") return "Messages";
   if (kind === "comments") return "Comments";
+  if (kind === "mind") return "Mind state";
   if (kind === "pulls") return "Pull requests";
   if (kind === "commits") return "Commits";
   if (provider === "notion") return kind === "page" ? "Project page" : "Database / table";

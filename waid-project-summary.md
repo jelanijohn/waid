@@ -29,7 +29,8 @@ It lists your projects, renders each project's context **brief**, and lets you
 launch into work — open a Claude project, open a repo, fire a webhook, or jot a
 quick note. It can **pull live state** from a project's integrations (GitHub
 deterministically, plus first-class **project-management connectors**: Linear,
-Jira, Asana, GitHub, **Notion**, **Gmail**, **Slack**, and **Figma**) and, optionally,
+Jira, Asana, GitHub, **Notion**, **Gmail**, **Slack**, and **Figma**, plus a local
+**NeuroSkill** EEG link that writes a deterministic `## Mind State` body region) and, optionally,
 **synthesize**
 prose with a local or cloud LLM — both a per-brief status summary and a
 cross-brief **morning briefing**. New projects can be **bootstrapped** into an initial brief from a
@@ -169,8 +170,10 @@ Registered in `src-tauri/src/lib.rs`, implemented in `commands.rs`:
 | `test_brief_connection` | **(PM)** Verify a brief connection's saved token against its provider (`validate`) |
 | `connect_gmail` | **(PM, Gmail)** Run the Google OAuth desktop loopback + PKCE flow for one Gmail account (opens the browser, captures consent), store the account-scoped grant in the keyring (`gmail.oauth:<email>`), return the connected email |
 | `fetch_integration` | **(PM)** Fetch live items for one of a brief's selectors; token loaded internally from the keyring |
-| `digest_integrations` | **(PM, LLM)** Prose digest of *one* brief's live items (display-only; Notion `page` feeds excluded) |
-| `morning_briefing` | **(PM, LLM)** Cross-brief "morning briefing" over every brief's live items (Notion `page` feeds excluded) |
+| `sync_mind_state` | **(NeuroSkill)** Regenerate a brief's deterministic `## Mind State` region (marker `waid:mind`) from NeuroSkill's local SQLite (read-only); mirrors `sync_brief`. No LLM |
+| `mark_brief_session` | **(NeuroSkill)** Fire a `waid:brief=<slug>:(start\|end)` session label over NeuroSkill's local WebSocket (the only write). Best-effort; a no-op for briefs without a NeuroSkill connection |
+| `digest_integrations` | **(PM, LLM)** Prose digest of *one* brief's live items (display-only; Notion `page` + NeuroSkill `mind` feeds excluded) |
+| `morning_briefing` | **(PM, LLM)** Cross-brief "morning briefing" over every brief's live items (Notion `page` + NeuroSkill `mind` feeds excluded) |
 | `generate_gmail_query` | **(PM, Gmail, LLM)** Turn a plain-English description into a single Gmail search query via the synthesis provider; display-only (the result drops into a feed's `query` field — nothing fetched or written) |
 | `generate_slack_query` | **(PM, Slack, LLM)** Turn a plain-English description into a single Slack search query via the synthesis provider; display-only, same shape as `generate_gmail_query` |
 | `bootstrap_from_folder` | **(bootstrap)** Draft an initial brief from a local folder/repo (README + manifest + file tree); returns a proposed raw file, never writes |
@@ -231,7 +234,7 @@ interface BootstrapAnswers {     // guided-interview answers for brief bootstrap
 }
 
 // --- PM integrations -------------------------------------------------------
-type Provider = "linear" | "jira" | "asana" | "github" | "notion" | "gmail" | "slack" | "figma";
+type Provider = "linear" | "jira" | "asana" | "github" | "notion" | "gmail" | "slack" | "figma" | "neuroskill";
 interface Connection {           // account-level metadata; token lives in the keyring
   id: string;                    // stable slug, e.g. "linear-personal"; part of the keyring key
   provider: Provider;
@@ -239,10 +242,12 @@ interface Connection {           // account-level metadata; token lives in the k
   baseUrl?: string | null;       // Jira cloud instance / GitHub Enterprise base URL
   account?: string | null;       // e.g. a Jira email — or the OAuth'd Gmail address; never the token
   repos?: string[] | null;       // GitHub only: owner/name repos this connection's feeds are scoped to (required for GitHub)
+  wsUrl?: string | null;         // NeuroSkill only: WebSocket endpoint for the label write (default ws://127.0.0.1:8375)
+  dataDir?: string | null;       // NeuroSkill only: dir holding activity.sqlite / labels.sqlite (default WSL-translated AppData)
 }
 interface BriefIntegration {     // a brief's selector referencing one of its connections
   connection: string;            // -> Connection.id
-  kind: string;                  // "tasks" | "notifications" | "pulls" | "commits" (GitHub) | "page" (Notion) | "email" (Gmail) | "messages" (Slack) | "comments" (Figma); defaults to tasks
+  kind: string;                  // "tasks" | "notifications" | "pulls" | "commits" (GitHub) | "page" (Notion) | "email" (Gmail) | "messages" (Slack) | "comments" (Figma) | "mind" (NeuroSkill); defaults to tasks
   query?: string | null;         // part of the feed's identity (Gmail: a required search string)
   limit?: number | null;
 }
@@ -356,8 +361,10 @@ The full markdown brief lives here.
 - **Markdown:** `marked` + `DOMPurify`
 - **Build tooling:** Vite 6, **pnpm** (a `pnpm-workspace.yaml` is present at root)
 - **Rust deps:** `serde`, `serde_json`, `serde_yaml`, `chrono`, `reqwest`
-  (rustls-tls), `keyring` (OS secret store), `async_trait` (LLM provider trait);
-  Tauri plugins: `opener`, `dialog`, `global-shortcut`
+  (rustls-tls), `keyring` (OS secret store), `async_trait` (LLM provider trait),
+  `rusqlite` (**bundled** — read-only NeuroSkill SQLite; compiles SQLite in-tree,
+  so a C compiler is needed at build time); Tauri plugins: `opener`, `dialog`,
+  `global-shortcut`
 - **LLM providers (optional):** local **Ollama** (HTTP) and **Anthropic**
   (cloud). Used for brief synthesis, the PM integration digest / morning
   briefing, *and* the AI body in brief bootstrap. No in-process inference.
@@ -397,18 +404,24 @@ waid/
 │       ├── main.rs               # calls run()
 │       ├── lib.rs                # plugin + command registration, global shortcut, window chrome
 │       ├── commands.rs           # briefs · webhooks · sync · LLM synthesis · keyring · settings ·
-│       │                         #   PM connections/selectors/digests · brief bootstrap
-│       └── provider/             # PM-integrations module (pure, network-only)
-│           ├── mod.rs            # shared model (Connection/BriefIntegration/IntegrationItem/…),
-│           │                     #   fetch/validate dispatch, local summarize rollup
-│           ├── linear.rs         # one submodule per provider; each has a pure, fixture-tested
-│           ├── jira.rs           #   map_* response -> IntegrationItem mapper
-│           ├── asana.rs
-│           ├── github.rs
-│           ├── notion.rs         # database rows (fetch) + page-as-evidence (fetch_page_text)
-│           ├── gmail.rs          # recent emails (metadata-only) → items; pure, takes a bearer token
-│           ├── slack.rs          # search.messages → items; token-paste, check_ok maps 200-OK errors
-│           └── figma.rs          # one file's comments → items; token-paste (X-Figma-Token), optional @-me filter
+│       │                         #   PM connections/selectors/digests · mind state · brief bootstrap
+│       ├── provider/             # PM-integrations module (pure, network-only)
+│       │   ├── mod.rs            # shared model (Connection/BriefIntegration/IntegrationItem/…),
+│       │   │                     #   fetch/validate dispatch, local summarize rollup
+│       │   ├── linear.rs         # one submodule per provider; each has a pure, fixture-tested
+│       │   ├── jira.rs           #   map_* response -> IntegrationItem mapper
+│       │   ├── asana.rs
+│       │   ├── github.rs
+│       │   ├── notion.rs         # database rows (fetch) + page-as-evidence (fetch_page_text)
+│       │   ├── gmail.rs          # recent emails (metadata-only) → items; pure, takes a bearer token
+│       │   ├── slack.rs          # search.messages → items; token-paste, check_ok maps 200-OK errors
+│       │   └── figma.rs          # one file's comments → items; token-paste (X-Figma-Token), optional @-me filter
+│       └── neuroskill/           # NeuroSkill EEG → ## Mind State (local SQLite read + WS write; NOT in provider/)
+│           ├── mod.rs            # public API: read-only DB opener, compute/render mind state, read-scope guard
+│           ├── aggregate.rs      # pure, fixture-tested rollup: labels→intervals, window filter, epochs→MindState
+│           ├── labels.rs         # read-only `labels` query + pure waid:brief=<slug> marker parsing
+│           ├── eeg.rs            # read-only `eeg_timeseries` window query + pure metric-JSON extraction
+│           └── ws.rs             # hand-rolled WebSocket `label` write (no SDK; the only write)
 ├── briefs/                       # sample briefs (dev + bundled seed; generic placeholders)
 ├── CLAUDE.md                     # guidance for Claude Code working in the repo
 └── README.md
@@ -460,7 +473,11 @@ connectors**, living in `src-tauri/src/provider/`.
   normalised into a common `IntegrationItem` (id, title, url, status, assignee,
   `updatedAt`, kind, free-form `meta`). Each submodule has a pure,
   fixture-tested `map_*` response→item mapper. (Gmail is the lone OAuth provider;
-  see its subsection below.)
+  see its subsection below.) **NeuroSkill** is a ninth provider in the enum but
+  the odd one out: it isn't a panel feed and isn't dispatched through this
+  network `fetch`/`validate` — it reads **local SQLite** and writes a body
+  region, so it lives in its own `src-tauri/src/neuroskill/` module (see its
+  subsection below).
 - **Connections are per-brief.** A connection's **non-secret metadata** (id,
   provider, label, base URL, account) lives in *that brief's* `connections:`
   frontmatter and round-trips via the file like `links` / `webhooks`. The
@@ -585,7 +602,8 @@ ever receives a ready bearer token and maps the response (`map_message`) into
   read/unread → status).
 - **Feeds, not evidence.** Email feeds (`kind: email`) flow into the panel and the
   digest/morning-briefing, but are deliberately **kept out of `gather_evidence`**
-  — synthesis evidence stays Notion-pages-only.
+  — synthesis evidence is Notion-pages-only (the sole non-page exception is the
+  NeuroSkill Mind State rollup; see its subsection).
 - **Query authoring help.** Because most users don't know Gmail's operators, the
   feed form offers a row of one-click **search templates** (recent unread, needs
   my reply, important, starred, has attachment, …; the first is applied as the
@@ -616,7 +634,7 @@ keyring by `commands.rs` and passed in.
 - **Feeds, not evidence.** Message feeds (`kind: messages`) flow into the panel,
   the digest, and the morning briefing, but are deliberately **kept out of
   `gather_evidence`** — the same exclusion as Gmail email feeds; synthesis
-  evidence stays Notion-pages-only.
+  evidence is Notion-pages-only (aside from NeuroSkill Mind State).
 - **Query authoring help.** As with Gmail, the feed form offers one-click
   **search templates** plus an **"describe it" box** wired to
   `generate_slack_query` (turns plain English into one query line via the
@@ -658,7 +676,8 @@ the keyring by `commands.rs` and passed in.
   item `url` lands the user in the file (`figma.com/design/{key}/`).
 - **Feeds, not evidence.** Comment feeds (`kind: comments`) flow into the panel,
   the digest, and the morning briefing, but are **kept out of `gather_evidence`**
-  automatically — that path is Notion-pages-only, same as Slack/Gmail.
+  automatically — that path is Notion-pages-only (plus NeuroSkill Mind State),
+  same as Slack/Gmail.
 - **No query-authoring help.** Unlike Gmail/Slack there's no search grammar to
   author, so there's deliberately no `generate_figma_query` / templates — the
   query is just a file URL plus the optional `mentions:me` flag.
@@ -666,6 +685,64 @@ the keyring by `commands.rs` and passed in.
   Personal Access Token under **Settings → Account → Personal access tokens**
   with the **`file_comments:read`** (and `current_user:read`) scope, then paste
   it.
+
+### NeuroSkill connector (the local-EEG `## Mind State` region)
+
+NeuroSkill is the odd connector out: its output is a **deterministic, regenerable
+body region** (`## Mind State`, marker `waid:mind`, a sibling of `## Activity`),
+**not** panel items — so it doesn't dispatch through `provider/` (documented
+pure/network-only). It lives in its own `src-tauri/src/neuroskill/` module, which
+reads **local SQLite read-only** and performs exactly one write, NeuroSkill's
+`label` WebSocket command. It never links/vendors any NeuroSkill/GPL code — the
+integration is strictly at the process/file boundary (NeuroSkill is GPL-3.0; WAID
+is MIT).
+
+- **Two features, one join key.** (A) `## Mind State` shows a rolling-window
+  (default **14d**; `today|7d|14d|30d`) aggregate of EEG focus/engagement/mood/
+  relaxation over the brief's **labeled** sessions. (B) **Labeled-session launch**:
+  WAID writes `waid:brief=<slug>:start`/`:end` labels into NeuroSkill at
+  launch/close so attribution is **authored, never guessed** from window/terminal
+  data. The shared join key is the brief slug (file stem; overridable via the
+  selector's `slug:` token).
+- **No token, no keyring.** Localhost, no auth — `save_brief_connection` and
+  `resolve_connection_token` route NeuroSkill through the same token-optional path
+  as Gmail. The connection carries optional `wsUrl` / `dataDir` overrides for the
+  WSL2↔Windows-host split.
+- **Pipeline (mirrors `## Activity`, no LLM).** `sync_mind_state(path)`: read
+  `labels` → pair `:start`/`:end` into intervals (unclosed start capped at 4h) →
+  rolling-window filter → read `eeg_timeseries` epochs per interval → deterministic
+  rollup (`aggregate.rs`, the fixture-tested core: means, trend = first-half vs
+  second-half, peak-focus block) → render numbers → `upsert_marked_block(waid:mind)`.
+  Frontmatter and every sibling region preserved byte-for-byte; a read/parse
+  failure is a toast + no-op, never a partial write.
+- **Read scope is hard-bounded.** The only `SELECT`s ever issued are the two query
+  constants against **`eeg_timeseries`** and **`labels`** — enforced by a read-scope
+  guard test that rejects every other table (so the user's `track_*` toggles are
+  harmless and no window/file/terminal text can leak into a portable brief). DBs
+  are opened `mode=ro&immutable=1` (a static snapshot; no write-lock contention
+  with the always-on daemon).
+- **Portable output only.** The region renders only WAID-computed numbers and
+  formatted times — raw `labels.text` is never echoed (injection surface; WAID
+  controls only the `waid:brief=` format).
+- **The write side (`mark_brief_session`).** Fires `waid:brief=<slug>:(start|end)`
+  over the local WebSocket — hand-rolled in `ws.rs` (raw `tokio::net::TcpStream`
+  handshake + one masked text frame; no WS SDK, the same style as the Gmail OAuth
+  loopback). The frontend fires `:start` on the first launch/open action and via an
+  explicit **Start/End session** button; `:end` fires from that button and, as
+  safety nets, on navigating away (`onDestroy`), with the 4h interval cap as the
+  final backstop. Best-effort: an unreachable daemon is an info toast, never a
+  blocked launch; a brief with no NeuroSkill connection is a silent no-op.
+- **A body region, not panel items.** `mind` selectors are excluded from
+  `digest_integrations` / `morning_briefing` (alongside Notion `page`). The panel
+  renders them as a slim status row with a refresh that calls `sync_mind_state`,
+  not item cards.
+- **Feeds the Current State synthesis (Phase 2).** When an LLM provider is
+  configured, `gather_evidence` adds the MindState rollup as a small **descriptive**
+  evidence chunk (`neuroskill::evidence_text` — numbers + worded trends only, never
+  raw labels, flagged "context, not a directive"), but **only for briefs with a
+  NeuroSkill `mind` feed**. It's the lone non-Notion-page exception to the
+  evidence pool; a read failure or empty window is skipped, never fatal, and it
+  doesn't consume the web-source budget split.
 
 ### Optional LLM layer (reuses the synthesis provider)
 
@@ -892,6 +969,8 @@ The visual layer has a named theme and shares branding with What's Next.
   `gmail.client_id` / `gmail.client_secret` (bring-your-own Google Desktop
   client), and `gmail.oauth:<account-email>` (the account-scoped grant, shared
   across briefs — not `bconn:`-keyed) — service `com.jelanijohn.waid`.
+  (**NeuroSkill stores nothing** — it's localhost with no auth, so it has no
+  keyring entry at all, like Gmail's lack of a `bconn:` token.)
 - **Appearance** — light/dark, accent, sidebar list style (Rows / Compact /
   Rocks), density, and the **Brief layout** control (two-column rail / body-first
   / quiet-top), all from the **View & appearance** menu in the titlebar.

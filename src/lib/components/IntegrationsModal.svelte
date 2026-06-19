@@ -38,6 +38,8 @@
   let baseUrl = $state("");
   let account = $state("");
   let repos = $state(""); // GitHub: comma-separated owner/name list (optional)
+  let wsUrl = $state(""); // NeuroSkill: WebSocket override (optional)
+  let dataDir = $state(""); // NeuroSkill: data-dir override (optional)
   let id = $state(""); // only surfaced on a slug collision
 
   // --- choose (step 2) form, targeting one connection ------------------------
@@ -46,6 +48,16 @@
   let kind = $state<string>("tasks");
   let query = $state("");
   let limit = $state("20");
+  // NeuroSkill `mind` feed: a rolling-window segmented control + optional slug
+  // override, encoded into the selector's `query` ("14d" / "14d slug:alt").
+  let mindWindow = $state("14d");
+  let mindSlug = $state("");
+  const MIND_WINDOWS = [
+    { value: "today", label: "Today" },
+    { value: "7d", label: "7 days" },
+    { value: "14d", label: "14 days" },
+    { value: "30d", label: "30 days" },
+  ];
 
   let testing = $state<string | null>(null);
 
@@ -139,6 +151,13 @@
   let canConnectGmail = $derived(
     !busy && label.trim().length > 0 && effectiveId.length > 0 && !idTaken,
   );
+  // NeuroSkill is localhost with no auth — no token, same readiness shape as Gmail.
+  let canConnectNeuro = $derived(
+    !busy && label.trim().length > 0 && effectiveId.length > 0 && !idTaken,
+  );
+  // The brief's own slug (default `waid:brief=<slug>` join key); shown as the
+  // mind-feed slug-override placeholder.
+  let defaultMindSlug = $derived(slugify(brief.fileName.replace(/\.md$/i, "")));
 
   // Already-connected accounts for the picked provider (offer to reuse).
   let existingForProvider = $derived(brief.connections.filter((c) => c.provider === provider));
@@ -163,6 +182,8 @@
   let isGmail = $derived(targetConn?.provider === "gmail");
   // Slack's search query is the feed's assignment (like Gmail's), so required.
   let isSlack = $derived(targetConn?.provider === "slack");
+  // NeuroSkill `mind`: the "query" is built from a window + optional slug, not typed.
+  let isMind = $derived(targetConn?.provider === "neuroskill");
   let queryRequired = $derived(isNotion || isGmail || isSlack);
   let canAddFeed = $derived(!busy && (!queryRequired || query.trim().length > 0));
 
@@ -200,6 +221,8 @@
     // Prefill the repo scope from the brief's own GitHub link(s), so a feed
     // defaults to *this project's* repo instead of every repo the token can see.
     repos = p === "github" ? githubReposFromLinks() : "";
+    wsUrl = "";
+    dataDir = "";
     id = "";
     view = "connect";
   }
@@ -226,6 +249,8 @@
           : "";
     aiPrompt = "";
     limit = "20";
+    mindWindow = "14d";
+    mindSlug = "";
     chooseReturn = ret;
     view = "choose";
   }
@@ -283,6 +308,32 @@
     }
   }
 
+  // NeuroSkill's step 1: no auth (localhost). Save metadata-only with optional
+  // wsUrl/dataDir overrides and NO token, then carry on into step 2 like connect().
+  async function connectNeuroskill() {
+    if (!canConnectNeuro) return;
+    busy = true;
+    try {
+      const conn: Connection = {
+        id: effectiveId,
+        provider: "neuroskill",
+        label: label.trim() || "NeuroSkill",
+        baseUrl: null,
+        account: null,
+        wsUrl: wsUrl.trim() || null,
+        dataDir: dataDir.trim() || null,
+      };
+      const updated = await saveBriefConnection(brief.path, conn, "");
+      projects.upsert(updated);
+      toasts.success(`${conn.label} connected ✓`);
+      startChoose(conn.id, "connect");
+    } catch (e) {
+      toasts.error(`Could not connect NeuroSkill: ${e}`);
+    } finally {
+      busy = false;
+    }
+  }
+
   async function addFeed() {
     if (!targetConn) return;
     busy = true;
@@ -291,20 +342,29 @@
       // The "Max items" input is type=number, so `limit` can come back as a
       // number (or null) rather than the seeded string — coerce defensively.
       const limitStr = String(limit ?? "").trim();
+      // NeuroSkill mind: encode the window (+ optional slug) into the query; no item cap.
+      const feedQuery = isMind
+        ? `${mindWindow}${mindSlug.trim() ? ` slug:${slugify(mindSlug)}` : ""}`
+        : query.trim() || null;
       const integration: BriefIntegration = {
         connection: targetConn.id,
         kind: k,
-        query: query.trim() || null,
-        // A Notion "page" feed is a single page — no item cap.
-        limit: k === "page" ? null : limitStr ? Number(limitStr) : null,
+        query: feedQuery,
+        // A Notion "page" feed and a NeuroSkill "mind" feed have no item cap.
+        limit: k === "page" || isMind ? null : limitStr ? Number(limitStr) : null,
       };
       const updated = await saveBriefIntegration(brief.path, integration);
       projects.upsert(updated);
       toasts.success(`Pulling ${kindLabel(k, targetConn.provider).toLowerCase()} from ${targetConn.label}`);
-      // Warm the panel so the new feed shows data immediately.
-      integrations
-        .fetch(brief.path, integration.connection, k, integration.query, integration.limit, true)
-        .catch(() => {});
+      if (isMind) {
+        // Mind feeds write the ## Mind State region, not panel items — sync it.
+        projects.syncMind(brief.path).catch(() => {});
+      } else {
+        // Warm the panel so the new feed shows data immediately.
+        integrations
+          .fetch(brief.path, integration.connection, k, integration.query, integration.limit, true)
+          .catch(() => {});
+      }
       view = "manage";
     } catch (e) {
       toasts.error(`Could not add feed: ${e}`);
@@ -743,6 +803,44 @@
             Gmail access; the grant is stored in your OS keychain — never written to the brief. Set up your own
             Google OAuth client in Settings first (one-time).
           </p>
+        {:else if provider === "neuroskill"}
+          <!-- NeuroSkill is localhost with no auth — no token. Optional overrides
+               for the WSL2↔Windows-host split, then an in-body connect button. -->
+          <div class="mb-[5px] flex items-center justify-between text-[11px] text-[var(--fg3)]">
+            Local connection
+            <CredentialHelp topic="neuroskill" />
+          </div>
+          <label class="mb-3 flex flex-col gap-[5px]">
+            <span class="text-[11px] text-[var(--fg3)]">Data directory (optional)</span>
+            <input
+              class="h-[34px] rounded-[9px] border px-[10px] font-mono text-[12px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
+              style="background: var(--input-bg); border-color: var(--border);"
+              placeholder="/mnt/c/Users/you/AppData/Local/NeuroSkill"
+              bind:value={dataDir}
+            />
+          </label>
+          <label class="mb-3 flex flex-col gap-[5px]">
+            <span class="text-[11px] text-[var(--fg3)]">WebSocket URL (optional)</span>
+            <input
+              class="h-[34px] rounded-[9px] border px-[10px] font-mono text-[12px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
+              style="background: var(--input-bg); border-color: var(--border);"
+              placeholder="ws://127.0.0.1:8375"
+              bind:value={wsUrl}
+            />
+          </label>
+          <button
+            class="inline-flex h-[38px] w-full items-center justify-center gap-[7px] rounded-lg bg-[var(--accent)] text-[12.5px] font-medium text-white transition-[filter] hover:brightness-[1.06] disabled:opacity-50"
+            onclick={connectNeuroskill}
+            disabled={!canConnectNeuro}
+          >
+            <Icon name="neurology" size={15} />
+            {busy ? "Connecting…" : "Connect NeuroSkill"}
+          </button>
+          <p class="mt-2 text-[10.5px] leading-[1.5] text-[var(--fg3)]">
+            No token needed. WAID reads NeuroSkill's local data <strong class="text-[var(--fg2)]">read-only</strong>
+            to build a deterministic <code>## Mind State</code> region, and only writes a session label over
+            localhost when you launch/end work. Leave the fields blank to use the defaults.
+          </p>
         {:else}
           <label class="mb-3 flex flex-col gap-[5px]">
             <span class="flex items-center justify-between text-[11px] text-[var(--fg3)]">
@@ -854,6 +952,37 @@
           </div>
         {/if}
 
+        {#if isMind}
+          <div class="flex flex-col gap-[5px]">
+            <span class="text-[11px] text-[var(--fg3)]">Rolling window</span>
+            <div class="inline-flex gap-[3px] self-start rounded-[9px] p-[3px]" style="background: var(--chip-bg);">
+              {#each MIND_WINDOWS as w (w.value)}
+                <button
+                  class="rounded-[7px] px-[11px] py-1 text-[11.5px] font-medium transition-colors {mindWindow === w.value
+                    ? 'bg-[var(--bg)] text-[var(--fg)] shadow-[0_1px_2px_rgba(15,30,60,0.1)] dark:bg-[var(--accent)] dark:text-white'
+                    : 'text-[var(--fg2)]'}"
+                  onclick={() => (mindWindow = w.value)}
+                >
+                  {w.label}
+                </button>
+              {/each}
+            </div>
+          </div>
+          <label class="mt-[10px] flex flex-col gap-[5px]">
+            <span class="text-[11px] text-[var(--fg3)]">Project slug override (optional)</span>
+            <input
+              class="h-[34px] rounded-[9px] border px-[10px] font-mono text-[11.5px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
+              style="background: var(--input-bg); border-color: var(--border);"
+              placeholder={defaultMindSlug}
+              bind:value={mindSlug}
+            />
+          </label>
+          <span class="mt-[10px] block text-[11px] text-[var(--fg3)]">
+            Regenerates a deterministic <code>## Mind State</code> region — EEG focus/mood across this project's
+            <strong class="text-[var(--fg2)]">labeled</strong> sessions. Launching the project marks sessions
+            automatically (it tags NeuroSkill with this slug). No items appear in the panel.
+          </span>
+        {:else}
         <div class="grid gap-[10px] {isNotionPage ? 'grid-cols-1' : 'grid-cols-[1fr_88px]'}">
           <label class="flex flex-col gap-[5px]">
             <span class="text-[11px] text-[var(--fg3)]">
@@ -948,12 +1077,13 @@
             Leave the filter blank to pull {PROVIDERS[targetConn.provider].blurb.toLowerCase()}.
           {/if}
         </span>
+        {/if}
       {/if}
     </div>
 
-    <!-- Footer (only the two wizard steps have one; Gmail's connect uses the
-         in-body OAuth button, so it has no footer). -->
-    {#if view === "connect" && provider !== "gmail"}
+    <!-- Footer (only the two wizard steps have one; Gmail and NeuroSkill connect
+         with their own in-body button, so they have no footer). -->
+    {#if view === "connect" && provider !== "gmail" && provider !== "neuroskill"}
       <div class="flex items-center justify-between gap-3 border-t px-[18px] py-[13px]" style="border-color: var(--border);">
         <span class="inline-flex items-center gap-[5px] text-[10.5px] text-[var(--fg3)]">
           <Icon name="schedule" size={13} /> Takes ~10 seconds

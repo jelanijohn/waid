@@ -10,6 +10,8 @@ import {
   saveBrief as saveBriefCmd,
   syncBrief as syncBriefCmd,
   syncAll as syncAllCmd,
+  syncMindState as syncMindStateCmd,
+  markBriefSession as markBriefSessionCmd,
   synthesizeBrief as synthesizeBriefCmd,
   synthesizeAll as synthesizeAllCmd,
   getLlmSettings,
@@ -218,6 +220,24 @@ class ProjectStore {
     const updated = await synthesizeBriefCmd(path);
     this.upsert(updated);
     return updated;
+  }
+
+  /** Regenerate one brief's `## Mind State` region from NeuroSkill data. */
+  async syncMind(path: string): Promise<Brief> {
+    const updated = await syncMindStateCmd(path);
+    this.upsert(updated);
+    return updated;
+  }
+
+  /** Fire a NeuroSkill session label (best-effort; swallows errors so launch /
+   *  navigation is never blocked). No-op for briefs without a NeuroSkill conn. */
+  async markSession(path: string, phase: "start" | "end"): Promise<void> {
+    try {
+      await markBriefSessionCmd(path, phase);
+    } catch (e) {
+      // The daemon may be down — that's fine, there's no session to mark.
+      console.info("mark_brief_session:", e);
+    }
   }
 
   /** Re-read the configured synthesis provider from settings (null if off).

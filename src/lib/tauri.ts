@@ -48,6 +48,15 @@ export const syncBrief = (path: string) => invoke<Brief>("sync_brief", { path })
 /** Sync every brief that has a source; returns per-brief outcomes. */
 export const syncAll = () => invoke<SyncOutcome[]>("sync_all");
 
+/** Regenerate a brief's deterministic `## Mind State` region from NeuroSkill's
+ *  local EEG/label data (read-only). Returns the rewritten brief. */
+export const syncMindState = (path: string) => invoke<Brief>("sync_mind_state", { path });
+
+/** Fire a NeuroSkill `waid:brief=<slug>:(start|end)` session label over the local
+ *  WebSocket. Best-effort: a no-op for briefs without a NeuroSkill connection. */
+export const markBriefSession = (path: string, phase: "start" | "end") =>
+  invoke<void>("mark_brief_session", { path, phase });
+
 // --- LLM synthesis (the brief-synthesis agent) -----------------------------
 
 /** Synthesize a brief's Current State + Open Questions via the configured LLM.

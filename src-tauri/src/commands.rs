@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
+use crate::neuroskill;
 use crate::provider::{self, BriefIntegration, Connection, IntegrationFetch, IntegrationItem};
 
 /// A link button rendered in the detail pane (opens in the default browser).
@@ -289,8 +290,9 @@ const SYNC_END: &str = "<!-- waid:sync:end -->";
 /// Build the start/end HTML-comment markers for a named managed block. The
 /// markers are valid CommonMark (render to nothing), so the format stays
 /// portable. Marker inventory: `waid:sync` (Activity, deterministic),
-/// `waid:state` (Current State, LLM), `waid:questions` (Open Questions inner
-/// block, LLM). `marker_start("waid:sync") == SYNC_START` by construction.
+/// `waid:mind` (Mind State, deterministic — NeuroSkill), `waid:state` (Current
+/// State, LLM), `waid:questions` (Open Questions inner block, LLM).
+/// `marker_start("waid:sync") == SYNC_START` by construction.
 fn marker_start(name: &str) -> String {
     format!("<!-- {name}:start -->")
 }
@@ -1396,6 +1398,32 @@ async fn gather_evidence(
         });
     }
 
+    // NeuroSkill Mind State — the local EEG rollup as descriptive evidence, for
+    // briefs with a NeuroSkill `mind` feed only. Read-only, local, deterministic;
+    // numbers only (never raw labels), so it's a safe, tiny chunk that doesn't
+    // factor into the web-source budget split below. A read failure or empty
+    // window is skipped, never fatal.
+    if let Some(sel) = brief.integrations.iter().find(|ig| {
+        ig.kind == "mind"
+            && brief.connections.iter().any(|c| {
+                c.id == ig.connection && matches!(c.provider, provider::Provider::Neuroskill)
+            })
+    }) {
+        if let Some(conn) = brief.connections.iter().find(|c| c.id == sel.connection) {
+            let dir = neuroskill::data_dir(conn);
+            let (window, slug) = neuroskill::parse_mind_query(sel.query.as_deref(), &brief_slug(brief));
+            let now = chrono::Utc::now().timestamp();
+            if let Ok(ms) = neuroskill::compute_mind_state(&dir, &slug, window, now) {
+                if let Some(text) = neuroskill::evidence_text(&ms) {
+                    evidence.push(Evidence {
+                        label: "Mind State (NeuroSkill EEG over your labeled sessions)".to_string(),
+                        content: text,
+                    });
+                }
+            }
+        }
+    }
+
     // Notion "project page" feeds (kind == "page") whose connection is a Notion
     // account — their page text joins the evidence pool, so they count toward the
     // budget split too.
@@ -2049,8 +2077,9 @@ pub async fn digest_integrations(app: AppHandle, path: String) -> Result<String,
     let mut sections: Vec<(BriefIntegration, IntegrationFetch)> = Vec::new();
     for sel in &brief.integrations {
         // Notion "project page" feeds feed synthesis, not the task/notification
-        // digest — skip them here.
-        if sel.kind == "page" {
+        // digest — skip them here. NeuroSkill `mind` feeds aren't items either
+        // (they write the ## Mind State region), so skip them too.
+        if sel.kind == "page" || sel.kind == "mind" {
             continue;
         }
         if let Ok(fetch) = fetch_brief_integration(&path, &brief.connections, sel).await {
@@ -2086,8 +2115,8 @@ pub async fn morning_briefing(app: AppHandle) -> Result<String, String> {
         }
         let mut sections = Vec::new();
         for sel in &brief.integrations {
-            if sel.kind == "page" {
-                continue; // page feeds are synthesis-only, not part of the briefing
+            if sel.kind == "page" || sel.kind == "mind" {
+                continue; // page (synthesis-only) and mind (body region) aren't items
             }
             if let Ok(fetch) = fetch_brief_integration(&brief.path, &brief.connections, sel).await {
                 sections.push((sel.clone(), fetch));
@@ -3450,6 +3479,8 @@ async fn resolve_connection_token(
                 .ok_or("Gmail connection has no account — reconnect it.")?;
             gmail_access_token(account).await
         }
+        // NeuroSkill is localhost with no auth — no token to resolve.
+        provider::Provider::Neuroskill => Ok(String::new()),
         _ => brief_connection_token(brief_path, &conn.id),
     }
 }
@@ -3710,11 +3741,14 @@ pub fn save_brief_connection(
     }
     let (mut conns, integs) = read_brief_lists(&path)?;
     let exists = conns.iter().any(|c| c.id == connection.id);
-    // Gmail has no `bconn:` token — its grant lives under the account key (set by
-    // the OAuth flow), so the frontend calls this with an empty token. Skip both
-    // the keyring write and the "token required" check for it.
-    if connection.provider == provider::Provider::Gmail {
-        // metadata-only write; the account grant is already persisted by `connect_gmail`.
+    // Gmail and NeuroSkill have no `bconn:` token — Gmail's grant lives under the
+    // account key (set by the OAuth flow); NeuroSkill is localhost with no auth.
+    // Skip both the keyring write and the "token required" check for them.
+    if matches!(
+        connection.provider,
+        provider::Provider::Gmail | provider::Provider::Neuroskill
+    ) {
+        // metadata-only write (no secret to store).
     } else if !token.trim().is_empty() {
         set_secret_value(&connection_secret_key(&path, &connection.id), &token)?;
     } else if !exists {
@@ -3902,6 +3936,101 @@ pub async fn fetch_integration(
     };
     let fetched_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     provider::fetch(&conn, &sel, &token, fetched_at).await
+}
+
+// --- NeuroSkill: `## Mind State` + labeled-session launch ------------------
+//
+// NeuroSkill is the one integration whose output is a deterministic **body
+// region** (`## Mind State`, marker `waid:mind`), not panel items — so it doesn't
+// flow through `fetch_integration`. `sync_mind_state` mirrors `sync_brief`:
+// aggregate read-only EEG/label data into a rollup, render numbers, and splice
+// the marked block (frontmatter + everything else byte-for-byte preserved). The
+// `mind` `kind` is a panel/digest non-entity, excluded alongside Notion `page`.
+// Attribution is *authored* (not guessed): `mark_brief_session` writes
+// `waid:brief=<slug>:(start|end)` labels into NeuroSkill at launch/close.
+
+/// The brief's own slug — the slugified file stem — used as the default
+/// `waid:brief=<slug>` join key (and overridable via the selector's `slug:`).
+fn brief_slug(brief: &Brief) -> String {
+    let stem = brief.file_name.trim_end_matches(".md");
+    slugify(stem)
+}
+
+/// Find the NeuroSkill connection on a brief (at most one is expected).
+fn neuroskill_connection(brief: &Brief) -> Option<&Connection> {
+    brief
+        .connections
+        .iter()
+        .find(|c| c.provider == provider::Provider::Neuroskill)
+}
+
+/// Regenerate a brief's `## Mind State` region from NeuroSkill's local data. The
+/// first `mind` selector drives the single region. Read-only against NeuroSkill;
+/// the only write is the brief's own `waid:mind` block. A read/parse failure is an
+/// error (surfaced as a toast) and never a partial write.
+#[tauri::command]
+pub async fn sync_mind_state(path: String) -> Result<Brief, String> {
+    let p = PathBuf::from(&path);
+    let raw = fs::read_to_string(&p).map_err(|e| format!("could not read {path}: {e}"))?;
+    let brief = parse_brief(&p, raw.clone());
+
+    let sel = brief
+        .integrations
+        .iter()
+        .find(|s| s.kind == "mind")
+        .ok_or("This brief has no Mind State feed — add a NeuroSkill `mind` selector.")?;
+    let conn = brief
+        .connections
+        .iter()
+        .find(|c| c.id == sel.connection)
+        .ok_or("The Mind State feed references a missing connection.")?;
+
+    let dir = neuroskill::data_dir(conn);
+    let (window, slug) = neuroskill::parse_mind_query(sel.query.as_deref(), &brief_slug(&brief));
+    let now = chrono::Utc::now().timestamp();
+    let mind = neuroskill::compute_mind_state(&dir, &slug, window, now)?;
+    let rendered = neuroskill::render_mind_state(&mind, now);
+
+    // Edit only the body's managed region; re-attach the frontmatter verbatim.
+    let (prefix, body) = split_for_body_edit(&raw);
+    let new_body = upsert_marked_block(body, "waid:mind", &rendered)?;
+    let new_raw = format!("{prefix}{new_body}");
+
+    fs::write(&p, &new_raw).map_err(|e| format!("could not write {path}: {e}"))?;
+    Ok(parse_brief(&p, new_raw))
+}
+
+/// Fire a NeuroSkill `waid:brief=<slug>:(start|end)` session label over the local
+/// WebSocket — the authored-attribution write side. Best-effort: a brief with no
+/// NeuroSkill connection is a silent no-op (not every brief tracks EEG); an
+/// unreachable daemon returns an error the frontend shows as an info toast and
+/// never blocks the launch. The slug matches `sync_mind_state` (selector override
+/// or the brief slug).
+#[tauri::command]
+pub async fn mark_brief_session(path: String, phase: String) -> Result<(), String> {
+    let phase = match phase.as_str() {
+        "start" | "end" => phase.as_str(),
+        other => return Err(format!("unknown session phase \"{other}\" (want start|end).")),
+    };
+    let p = PathBuf::from(&path);
+    let raw = fs::read_to_string(&p).map_err(|e| format!("could not read {path}: {e}"))?;
+    let brief = parse_brief(&p, raw);
+
+    // No NeuroSkill connection → nothing to mark. Silent, so launching a brief
+    // that doesn't track EEG never toasts.
+    let Some(conn) = neuroskill_connection(&brief) else {
+        return Ok(());
+    };
+
+    let sel_query = brief
+        .integrations
+        .iter()
+        .find(|s| s.kind == "mind")
+        .and_then(|s| s.query.as_deref());
+    let (_window, slug) = neuroskill::parse_mind_query(sel_query, &brief_slug(&brief));
+    let ws_url = neuroskill::ws_url(conn);
+    let text = format!("waid:brief={slug}:{phase}");
+    neuroskill::fire_session_label(&ws_url, &text).await
 }
 
 #[cfg(test)]
@@ -4549,6 +4678,8 @@ mod tests {
             base_url: None,
             account: None,
             repos: None,
+            ws_url: None,
+            data_dir: None,
         }];
         let integs = vec![BriefIntegration {
             connection: "linear-work".into(),

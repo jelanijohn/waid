@@ -379,7 +379,8 @@ waid/
 │       ├── components/           # Titlebar, AppMenu, Sidebar, ProjectDetail, MarkdownView,
 │       │                         #   QuickCapture, StatusPill, Toasts, Icon, BrandMark,
 │       │                         #   CredentialHelp, IntegrationPanel, IntegrationsModal,
-│       │                         #   WebhooksModal, BriefingModal, BootstrapModal, ProviderTile
+│       │                         #   WebhooksModal, BriefingModal, BootstrapModal, ProviderTile,
+│       │                         #   ResizeHandles
 │       ├── stores/               # projects / settings / toasts / integrations (all .svelte.ts runes)
 │       ├── tauri.ts              # wrappers around invoke / plugins / secrets / PM + bootstrap commands
 │       ├── credentialHelp.ts     # per-credential setup steps + scopes + docs links (CredentialHelp data)
@@ -693,6 +694,21 @@ blank).
   guarded `#[cfg(not(target_os = "macos"))]`) and draw their own
   minimize/maximize/close caption buttons (the extra `core:window:*` capabilities
   are allow-listed in `capabilities/default.json`).
+- **Custom window shell + resize grips (`ResizeHandles.svelte`)** — the native
+  window is **borderless and transparent** (`transparent: true` +
+  `macOSPrivateApi` in `tauri.conf.json`, `macos-private-api` feature on the
+  `tauri` crate; `html, body { background: transparent }`), so the whole app
+  lives inside a rounded, bordered **app panel** drawn in `+page.svelte` with a
+  14px transparent gutter around it (desktop showing through, room for the
+  panel's `--shadow-win`). With OS decorations off there is no native frame to
+  grab, so `ResizeHandles.svelte` lays invisible grips along the window edges and
+  hands the drag to the OS via `startResizeDragging` (and `setCursorIcon` on
+  hover, since WebKitGTK ignores the CSS `cursor` on transparent overlays —
+  both gated by the new `core:window:allow-start-resize-dragging` /
+  `allow-set-cursor-icon` capabilities). Each grip straddles the transparent
+  gutter **and** reaches a few px onto the opaque panel, because pointer events
+  over a fully transparent gutter pass straight through on Linux/WSL. macOS keeps
+  its native frame, so the grips are skipped there (same `userAgent` sniff).
 - **View & appearance menu (`AppMenu.svelte`)** — anchored to the titlebar's
   `tune` button (moved out of the sidebar's old brand header). Besides the
   appearance controls (light/dark, accent, sidebar list style, density, and the

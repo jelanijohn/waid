@@ -172,7 +172,8 @@ integrations](#project-management-integrations-optional) below.
   a detail pane, under a **unified titlebar** that draws the app's own window
   chrome (breadcrumb, *Sync all*, morning briefing, and the View & appearance
   menu). macOS keeps its native traffic lights; Windows/Linux draw their own
-  caption buttons.
+  caption buttons and resize grips (the borderless, transparent window renders
+  the app inside a rounded panel with a soft drop shadow).
 - **Markdown rendering** of the brief body.
 - **Edit mode** — toggle to a raw textarea and save back to the `.md` file
   (round-trips the whole file, so your frontmatter is never mangled). ⌘/Ctrl+S
@@ -397,7 +398,8 @@ waid/
 │   ├── lib/
 │   │   ├── components/       # Titlebar, AppMenu, Sidebar, ProjectDetail, MarkdownView,
 │   │   │                     #   QuickCapture, Toasts, CredentialHelp, IntegrationPanel,
-│   │   │                     #   IntegrationsModal, WebhooksModal, BriefingModal, BootstrapModal…
+│   │   │                     #   IntegrationsModal, WebhooksModal, BriefingModal, BootstrapModal,
+│   │   │                     #   ResizeHandles…
 │   │   ├── credentialHelp.ts # per-credential setup steps + scopes + docs links
 │   │   ├── stores/           # projects, settings, toasts, integrations
 │   │   ├── tauri.ts          # wrappers around invoke / plugins / secrets

@@ -528,6 +528,9 @@ body {
   /* The aubergine is already dark; lift it slightly so the monogram pops. */
   background: #611f69;
 }
+.ptile-figma {
+  background: #f24e1e;
+}
 
 /* Soft accent pulse on the safety-net "Add feed" button. */
 @keyframes tw-pulse {

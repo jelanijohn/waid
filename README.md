@@ -7,7 +7,7 @@ right now?"). WAID answers: **"what's the state of all my projects?"**
 It lists your projects, renders each project's context **brief**, and lets you
 launch into work — open a Claude project, a repo, fire a webhook, or jot a quick
 note. It can pull live state from a project's integrations (GitHub, plus
-project-management connectors: Linear, Jira, Asana, GitHub, Notion, Gmail, and Slack),
+project-management connectors: Linear, Jira, Asana, GitHub, Notion, Gmail, Slack, and Figma),
 optionally synthesize prose with a local or cloud LLM, and bootstrap a new
 project's brief from a folder, a GitHub repo, an interview, or a pasted prompt.
 Personal tool, not a team tool.
@@ -147,11 +147,11 @@ webhooks:
         value: "Bearer {{secret}}"
 connections:              # PM connections owned by this brief (metadata only; tokens live in the keyring)
   - id: linear-personal
-    provider: linear      # linear | jira | asana | github | notion | gmail | slack
+    provider: linear      # linear | jira | asana | github | notion | gmail | slack | figma
     label: Linear (personal)
 integrations:             # selectors referencing the connections above
   - connection: linear-personal
-    kind: tasks           # tasks | notifications | pulls | commits (GitHub) | page (Notion) | email (Gmail) | messages (Slack)
+    kind: tasks           # tasks | notifications | pulls | commits (GitHub) | page (Notion) | email (Gmail) | messages (Slack) | comments (Figma)
     query: "assignee:me"
     limit: 10
 last_opened: 2026-05-31T10:00:00Z
@@ -206,9 +206,10 @@ integrations](#project-management-integrations-optional) below.
   release) from a brief's GitHub link or explicit `sources` into a managed
   `## Activity` block. Deterministic; frontmatter and prose are never touched.
 - **Project-management integrations** — connect a brief to **Linear, Jira,
-  Asana, GitHub, Notion, Gmail, or Slack** and the detail pane shows your
+  Asana, GitHub, Notion, Gmail, Slack, or Figma** and the detail pane shows your
   normalized tasks / notifications (or a Notion database's rows, recent Gmail
-  matches, or matching Slack messages) with a local rollup. Deterministic
+  matches, matching Slack messages, or a Figma file's comments) with a local
+  rollup. Deterministic
   and strictly additive — a failed fetch is a toast, never a write into the
   `.md`. See [Project-management integrations](#project-management-integrations-optional).
 - **AI synthesis** _(optional)_ — when an LLM provider is configured (local
@@ -277,7 +278,7 @@ untouched.
 Connect a brief to a PM tool and the detail pane shows your live tasks /
 notifications inline, with a one-line local rollup (counts by status, recently
 updated). Supported providers: **Linear, Jira, Asana, GitHub, Notion, Gmail,
-Slack**.
+Slack, Figma**.
 
 **How it's wired.** A brief owns one or more **connections** (account-level
 metadata: provider, label, and where needed a base URL or account) and one or
@@ -386,6 +387,32 @@ turns plain English into a query via the configured synthesis LLM.
 > or uninstall the app. One app per workspace; a second workspace means repeating
 > these steps there.
 
+**Figma** surfaces a file's comments (`kind: comments`): the selector's `query`
+is **required** and carries a **Figma file URL or key** (`figma.com/design/AbC123/…`
+or the bare `AbC123`) — the scope, because Figma's REST API has **no cross-file
+comment search**, so a feed is scoped to one file (the same call as GitHub's
+required repo scoping). Each comment maps to an item (the first line as the
+title, the author handle in the assignee slot, an `Open`/`Resolved` status, and
+a snippet alongside); the item link lands you in the file, since the API exposes
+no per-comment anchor. By default a feed shows recent **unresolved** comments;
+add **`mentions:me`** (or `@me`) anywhere in the query to keep only comments that
+@-mention you. That filter is **best-effort** — Figma has no structured mention
+field, so WAID matches your handle against the comment text, which can miss
+renamed/group mentions and occasionally catch your name typed in prose. Comment
+feeds flow into the panel, digest, and morning briefing, but never into synthesis
+evidence (same exclusion as Gmail/Slack). Like Slack, Figma is a plain
+**token-paste** provider — no OAuth dance.
+
+> **One-time Figma setup (per the user, not WAID).** WAID ships no shared Figma
+> app:
+>
+> 1. In Figma, open **Settings → Account → Personal access tokens** (or
+>    [figma.com/developers/apps](https://www.figma.com/developers/apps)).
+> 2. **Generate new token**, name it (e.g. "WAID"), and grant the
+>    **`file_comments:read`** scope (and `current_user:read` for the @-me filter).
+> 3. Copy the token (it's a *user* token, sent in the `X-Figma-Token` header,
+>    read-only) and paste it when adding a Figma connection in WAID.
+
 Everything here is deterministic and **strictly additive**: fetches never write
 into your `.md`, so a failed or auth-walled fetch is just a toast and a panel
 error state — the brief renders fully regardless.
@@ -414,7 +441,7 @@ waid/
 │       ├── lib.rs            # plugin + command registration, global shortcut
 │       ├── commands.rs       # briefs · webhooks · sync · LLM synthesis · keyring · settings ·
 │       │                     #   PM connections/selectors/digests · brief bootstrap
-│       └── provider/         # PM integrations (mod.rs + linear/jira/asana/github/notion/gmail/slack)
+│       └── provider/         # PM integrations (mod.rs + linear/jira/asana/github/notion/gmail/slack/figma)
 ├── briefs/                   # sample briefs (dev + bundled seed)
 └── README.md
 ```

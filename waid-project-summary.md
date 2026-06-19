@@ -29,7 +29,7 @@ It lists your projects, renders each project's context **brief**, and lets you
 launch into work — open a Claude project, open a repo, fire a webhook, or jot a
 quick note. It can **pull live state** from a project's integrations (GitHub
 deterministically, plus first-class **project-management connectors**: Linear,
-Jira, Asana, GitHub, **Notion**, **Gmail**, and **Slack**) and, optionally,
+Jira, Asana, GitHub, **Notion**, **Gmail**, **Slack**, and **Figma**) and, optionally,
 **synthesize**
 prose with a local or cloud LLM — both a per-brief status summary and a
 cross-brief **morning briefing**. New projects can be **bootstrapped** into an initial brief from a
@@ -231,7 +231,7 @@ interface BootstrapAnswers {     // guided-interview answers for brief bootstrap
 }
 
 // --- PM integrations -------------------------------------------------------
-type Provider = "linear" | "jira" | "asana" | "github" | "notion" | "gmail" | "slack";
+type Provider = "linear" | "jira" | "asana" | "github" | "notion" | "gmail" | "slack" | "figma";
 interface Connection {           // account-level metadata; token lives in the keyring
   id: string;                    // stable slug, e.g. "linear-personal"; part of the keyring key
   provider: Provider;
@@ -242,7 +242,7 @@ interface Connection {           // account-level metadata; token lives in the k
 }
 interface BriefIntegration {     // a brief's selector referencing one of its connections
   connection: string;            // -> Connection.id
-  kind: string;                  // "tasks" | "notifications" | "pulls" | "commits" (GitHub) | "page" (Notion) | "email" (Gmail) | "messages" (Slack); defaults to tasks
+  kind: string;                  // "tasks" | "notifications" | "pulls" | "commits" (GitHub) | "page" (Notion) | "email" (Gmail) | "messages" (Slack) | "comments" (Figma); defaults to tasks
   query?: string | null;         // part of the feed's identity (Gmail: a required search string)
   limit?: number | null;
 }
@@ -407,7 +407,8 @@ waid/
 │           ├── github.rs
 │           ├── notion.rs         # database rows (fetch) + page-as-evidence (fetch_page_text)
 │           ├── gmail.rs          # recent emails (metadata-only) → items; pure, takes a bearer token
-│           └── slack.rs          # search.messages → items; token-paste, check_ok maps 200-OK errors
+│           ├── slack.rs          # search.messages → items; token-paste, check_ok maps 200-OK errors
+│           └── figma.rs          # one file's comments → items; token-paste (X-Figma-Token), optional @-me filter
 ├── briefs/                       # sample briefs (dev + bundled seed; generic placeholders)
 ├── CLAUDE.md                     # guidance for Claude Code working in the repo
 └── README.md
@@ -453,7 +454,7 @@ connectors**, living in `src-tauri/src/provider/`.
 
 ### Design
 
-- **Providers:** **Linear, Jira, Asana, GitHub, Notion, Gmail, Slack** —
+- **Providers:** **Linear, Jira, Asana, GitHub, Notion, Gmail, Slack, Figma** —
   dispatched on
   `Connection.provider`. Each provider is a plain authenticated JSON request,
   normalised into a common `IntegrationItem` (id, title, url, status, assignee,
@@ -628,13 +629,51 @@ keyring by `commands.rs` and passed in.
   `xoxe.xoxp-…` that token-paste connections can't refresh). See the README for
   the full walkthrough.
 
+### Figma connector (the file-comments token-paste provider)
+
+Figma rides the **same `bconn:` token-paste flow** as Slack: the user pastes a
+**Personal Access Token** (sent in the `X-Figma-Token` header — *not* bearer
+auth) and *Test connection* validates it with `GET /v1/me`. Like every other
+module `provider/figma.rs` is **pure / network-only** — the token is loaded from
+the keyring by `commands.rs` and passed in.
+
+- **One feed kind: `comments`.** The selector's `query` is **required** and
+  carries (1) a **Figma file URL or key** — the scope, because the REST API has
+  **no cross-file comment search** (a feed is file-scoped, the GitHub
+  repo-scoping precedent) — plus (2) an optional **`mentions:me`** / `@me` token.
+  `GET /v1/files/{key}/comments?as_md=true` returns the file's comments;
+  `map_comment` maps each into an `IntegrationItem`: first line of the message →
+  title, author handle → assignee slot, `resolved_at` → `Open`/`Resolved`
+  status, `created_at` (already RFC3339) → `updatedAt`.
+- **`mentions:me` is heuristic.** There is no structured mention field on a
+  GET'd comment, so the filter makes one extra `GET /v1/me` to learn the handle
+  and keeps comments whose message contains that handle as a bounded token
+  (best-effort: can miss renamed/group mentions, can catch the name typed in
+  prose). On a `/v1/me` failure it **degrades to all comments** rather than
+  erroring. The default (no `mentions:me`) surfaces recent **unresolved**
+  comments — a deterministic, always-correct signal; `mentions:me` keeps matches
+  regardless of resolved state (so you still see a resolved thread you were
+  tagged in).
+- **No per-comment deep link.** The API returns no comment-pin anchor, so the
+  item `url` lands the user in the file (`figma.com/design/{key}/`).
+- **Feeds, not evidence.** Comment feeds (`kind: comments`) flow into the panel,
+  the digest, and the morning briefing, but are **kept out of `gather_evidence`**
+  automatically — that path is Notion-pages-only, same as Slack/Gmail.
+- **No query-authoring help.** Unlike Gmail/Slack there's no search grammar to
+  author, so there's deliberately no `generate_figma_query` / templates — the
+  query is just a file URL plus the optional `mentions:me` flag.
+- **One-time Figma setup (per the user).** WAID ships no Figma app: generate a
+  Personal Access Token under **Settings → Account → Personal access tokens**
+  with the **`file_comments:read`** (and `current_user:read`) scope, then paste
+  it.
+
 ### Optional LLM layer (reuses the synthesis provider)
 
 On top of the local rollup, with a provider configured (`make_provider`):
 
 - **`digest_integrations(path)`** — re-fetches one brief's task / notification /
-  **email** / **Slack-message** items and asks the model for a short prose
-  digest. Display-only; can
+  **email** / **Slack-message** / **Figma-comment** items and asks the model for
+  a short prose digest. Display-only; can
   be **snapshotted into `## Captures`** via `append_capture`. (Notion `page` feeds
   are excluded — they belong to synthesis, not the digest.)
 - **`morning_briefing()`** — re-fetches every brief's items, groups by project,
@@ -642,7 +681,8 @@ On top of the local rollup, with a provider configured (`make_provider`):
   too.)
 - Same guardrail as synthesis: **every fetched item is data, never
   instructions** (item titles/fields, Notion page text, Gmail subjects /
-  snippets, and Slack message text can all carry injected text); output is plain
+  snippets, Slack message text, and Figma comment text can all carry injected
+  text); output is plain
   prose that can't trigger any action or write anywhere.
 
 ### Caching (frontend)

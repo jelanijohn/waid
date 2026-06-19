@@ -87,6 +87,18 @@ export const credentialHelp: Record<string, CredentialHelp> = {
     note: "WAID needs a user token (xoxp-…), not a bot token — search runs as you.",
     docsUrl: "https://api.slack.com/authentication/token-types#user",
   },
+  figma: {
+    title: "Figma personal access token",
+    steps: [
+      "Open Figma → Settings → Account → “Personal access tokens” (or figma.com/developers/apps).",
+      "Click “Generate new token” and name it (e.g. “WAID”).",
+      "Grant the “file_comments:read” scope (and “current_user:read” for the @-me filter).",
+      "Copy the token and paste it here.",
+    ],
+    scopes: ["file_comments:read", "current_user:read"],
+    note: "A read-only user token (sent as X-Figma-Token). A feed is scoped to one file URL/key — Figma has no cross-file comment search. Add `mentions:me` to the query to keep only comments that tag you (best-effort name match: it can miss renamed/group mentions and catch your name typed in prose).",
+    docsUrl: "https://developers.figma.com/docs/rest-api/comments-endpoints/",
+  },
   gmail: {
     title: "Connect Gmail",
     steps: [

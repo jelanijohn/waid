@@ -19,6 +19,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 pub mod asana;
+pub mod figma;
 pub mod github;
 pub mod gmail;
 pub mod jira;
@@ -38,6 +39,7 @@ pub enum Provider {
     Notion,
     Gmail,
     Slack,
+    Figma,
 }
 
 // --- Shared HTTP helpers (used by every provider submodule) ---------------
@@ -190,6 +192,7 @@ pub async fn fetch(
         Provider::Notion => notion::fetch(conn, sel, token).await?,
         Provider::Gmail => gmail::fetch(conn, sel, token).await?,
         Provider::Slack => slack::fetch(conn, sel, token).await?,
+        Provider::Figma => figma::fetch(conn, sel, token).await?,
     };
     let summary = summarize(&items);
     Ok(IntegrationFetch {
@@ -210,6 +213,7 @@ pub async fn validate(conn: &Connection, token: &str) -> Result<(), String> {
         Provider::Notion => notion::validate(conn, token).await,
         Provider::Gmail => gmail::validate(conn, token).await,
         Provider::Slack => slack::validate(conn, token).await,
+        Provider::Figma => figma::validate(conn, token).await,
     }
 }
 

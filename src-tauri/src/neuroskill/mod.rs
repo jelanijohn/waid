@@ -4,9 +4,9 @@
 //! pure/network-only (never touches disk), whereas NeuroSkill reads **local
 //! SQLite**. It reads two tables read-only (`eeg_timeseries` + `labels`, the only
 //! `SELECT`s issued — see the read-scope guard test) and performs exactly one
-//! write, the `label` WebSocket command (`ws.rs`). It never links or vendors any
-//! NeuroSkill/GPL code — the integration lives strictly at the process/file
-//! boundary.
+//! write, the `label` command, over the daemon's local HTTP API (`client.rs`).
+//! It never links or vendors any NeuroSkill/GPL code — the integration lives
+//! strictly at the process/file boundary.
 //!
 //! Pipeline (mirrors `## Activity`): read labels → pair into session intervals →
 //! filter to the rolling window → read EEG epochs per interval → deterministic
@@ -14,18 +14,18 @@
 //! upserts it into the `waid:mind` marked block. No LLM, no nondeterminism.
 
 pub mod aggregate;
+pub mod client;
 pub mod eeg;
 pub mod labels;
-pub mod ws;
 
 use std::path::{Path, PathBuf};
 
 use crate::provider::Connection;
 pub use aggregate::{MindState, Window};
 
-/// Default NeuroSkill WebSocket endpoint (localhost, fixed port; not the public
-/// docs' `0.0.0.0`/random-port). Overridable per connection for WSL2↔host.
-pub const DEFAULT_WS_URL: &str = "ws://127.0.0.1:8375";
+/// Default NeuroSkill daemon HTTP origin (localhost, the daemon's default port).
+/// Overridable per connection via `ws_url` for the WSL2↔Windows-host split.
+pub const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:18444";
 
 /// Default data directory: the WSL2-translated Windows AppData path. Overridable
 /// per connection (the same Windows-host/WSL2 split handled for Gmail OAuth).
@@ -52,14 +52,66 @@ pub(crate) fn open_ro(db_path: &Path) -> Result<rusqlite::Connection, String> {
     .map_err(|e| format!("could not open {} read-only: {e}", db_path.display()))
 }
 
-/// The WebSocket endpoint for a NeuroSkill connection (override or default).
-pub fn ws_url(conn: &Connection) -> String {
-    conn.ws_url
+/// The daemon HTTP origin (`http://host[:port]`) for a NeuroSkill connection: the
+/// `ws_url` override normalised to HTTP, or the default. NeuroSkill speaks the
+/// same command set over WebSocket and HTTP; WAID uses HTTP, so a `ws://` (or
+/// bare `host:port`) override is accepted and treated as the same host/port. Any
+/// path is dropped — the command endpoint is always the origin root. Pure.
+pub fn http_base(conn: &Connection) -> String {
+    let raw = conn
+        .ws_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    match raw {
+        None => DEFAULT_ENDPOINT.to_string(),
+        Some(s) => {
+            let authority = s
+                .strip_prefix("ws://")
+                .or_else(|| s.strip_prefix("wss://"))
+                .or_else(|| s.strip_prefix("http://"))
+                .or_else(|| s.strip_prefix("https://"))
+                .unwrap_or(s);
+            let authority = authority.split('/').next().unwrap_or(authority);
+            format!("http://{authority}")
+        }
+    }
+}
+
+/// Resolve the daemon bearer-token file path: the connection's `token_path`
+/// override, else the OS default (`$XDG_CONFIG_HOME` / `~/.config`,
+/// `%APPDATA%` on Windows, `~/Library/Application Support` on macOS) +
+/// `skill/daemon/auth.token`. `None` only if no home/config dir can be resolved.
+pub fn token_path(conn: &Connection) -> Option<PathBuf> {
+    conn.token_path
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .unwrap_or(DEFAULT_WS_URL)
-        .to_string()
+        .map(PathBuf::from)
+        .or_else(default_token_path)
+}
+
+fn default_token_path() -> Option<PathBuf> {
+    let config = if let Some(x) = std::env::var_os("XDG_CONFIG_HOME") {
+        PathBuf::from(x)
+    } else if cfg!(target_os = "windows") {
+        PathBuf::from(std::env::var_os("APPDATA")?)
+    } else if cfg!(target_os = "macos") {
+        PathBuf::from(std::env::var_os("HOME")?).join("Library/Application Support")
+    } else {
+        PathBuf::from(std::env::var_os("HOME")?).join(".config")
+    };
+    Some(config.join("skill").join("daemon").join("auth.token"))
+}
+
+/// Load the daemon bearer token for a connection (trimmed). `None` if no path
+/// resolves or the file is missing/empty — the caller then fires unauthenticated
+/// (which a no-auth daemon accepts; an auth daemon rejects with a clear 401).
+pub fn load_token(conn: &Connection) -> Option<String> {
+    let p = token_path(conn)?;
+    let s = std::fs::read_to_string(p).ok()?;
+    let s = s.trim().to_string();
+    (!s.is_empty()).then_some(s)
 }
 
 /// The data directory for a NeuroSkill connection (override or default).
@@ -117,9 +169,9 @@ pub fn compute_mind_state(
     Ok(aggregate::aggregate(window, &sessions, now))
 }
 
-/// Fire one `label` WebSocket command (the only write). Best-effort.
-pub async fn fire_session_label(ws_url: &str, text: &str) -> Result<(), String> {
-    ws::fire_label(ws_url, text).await
+/// Fire one `label` command at the daemon (the only write). Best-effort.
+pub async fn fire_session_label(base: &str, token: Option<&str>, text: &str) -> Result<(), String> {
+    client::fire_label(base, token, text).await
 }
 
 /// Render the `## Mind State` region body (numbers + WAID-formatted times only —
@@ -264,6 +316,31 @@ mod tests {
         );
         // Junk tokens ignored, default window kept.
         assert_eq!(parse_mind_query(Some("garbage"), "solaris"), (Window::D14, "solaris".to_string()));
+    }
+
+    #[test]
+    fn http_base_normalises_overrides() {
+        let conn = |ws: Option<&str>| Connection {
+            id: "n".into(),
+            provider: crate::provider::Provider::Neuroskill,
+            label: "NeuroSkill".into(),
+            base_url: None,
+            account: None,
+            repos: None,
+            ws_url: ws.map(String::from),
+            data_dir: None,
+            token_path: None,
+        };
+        // No override → default HTTP origin.
+        assert_eq!(http_base(&conn(None)), DEFAULT_ENDPOINT);
+        // A back-compat `ws://` override → same host/port over HTTP, path dropped.
+        assert_eq!(http_base(&conn(Some("ws://127.0.0.1:18444/"))), "http://127.0.0.1:18444");
+        assert_eq!(http_base(&conn(Some("ws://host:9000/labels"))), "http://host:9000");
+        // An `http://` override is kept; a bare `host:port` is accepted.
+        assert_eq!(http_base(&conn(Some("http://10.0.0.5:18444"))), "http://10.0.0.5:18444");
+        assert_eq!(http_base(&conn(Some("127.0.0.1:18444"))), "http://127.0.0.1:18444");
+        // Whitespace-only override → default.
+        assert_eq!(http_base(&conn(Some("   "))), DEFAULT_ENDPOINT);
     }
 
     #[test]

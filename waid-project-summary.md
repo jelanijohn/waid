@@ -171,7 +171,7 @@ Registered in `src-tauri/src/lib.rs`, implemented in `commands.rs`:
 | `connect_gmail` | **(PM, Gmail)** Run the Google OAuth desktop loopback + PKCE flow for one Gmail account (opens the browser, captures consent), store the account-scoped grant in the keyring (`gmail.oauth:<email>`), return the connected email |
 | `fetch_integration` | **(PM)** Fetch live items for one of a brief's selectors; token loaded internally from the keyring |
 | `sync_mind_state` | **(NeuroSkill)** Regenerate a brief's deterministic `## Mind State` region (marker `waid:mind`) from NeuroSkill's local SQLite (read-only); mirrors `sync_brief`. No LLM |
-| `mark_brief_session` | **(NeuroSkill)** Fire a `waid:brief=<slug>:(start\|end)` session label over NeuroSkill's local WebSocket (the only write). Best-effort; a no-op for briefs without a NeuroSkill connection |
+| `mark_brief_session` | **(NeuroSkill)** Fire a `waid:brief=<slug>:(start\|end)` session label via an authenticated `POST` to the daemon's local HTTP API (bearer token from the daemon's `auth.token`; the only write). Best-effort; a no-op for briefs without a NeuroSkill connection |
 | `digest_integrations` | **(PM, LLM)** Prose digest of *one* brief's live items (display-only; Notion `page` + NeuroSkill `mind` feeds excluded) |
 | `morning_briefing` | **(PM, LLM)** Cross-brief "morning briefing" over every brief's live items (Notion `page` + NeuroSkill `mind` feeds excluded) |
 | `generate_gmail_query` | **(PM, Gmail, LLM)** Turn a plain-English description into a single Gmail search query via the synthesis provider; display-only (the result drops into a feed's `query` field — nothing fetched or written) |
@@ -242,8 +242,9 @@ interface Connection {           // account-level metadata; token lives in the k
   baseUrl?: string | null;       // Jira cloud instance / GitHub Enterprise base URL
   account?: string | null;       // e.g. a Jira email — or the OAuth'd Gmail address; never the token
   repos?: string[] | null;       // GitHub only: owner/name repos this connection's feeds are scoped to (required for GitHub)
-  wsUrl?: string | null;         // NeuroSkill only: WebSocket endpoint for the label write (default ws://127.0.0.1:8375)
+  wsUrl?: string | null;         // NeuroSkill only: daemon endpoint for the label write (default http://127.0.0.1:18444; ws:// accepted)
   dataDir?: string | null;       // NeuroSkill only: dir holding activity.sqlite / labels.sqlite (default WSL-translated AppData)
+  tokenPath?: string | null;     // NeuroSkill only: path to the daemon's auth.token file (default OS …/skill/daemon/auth.token); read at call time, not stored
 }
 interface BriefIntegration {     // a brief's selector referencing one of its connections
   connection: string;            // -> Connection.id
@@ -416,12 +417,12 @@ waid/
 │       │   ├── gmail.rs          # recent emails (metadata-only) → items; pure, takes a bearer token
 │       │   ├── slack.rs          # search.messages → items; token-paste, check_ok maps 200-OK errors
 │       │   └── figma.rs          # one file's comments → items; token-paste (X-Figma-Token), optional @-me filter
-│       └── neuroskill/           # NeuroSkill EEG → ## Mind State (local SQLite read + WS write; NOT in provider/)
-│           ├── mod.rs            # public API: read-only DB opener, compute/render mind state, read-scope guard
+│       └── neuroskill/           # NeuroSkill EEG → ## Mind State (local SQLite read + HTTP write; NOT in provider/)
+│           ├── mod.rs            # public API: read-only DB opener, compute/render mind state, http_base/token, read-scope guard
 │           ├── aggregate.rs      # pure, fixture-tested rollup: labels→intervals, window filter, epochs→MindState
 │           ├── labels.rs         # read-only `labels` query + pure waid:brief=<slug> marker parsing
 │           ├── eeg.rs            # read-only `eeg_timeseries` window query + pure metric-JSON extraction
-│           └── ws.rs             # hand-rolled WebSocket `label` write (no SDK; the only write)
+│           └── client.rs         # authenticated HTTP `label` write (reqwest POST + bearer; the only write)
 ├── briefs/                       # sample briefs (dev + bundled seed; generic placeholders)
 ├── CLAUDE.md                     # guidance for Claude Code working in the repo
 └── README.md
@@ -693,9 +694,9 @@ body region** (`## Mind State`, marker `waid:mind`, a sibling of `## Activity`),
 **not** panel items — so it doesn't dispatch through `provider/` (documented
 pure/network-only). It lives in its own `src-tauri/src/neuroskill/` module, which
 reads **local SQLite read-only** and performs exactly one write, NeuroSkill's
-`label` WebSocket command. It never links/vendors any NeuroSkill/GPL code — the
-integration is strictly at the process/file boundary (NeuroSkill is GPL-3.0; WAID
-is MIT).
+`label` command over the daemon's local HTTP API. It never links/vendors any
+NeuroSkill/GPL code — the integration is strictly at the process/file boundary
+(NeuroSkill is GPL-3.0; WAID is MIT).
 
 - **Two features, one join key.** (A) `## Mind State` shows a rolling-window
   (default **14d**; `today|7d|14d|30d`) aggregate of EEG focus/engagement/mood/
@@ -703,13 +704,24 @@ is MIT).
   WAID writes `waid:brief=<slug>:start`/`:end` labels into NeuroSkill at
   launch/close so attribution is **authored, never guessed** from window/terminal
   data. The shared join key is the brief slug (file stem; overridable via the
-  selector's `slug:` token).
-- **No token, no keyring.** Localhost, no auth — `save_brief_connection` and
-  `resolve_connection_token` route NeuroSkill through the same token-optional path
-  as Gmail. The connection carries optional `wsUrl` / `dataDir` overrides for the
-  WSL2↔Windows-host split.
+  selector's `slug:` token). Labels are matched on the **exact**
+  `waid:brief=<slug>:` prefix, so a sibling brief's sessions never attribute here;
+  `eeg_timeseries` itself has **no project column** — an epoch belongs to a brief
+  solely by timestamp containment in one of its paired intervals. Corollary: a
+  forgotten `:end` attributes up to the 4h cap (or `now`) to that brief.
+- **Token from a file, not the keyring.** The daemon gates its API with a bearer
+  token it writes to `<config>/skill/daemon/auth.token` (`$XDG_CONFIG_HOME`/`~/.config`,
+  `%APPDATA%` on Windows, `~/Library/Application Support` on macOS). WAID reads that
+  file at call time (`neuroskill::load_token`) and sends `Authorization: Bearer` on
+  the write — it never stores the token. So `save_brief_connection` /
+  `resolve_connection_token` still route NeuroSkill through the same **keyring**-optional
+  path as Gmail (no `bconn:` secret). The connection carries optional `wsUrl`
+  (daemon URL), `dataDir`, and `tokenPath` overrides for the WSL2↔Windows-host split
+  (on WSL2 the daemon writes its token on the Windows side, so `tokenPath` points at
+  the `/mnt/c/.../AppData/Roaming/skill/daemon/auth.token`).
 - **Pipeline (mirrors `## Activity`, no LLM).** `sync_mind_state(path)`: read
-  `labels` → pair `:start`/`:end` into intervals (unclosed start capped at 4h) →
+  `labels` → pair `:start`/`:end` into intervals (unclosed start capped at 4h or
+  `now`) →
   rolling-window filter → read `eeg_timeseries` epochs per interval → deterministic
   rollup (`aggregate.rs`, the fixture-tested core: means, trend = first-half vs
   second-half, peak-focus block) → render numbers → `upsert_marked_block(waid:mind)`.
@@ -725,13 +737,16 @@ is MIT).
   formatted times — raw `labels.text` is never echoed (injection surface; WAID
   controls only the `waid:brief=` format).
 - **The write side (`mark_brief_session`).** Fires `waid:brief=<slug>:(start|end)`
-  over the local WebSocket — hand-rolled in `ws.rs` (raw `tokio::net::TcpStream`
-  handshake + one masked text frame; no WS SDK, the same style as the Gmail OAuth
-  loopback). The frontend fires `:start` on the first launch/open action and via an
-  explicit **Start/End session** button; `:end` fires from that button and, as
-  safety nets, on navigating away (`onDestroy`), with the 4h interval cap as the
-  final backstop. Best-effort: an unreachable daemon is an info toast, never a
-  blocked launch; a brief with no NeuroSkill connection is a silent no-op.
+  as an authenticated `POST /` to the daemon's local HTTP API (`client.rs`: a
+  `reqwest` POST of `{"command":"label","text":…}` + `Authorization: Bearer`,
+  default origin `http://127.0.0.1:18444`). It handles a `401` (missing/wrong token)
+  and an in-band `{"ok":false}` as friendly errors. The frontend fires `:start` on
+  the first launch/open action and via an explicit **Start/End session** button;
+  `:end` fires from that button and, as safety nets, on navigating away
+  (`onDestroy`), with the 4h interval cap as the final backstop. The store surfaces
+  a failed `:start` as a toast (and clears the optimistic "active" state); the
+  automatic `onDestroy` `:end` stays silent. Best-effort: an unreachable daemon
+  never blocks the launch; a brief with no NeuroSkill connection is a silent no-op.
 - **A body region, not panel items.** `mind` selectors are excluded from
   `digest_integrations` / `morning_briefing` (alongside Notion `page`). The panel
   renders them as a slim status row with a refresh that calls `sync_mind_state`,
@@ -969,8 +984,9 @@ The visual layer has a named theme and shares branding with What's Next.
   `gmail.client_id` / `gmail.client_secret` (bring-your-own Google Desktop
   client), and `gmail.oauth:<account-email>` (the account-scoped grant, shared
   across briefs — not `bconn:`-keyed) — service `com.jelanijohn.waid`.
-  (**NeuroSkill stores nothing** — it's localhost with no auth, so it has no
-  keyring entry at all, like Gmail's lack of a `bconn:` token.)
+  (**NeuroSkill keeps no keyring entry** — the daemon's bearer token is read at
+  call time from its own on-disk `auth.token` and never stored by WAID, so like
+  Gmail it has no `bconn:` token.)
 - **Appearance** — light/dark, accent, sidebar list style (Rows / Compact /
   Rocks), density, and the **Brief layout** control (two-column rail / body-first
   / quiet-top), all from the **View & appearance** menu in the titlebar.

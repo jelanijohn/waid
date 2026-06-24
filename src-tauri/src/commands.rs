@@ -4028,9 +4028,10 @@ pub async fn mark_brief_session(path: String, phase: String) -> Result<(), Strin
         .find(|s| s.kind == "mind")
         .and_then(|s| s.query.as_deref());
     let (_window, slug) = neuroskill::parse_mind_query(sel_query, &brief_slug(&brief));
-    let ws_url = neuroskill::ws_url(conn);
+    let base = neuroskill::http_base(conn);
+    let token = neuroskill::load_token(conn);
     let text = format!("waid:brief={slug}:{phase}");
-    neuroskill::fire_session_label(&ws_url, &text).await
+    neuroskill::fire_session_label(&base, token.as_deref(), &text).await
 }
 
 #[cfg(test)]
@@ -4680,6 +4681,7 @@ mod tests {
             repos: None,
             ws_url: None,
             data_dir: None,
+            token_path: None,
         }];
         let integs = vec![BriefIntegration {
             connection: "linear-work".into(),

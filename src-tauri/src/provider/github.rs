@@ -449,6 +449,7 @@ mod tests {
             repos: None,
             ws_url: None,
             data_dir: None,
+            token_path: None,
         }
     }
 

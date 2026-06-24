@@ -110,15 +110,23 @@ pub struct Connection {
     /// projects (a token's repo grant can't prevent public search from doing so).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repos: Option<Vec<String>>,
-    /// NeuroSkill only: the local WebSocket endpoint the `label` write targets
-    /// (default `ws://127.0.0.1:8375`). Overridable for the WSL2↔Windows-host
-    /// split. Not a secret.
+    /// NeuroSkill only: the local daemon endpoint the `label` write targets
+    /// (default `http://127.0.0.1:18444`). A `ws://host:port` value is accepted
+    /// for back-compat and treated as the same host/port over HTTP. Overridable
+    /// for the WSL2↔Windows-host split. Not a secret.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ws_url: Option<String>,
     /// NeuroSkill only: the directory holding `activity.sqlite` / `labels.sqlite`
     /// (default the WSL-translated AppData path). Overridable. Not a secret.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_dir: Option<String>,
+    /// NeuroSkill only: path to the daemon's bearer-token file (default the OS
+    /// `…/skill/daemon/auth.token`). The daemon writes this file and gates its
+    /// API on the token; on WSL2 it lives on the Windows host, so it's overridable
+    /// (e.g. the `/mnt/c/.../AppData/Roaming/skill/daemon/auth.token` path). WAID
+    /// reads it at call time — not stored by WAID, not a keyring secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_path: Option<String>,
 }
 
 /// A brief's reference to a connection plus a provider-specific selector. Parsed

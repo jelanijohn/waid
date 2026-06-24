@@ -60,12 +60,18 @@ export interface Connection {
    *  Empty/absent → every repo the token can reach (so a brief never pulls in
    *  commits/PRs from unrelated projects). */
   repos?: string[] | null;
-  /** NeuroSkill only: local WebSocket endpoint for the `label` write
-   *  (default ws://127.0.0.1:8375). Overridable for WSL2↔Windows-host. */
+  /** NeuroSkill only: local daemon endpoint for the `label` write
+   *  (default http://127.0.0.1:18444). A ws:// value is accepted for
+   *  back-compat. Overridable for WSL2↔Windows-host. */
   wsUrl?: string | null;
   /** NeuroSkill only: directory holding activity.sqlite / labels.sqlite
    *  (default the WSL-translated AppData path). Not a secret. */
   dataDir?: string | null;
+  /** NeuroSkill only: path to the daemon's bearer-token file
+   *  (default the OS …/skill/daemon/auth.token). On WSL2 the token lives on
+   *  the Windows host, so this is overridable. Read at call time; not a
+   *  secret WAID stores. */
+  tokenPath?: string | null;
 }
 
 /** A brief's reference to a connection plus a provider-specific selector. */

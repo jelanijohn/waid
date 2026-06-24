@@ -229,14 +229,20 @@ class ProjectStore {
     return updated;
   }
 
-  /** Fire a NeuroSkill session label (best-effort; swallows errors so launch /
-   *  navigation is never blocked). No-op for briefs without a NeuroSkill conn. */
-  async markSession(path: string, phase: "start" | "end"): Promise<void> {
+  /** Fire a NeuroSkill session label (best-effort; never throws, so launch /
+   *  navigation is never blocked). Returns `false` when the label could not be
+   *  fired — e.g. the NeuroSkill daemon is unreachable — so the caller can
+   *  surface it; `true` on success (including the no-op for briefs without a
+   *  NeuroSkill connection, which the backend reports as success). */
+  async markSession(path: string, phase: "start" | "end"): Promise<boolean> {
     try {
       await markBriefSessionCmd(path, phase);
+      return true;
     } catch (e) {
-      // The daemon may be down — that's fine, there's no session to mark.
+      // The daemon may be down / unreachable — let the caller decide whether
+      // to warn the user; never block the launch on it.
       console.info("mark_brief_session:", e);
+      return false;
     }
   }
 

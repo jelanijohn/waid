@@ -111,23 +111,45 @@
   // — the backend's session cap is the final backstop.
   let hasNeuro = $derived(brief.connections.some((c) => c.provider === "neuroskill"));
   let sessionActive = $state(false);
+  // Warn at most once per "daemon down" stretch so repeatedly launching into
+  // work doesn't spam toasts; cleared the moment a label fires successfully.
+  let neuroWarned = $state(false);
 
-  function startSession() {
+  async function startSession() {
     if (!hasNeuro || sessionActive) return;
     sessionActive = true;
-    projects.markSession(brief.path, "start");
+    const ok = await projects.markSession(brief.path, "start");
+    if (ok) {
+      neuroWarned = false;
+    } else {
+      // The label never reached NeuroSkill — don't leave a false "recording"
+      // state, and tell the user so tracking isn't silently lost.
+      sessionActive = false;
+      if (!neuroWarned) {
+        neuroWarned = true;
+        toasts.error(
+          "Couldn't reach NeuroSkill — session not started, so EEG won't attribute to this project. Is the NeuroSkill app running?",
+        );
+      }
+    }
   }
 
   function endSession() {
     if (!sessionActive) return;
     sessionActive = false;
-    projects.markSession(brief.path, "end");
+    projects.markSession(brief.path, "end").then((ok) => {
+      if (!ok)
+        toasts.error(
+          "Couldn't reach NeuroSkill — the session end wasn't recorded (it auto-closes after 4h).",
+        );
+    });
   }
 
   // Safety net: end an open session when this brief is closed/switched away
-  // (the component remounts per selection under {#key brief.path}) or on app close.
+  // (the component remounts per selection under {#key brief.path}) or on app
+  // close. Silent — navigating away shouldn't pop a toast; the 4h cap backstops it.
   onDestroy(() => {
-    if (sessionActive) projects.markSession(brief.path, "end");
+    if (sessionActive) void projects.markSession(brief.path, "end");
   });
 
   async function openLink(url: string) {

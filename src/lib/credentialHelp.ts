@@ -135,14 +135,14 @@ export const credentialHelp: Record<string, CredentialHelp> = {
     docsUrl: "https://console.anthropic.com/settings/keys",
   },
   neuroskill: {
-    title: "NeuroSkill (local, no token)",
+    title: "NeuroSkill (local)",
     steps: [
       "Make sure the NeuroSkill desktop app / daemon is running on this machine.",
-      "No token is needed — WAID talks to it over localhost.",
       "Optional: set the data directory if your NeuroSkill data isn't at the default AppData path.",
-      "Optional: set the WebSocket URL if the daemon listens somewhere other than ws://127.0.0.1:8375.",
+      "Optional: set the daemon URL if it listens somewhere other than http://127.0.0.1:18444.",
+      "Optional: set the auth token path if the daemon's auth.token file isn't at the default OS location.",
     ],
-    note: "WAID reads NeuroSkill's local SQLite read-only (only the EEG timeseries + your WAID session labels) to build a deterministic ## Mind State region, and writes only a session label over the local WebSocket when you launch/end work. On WSL2 the daemon runs on the Windows host — you may need to point the WebSocket URL at the host IP and the data directory at the /mnt/c AppData path.",
+    note: "WAID reads NeuroSkill's local SQLite read-only (only the EEG timeseries + your WAID session labels) to build a deterministic ## Mind State region, and writes a session label to the daemon's local API (authenticated with the daemon's own bearer token) when you launch/end work. On WSL2 the daemon runs on the Windows host — point the daemon URL, data directory, and token path at the Windows-host paths (the token file lives under AppData/Roaming/skill/daemon).",
     docsUrl: "https://github.com/neuroskill/neuroskill",
   },
   "webhook-secret": {

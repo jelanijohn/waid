@@ -38,8 +38,9 @@
   let baseUrl = $state("");
   let account = $state("");
   let repos = $state(""); // GitHub: comma-separated owner/name list (optional)
-  let wsUrl = $state(""); // NeuroSkill: WebSocket override (optional)
+  let wsUrl = $state(""); // NeuroSkill: daemon endpoint override (optional)
   let dataDir = $state(""); // NeuroSkill: data-dir override (optional)
+  let tokenPath = $state(""); // NeuroSkill: auth-token file path override (optional)
   let id = $state(""); // only surfaced on a slug collision
 
   // --- choose (step 2) form, targeting one connection ------------------------
@@ -223,6 +224,7 @@
     repos = p === "github" ? githubReposFromLinks() : "";
     wsUrl = "";
     dataDir = "";
+    tokenPath = "";
     id = "";
     view = "connect";
   }
@@ -322,6 +324,7 @@
         account: null,
         wsUrl: wsUrl.trim() || null,
         dataDir: dataDir.trim() || null,
+        tokenPath: tokenPath.trim() || null,
       };
       const updated = await saveBriefConnection(brief.path, conn, "");
       projects.upsert(updated);
@@ -804,8 +807,10 @@
             Google OAuth client in Settings first (one-time).
           </p>
         {:else if provider === "neuroskill"}
-          <!-- NeuroSkill is localhost with no auth — no token. Optional overrides
-               for the WSL2↔Windows-host split, then an in-body connect button. -->
+          <!-- NeuroSkill is localhost. Reads are file-based; the one write (the
+               session label) hits the daemon's local API, which is gated by a
+               bearer token the daemon writes to disk. Optional overrides cover the
+               WSL2↔Windows-host split, then an in-body connect button. -->
           <div class="mb-[5px] flex items-center justify-between text-[11px] text-[var(--fg3)]">
             Local connection
             <CredentialHelp topic="neuroskill" />
@@ -820,12 +825,21 @@
             />
           </label>
           <label class="mb-3 flex flex-col gap-[5px]">
-            <span class="text-[11px] text-[var(--fg3)]">WebSocket URL (optional)</span>
+            <span class="text-[11px] text-[var(--fg3)]">Daemon URL (optional)</span>
             <input
               class="h-[34px] rounded-[9px] border px-[10px] font-mono text-[12px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
               style="background: var(--input-bg); border-color: var(--border);"
-              placeholder="ws://127.0.0.1:8375"
+              placeholder="http://127.0.0.1:18444"
               bind:value={wsUrl}
+            />
+          </label>
+          <label class="mb-3 flex flex-col gap-[5px]">
+            <span class="text-[11px] text-[var(--fg3)]">Auth token path (optional)</span>
+            <input
+              class="h-[34px] rounded-[9px] border px-[10px] font-mono text-[12px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
+              style="background: var(--input-bg); border-color: var(--border);"
+              placeholder="/mnt/c/Users/you/AppData/Roaming/skill/daemon/auth.token"
+              bind:value={tokenPath}
             />
           </label>
           <button
@@ -837,9 +851,10 @@
             {busy ? "Connecting…" : "Connect NeuroSkill"}
           </button>
           <p class="mt-2 text-[10.5px] leading-[1.5] text-[var(--fg3)]">
-            No token needed. WAID reads NeuroSkill's local data <strong class="text-[var(--fg2)]">read-only</strong>
-            to build a deterministic <code>## Mind State</code> region, and only writes a session label over
-            localhost when you launch/end work. Leave the fields blank to use the defaults.
+            WAID reads NeuroSkill's local data <strong class="text-[var(--fg2)]">read-only</strong>
+            to build a deterministic <code>## Mind State</code> region, and writes a session label to the
+            local daemon when you launch/end work. Leave the fields blank to use the defaults; on WSL2 point
+            them at the Windows-host paths (the daemon writes its auth token on the Windows side).
           </p>
         {:else}
           <label class="mb-3 flex flex-col gap-[5px]">

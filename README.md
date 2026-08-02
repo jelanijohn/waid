@@ -1,548 +1,123 @@
 # WAID — What Am I Doing?
 
-A local-first desktop dashboard for managing your active projects. WAID is the
-**macro** companion to *What's Next?* (which answers "what task should I work on
-right now?"). WAID answers: **"what's the state of all my projects?"**
+A local-first desktop dashboard for the macro state of all your projects.
+Where *What's Next?* answers "what task now?", WAID answers **"what's the
+state of everything?"**
 
-It lists your projects, renders each project's context **brief**, and lets you
-launch into work — open a Claude project, a repo, fire a webhook, or jot a quick
-note. It can pull live state from a project's integrations (GitHub, plus
-project-management connectors: Linear, Jira, Asana, GitHub, Notion, Gmail, Slack, and Figma,
-plus a local NeuroSkill EEG link that writes a `## Mind State` region),
-optionally synthesize prose with a local or cloud LLM, and bootstrap a new
-project's brief from a folder, a GitHub repo, an interview, or a pasted prompt.
-Personal tool, not a team tool.
+Each project is one markdown file — a **brief**. WAID lists them, renders each
+brief, pulls live state from its integrations, and lets you launch into work:
+open links, fire webhooks, jot quick captures. Optionally, a local or cloud
+LLM synthesizes a prose summary. Single-user, local, desktop-only by design.
 
-## Why it's built this way
+![WAID — project list, brief, and live-state panel](docs/screenshots/dashboard-dark.png)
 
-- **Local-first, for real.** No server, no cloud DB, no auth. Just a desktop app
-  reading markdown files from a folder on disk.
-- **Portable forever.** Each project is one plain `.md` file with YAML
-  frontmatter + a markdown body. If WAID disappears, your briefs still open in
-  any editor.
-- **Obsidian-native.** Standard frontmatter + standard markdown only — no
-  proprietary format. Point WAID's briefs folder at an Obsidian vault (or any
-  subfolder of one) and it scans recursively, renders `[[wikilinks]]`, shows
-  backlinks, and can jump you straight into Obsidian.
+![A connected brief — synthesized current state, decisions log, and live PM feeds](docs/screenshots/connected-panel-dark.png)
 
-## Stack
+## Why
 
-- [Tauri 2](https://v2.tauri.app/) — desktop shell + Rust backend
-- [SvelteKit](https://svelte.dev/) (Svelte 5, TypeScript) — frontend (SPA mode)
-- [Tailwind CSS v4](https://tailwindcss.com/) — styling
-- `marked` + `DOMPurify` — markdown rendering
-- `reqwest` (plain JSON, no provider SDKs) — PM integrations + sync
-- OS keyring — secret storage for integration tokens / API keys
-- Plain `.md` files on disk — data
+- **Local-first, for real** — no server, no cloud DB, no auth. Just markdown
+  files in a folder on disk.
+- **Portable forever** — plain frontmatter + markdown. If WAID disappears,
+  your briefs still open in any editor.
+- **Obsidian-native** — point the briefs folder at a vault: wikilinks render,
+  backlinks show, and a button deep-links into Obsidian.
+  See [docs/obsidian.md](docs/obsidian.md).
 
-## Prerequisites
+## Quick start
 
-- **Node** 18+ and **pnpm** (`corepack enable pnpm`)
-- **Rust** (stable) via [rustup](https://rustup.rs)
-- Platform build deps for Tauri — see
-  [tauri.app/start/prerequisites](https://v2.tauri.app/start/prerequisites/).
-  On Debian/Ubuntu:
-
-  ```bash
-  sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
-    libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev pkg-config
-  ```
-
-## Run
+Prerequisites: **Node 18+** with **pnpm**, **Rust** (stable), and Tauri's
+platform deps — see
+[tauri.app/start/prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ```bash
 pnpm install
-pnpm tauri dev      # launches the desktop app with hot reload
-pnpm tauri:wsl      # same, but sets WEBKIT_DISABLE_DMABUF_RENDERER=1 for WSL
+pnpm tauri dev      # desktop app with hot reload (pnpm tauri:wsl under WSL)
+pnpm tauri build    # native bundle in src-tauri/target/release/bundle
 ```
 
-## Build
+`pnpm check` type-checks the frontend; `cargo test` (from `src-tauri/`) runs
+the backend tests.
 
-```bash
-pnpm tauri build    # produces a native bundle in src-tauri/target/release/bundle
-```
+## The briefs folder
 
-Other useful scripts:
-
-```bash
-pnpm check          # type-check the frontend (svelte-check)
-cargo test          # run backend unit tests (from src-tauri/)
-```
-
-## Data: the briefs folder
-
-Each project is a single markdown file. WAID reads every `.md` in the configured
-**briefs directory**.
-
-- **Default location:** `~/WAID/briefs`. On first run, if the folder is empty,
-  WAID seeds it with sample briefs so you have real content immediately.
-- **Change it:** use the **Change** link at the bottom of the sidebar to pick a
-  different folder (e.g. an Obsidian vault). The choice is saved to the app's
-  config dir.
-- This repo also keeps a `briefs/` folder with the same sample briefs, used for
-  development and as the bundled seed content.
-
-### Using an Obsidian vault
-
-Point the briefs folder at your vault (or any subfolder of it) via **Change**.
-WAID then:
-
-- **Scans recursively** — every `.md` under the folder becomes a brief, while
-  Obsidian's `.obsidian/` (and other dot-folders like `.trash/`, `.git/`) are
-  skipped.
-- **Renders `[[wikilinks]]`** in the brief body — links to other briefs are
-  clickable (they select that brief); dangling links are shown muted. Aliases
-  (`[[note|label]]`) and heading anchors (`[[note#section]]`) are supported.
-- **Shows backlinks** — a "Linked from" list of every other brief that
-  wikilinks to the current one.
-- **Opens in Obsidian** — when the folder is inside a vault, an *Open in
-  Obsidian* button deep-links the brief via `obsidian://open` so you can edit it
-  with Obsidian's full editor.
-
-#### "Open in Obsidian" — one-time setup
-
-The button uses an `obsidian://open?vault=<name>&file=<path>` deep link, which
-only works if **Obsidian already knows the vault**. Two requirements:
-
-1. **The vault has been opened in Obsidian at least once** (so it's registered).
-   If you point WAID at a vault you actively use in Obsidian, this is already
-   true and the button just works. If you've never opened the folder in
-   Obsidian, do it once — *Open folder as vault* — or you'll get a "Vault not
-   found" popup.
-2. **The vault's name matches its folder name.** WAID sends the vault root's
-   folder name (the folder containing `.obsidian/`). If you renamed the vault
-   inside Obsidian to something else, the link won't resolve.
-
-WAID can't auto-register the vault for you — there's no reliable cross-platform
-way to do that from outside Obsidian, so this stays a one-time manual step.
-
-> **WSL note:** running WAID as a Linux build under WSL while using Obsidian on
-> Windows works, but the vault must live on the **Windows** filesystem (e.g.
-> `C:\Users\you\Vault`, which WAID reads via `/mnt/c/...`). Windows Obsidian
-> can't watch a vault stored on the WSL side (`\\wsl.localhost\...`) — it fails
-> to load with an `EISDIR` error. You'll also need a URL handler such as
-> `wslview` (from the `wslu` package) so WAID can hand `obsidian://` links to
-> Windows.
-
-### Brief format
+WAID reads every `.md` in the configured briefs directory — default
+`~/WAID/briefs`, seeded with samples on first run; change it from the sidebar
+(e.g. to an Obsidian vault — it scans recursively and skips dot-folders).
 
 ```markdown
 ---
 name: Sample Web App
-status: active            # active | paused | blocked | archived (free-form; rendered as a pill)
-description: Example project brief
-tags: [sample, web, example]
+status: active            # rendered as a pill; archived briefs hide by default
+tags: [sample, web]
 links:
-  - label: Claude Project
-    url: https://claude.ai/project/xxx
   - label: GitHub
     url: https://github.com/...
 webhooks:
-  - id: deploy-staging    # stable slug; scopes the keyring secret, survives relabel
+  - id: deploy-staging
     label: Deploy staging
     url: https://...
-    method: POST          # defaults to POST if omitted
-    body: '{"env":"staging"}'   # optional; sent as JSON
-    headers:              # optional; one value may interpolate {{secret}} from the keyring
-      - name: Authorization
-        value: "Bearer {{secret}}"
-connections:              # PM connections owned by this brief (metadata only; tokens live in the keyring)
+connections:              # PM connections — metadata only; tokens live in the OS keyring
   - id: linear-personal
-    provider: linear      # linear | jira | asana | github | notion | gmail | slack | figma | neuroskill
-    label: Linear (personal)
-integrations:             # selectors referencing the connections above
+    provider: linear
+integrations:
   - connection: linear-personal
-    kind: tasks           # tasks | notifications | pulls | commits (GitHub) | page (Notion) | email (Gmail) | messages (Slack) | comments (Figma) | mind (NeuroSkill)
+    kind: tasks
     query: "assignee:me"
-    limit: 10
-last_opened: 2026-05-31T10:00:00Z
 ---
 
 # Project context
-
-The full markdown brief lives here.
+...
 ```
 
-Connection *metadata* lives on the brief (portable, Obsidian-safe); the *token*
-lives in the OS keyring, scoped per brief. See [Project-management
-integrations](#project-management-integrations-optional) below.
+Full frontmatter reference (webhook headers, `{{secret}}`, app-owned regions):
+[docs/brief-format.md](docs/brief-format.md).
 
-## Features (v1)
+## Features
 
-- **Two-pane layout** — sidebar of projects (name, status pill, last-opened) and
-  a detail pane, under a **unified titlebar** that draws the app's own window
-  chrome (breadcrumb, *Sync all*, morning briefing, and the View & appearance
-  menu). macOS keeps its native traffic lights; Windows/Linux draw their own
-  caption buttons and resize grips (the borderless, transparent window renders
-  the app inside a rounded panel with a soft drop shadow).
-- **Markdown rendering** of the brief body.
-- **Edit mode** — toggle to a raw textarea and save back to the `.md` file
-  (round-trips the whole file, so your frontmatter is never mangled). ⌘/Ctrl+S
-  saves.
-- **Brief bootstrap** — a freshly-created stub brief offers a *Generate the
-  initial brief* button with four methods: point at a local folder/repo, give a
-  GitHub URL, answer a 3-question interview, or copy/paste a handoff prompt into
-  any AI and import the result. Each produces a *proposed* brief that opens in
-  edit mode for review — nothing is written until you Save.
-- **Link buttons** open URLs in your default browser (plus *Open in Obsidian*
-  when the briefs folder is in a vault).
-- **Webhook buttons** in the brief's launch row fire GET/POST (and
-  PUT/PATCH/DELETE) requests with a toast on success/failure. Webhooks carry
-  **custom headers**; one header value may reference a keyring-backed secret via a
-  `{{secret}}` sentinel (e.g. `Authorization: Bearer {{secret}}`), resolved
-  server-side at fire time. The header *shapes* live in the brief's frontmatter
-  (edited in Edit mode); the secret lives in the OS keyring. Firing only makes an
-  HTTP request — it never writes the `.md`.
-- **Quick capture** — press **⌘/Ctrl+K** (or the global **Ctrl+Shift+Space**) to
-  pop a modal, pick a project, and append a timestamped note under its
-  `## Captures` heading.
-- **Search & status filtering** — filter the sidebar by text (**⌘/Ctrl+F**) and
-  by project status. Archived briefs are hidden by default; picking the
-  "archived" status surfaces them (the archive view).
-- **Appearance** — a settings popover for light/dark, accent color, sidebar list
-  style (Rows / Compact / Rocks), density, and a **Brief layout** control that
-  places each brief's live-state panel as a right-hand **Two-column** rail,
-  **Body-first** (below the brief), or a **Quiet-top** summary strip.
-- **Brief sync** — pull live state (open PRs/issues, last push, CI, latest
-  release) from a brief's GitHub link or explicit `sources` into a managed
-  `## Activity` block. Deterministic; frontmatter and prose are never touched.
-- **Project-management integrations** — connect a brief to **Linear, Jira,
-  Asana, GitHub, Notion, Gmail, Slack, or Figma** and the detail pane shows your
-  normalized tasks / notifications (or a Notion database's rows, recent Gmail
-  matches, matching Slack messages, or a Figma file's comments) with a local
-  rollup. Deterministic
-  and strictly additive — a failed fetch is a toast, never a write into the
-  `.md`. See [Project-management integrations](#project-management-integrations-optional).
-- **Mind State** _(optional, local)_ — connect a brief to a local **NeuroSkill**
-  EEG dashboard and a deterministic `## Mind State` region shows a rolling-window
-  (default 14d) aggregate of focus / engagement / mood over the project's
-  **labeled** work sessions. WAID authors attribution by writing session labels
-  into NeuroSkill when you launch / end work — no guessing from window or terminal
-  data. Reads NeuroSkill's local SQLite read-only (EEG + your WAID labels only);
-  the only write is a session label to the daemon's local API. No LLM; the
-  daemon's own auth token is read from disk, nothing to paste. See
-  [Mind State](#mind-state-neuroskill-optional) below.
-- **AI synthesis** _(optional)_ — when an LLM provider is configured (local
-  **Ollama** or **Anthropic**), Refresh also synthesizes a `## Current State`
-  summary and an `## Open Questions` list from the brief's links, Notion page
-  text, your `## Captures` notes, and (if connected) the NeuroSkill Mind State
-  rollup. The model only ever writes those two
-  app-owned regions — never status, links, tags, webhooks, frontmatter, or
-  Captures — and all fetched content is treated as data, never instructions. See
-  [AI synthesis](#ai-synthesis-optional) below.
-- **AI digest & morning briefing** _(optional)_ — with a provider configured,
-  generate a short prose digest of one brief's live PM items (snapshot-able into
-  `## Captures`), or a cross-brief *morning briefing* over every project's items.
-  Display-only; same data-not-instructions guard as synthesis.
-- **Secret storage in the OS keyring** — tokens/keys for authenticated
-  integrations (a GitHub token for private-repo sync, an Anthropic API key for
-  synthesis, per-brief PM connection tokens, per-brief webhook secrets, and the
-  Gmail OAuth client + account grants) live in the platform keychain, never in
-  settings or env. Keys: `github.token`, `anthropic.api_key`,
-  `bconn:<brief-path>:<id>`, `whook:<brief-path>:<id>`, `gmail.client_id` /
-  `gmail.client_secret` (the bring-your-own Google Desktop client), and
-  `gmail.oauth:<account-email>` (the account-scoped OAuth grant, shared across
-  briefs — not `bconn:`-keyed).
+- **Two-pane layout** — project sidebar (status pills, search **⌘/Ctrl+F**,
+  status filters) + detail pane, under a custom titlebar with *Sync all* and
+  the appearance menu (theme, accent, density, brief layout).
+- **Markdown rendering + edit mode** — ⌘/Ctrl+S saves; edits round-trip the
+  whole file, so frontmatter is never mangled.
+- **Brief bootstrap** — generate a new brief from a local folder, a GitHub
+  URL, a 3-question interview, or a pasted AI handoff prompt; always lands as
+  a proposal in edit mode, nothing saved until you say so.
+- **Launch row** — link buttons, *Open in Obsidian*, and webhook buttons
+  (custom headers, keyring-backed `{{secret}}`).
+- **Quick capture** — **⌘/Ctrl+K** (or global **Ctrl+Shift+Space**) appends a
+  timestamped note under a project's `## Captures`.
+- **Brief sync** — pull open PRs/issues, last push, CI, and latest release
+  from a brief's GitHub link into a managed `## Activity` block.
+  Deterministic; your prose is never touched.
+- **PM integrations** — connect a brief to **Linear, Jira, Asana, GitHub,
+  Notion, Gmail, Slack, or Figma** and see your live tasks / notifications /
+  messages / comments inline with a local rollup. Strictly additive — a failed
+  fetch is a toast, never a write. Setup guides:
+  [docs/integrations.md](docs/integrations.md).
+- **Mind State** — connect a local
+  **[NeuroSkill](https://github.com/NeuroSkill-com/skill)** EEG dashboard and get a
+  deterministic `## Mind State` region aggregating focus / engagement / mood
+  over your labeled work sessions. [docs/mind-state.md](docs/mind-state.md).
+- **AI synthesis, digests & morning briefing** _(optional)_ — with Ollama
+  (local) or Anthropic configured, Refresh writes a `## Current State` +
+  `## Open Questions` summary into app-owned regions, and you can digest one
+  brief's PM items or brief across all projects. All fetched content is data,
+  never instructions. [docs/synthesis.md](docs/synthesis.md).
+- **Secrets in the OS keyring** — every token, key, and grant lives in the
+  platform keychain, never in settings, env, or the `.md` files.
+  Key formats: [docs/integrations.md](docs/integrations.md#secret-storage).
 
-### AI synthesis (optional)
+## Stack
 
-Synthesis turns the deterministic fetchers into *evidence* a model reasons over,
-then writes a short summary back into two app-owned regions of the brief:
+[Tauri 2](https://v2.tauri.app/) (Rust backend) ·
+[SvelteKit](https://svelte.dev/) (Svelte 5, TypeScript, SPA) ·
+[Tailwind CSS v4](https://tailwindcss.com/) · plain `reqwest` JSON (no
+provider SDKs) · OS keyring · `.md` files on disk. Architecture deep-dive:
+[waid-project-summary.md](waid-project-summary.md).
 
-| Region | Markers | Written by |
-|---|---|---|
-| `## Activity` | `waid:sync:start/end` | Brief sync (deterministic — no LLM) |
-| `## Current State` | `waid:state:start/end` | Synthesis (regenerated wholesale) |
-| `## Open Questions` → inner block | `waid:questions:start/end` (nested) | Synthesis (inner block only) |
+## Out of scope
 
-The markers are HTML comments, so they render to nothing and the files stay
-portable / Obsidian-native. Everything outside the markers — your prose, your
-`## Captures`, all frontmatter — is preserved byte-for-byte.
-
-**Configure it** in the settings popover (the ⚙/tune button) under *AI
-synthesis*:
-
-- **Ollama (local)** — runs against a local [Ollama](https://ollama.com) server.
-  Set the base URL (default `http://localhost:11434`) and pick a pulled model.
-  Nothing leaves your machine.
-- **Anthropic (cloud)** — set a model and save an API key (stored in the OS
-  keyring). Sends evidence to the Anthropic API.
-
-Then hit **Refresh** on a brief (or *Sync all* in the titlebar). Synthesis is
-manual — there's no auto-sync on open or timer.
-
-**Open Questions — known tradeoff:** the model regenerates only the *inner*
-`waid:questions` block, wholesale, each run (so it can retract resolved
-questions). Your own questions live *above* the block and survive untouched, but
-anything you type *inside* the block is overwritten on the next synthesis —
-answer questions or add your own above it.
-
-**Safety:** all fetched content (web pages, source JSON, GitHub data, Notion page
-text, your Captures) is treated as **data, never instructions**. The model's
-output schema is closed to two fields, so it structurally cannot change status,
-links, tags, or webhooks, or fire anything. Web fetches are GET-only and
-truncated. Any error (fetch, provider, or unparseable output) leaves the `.md`
-untouched.
-
-## Project-management integrations (optional)
-
-Connect a brief to a PM tool and the detail pane shows your live tasks /
-notifications inline, with a one-line local rollup (counts by status, recently
-updated). Supported providers: **Linear, Jira, Asana, GitHub, Notion, Gmail,
-Slack, Figma** — plus **NeuroSkill**, a local EEG link that writes a `## Mind
-State` body region instead of panel items ([see below](#mind-state-neuroskill-optional)).
-
-**How it's wired.** A brief owns one or more **connections** (account-level
-metadata: provider, label, and where needed a base URL or account) and one or
-more **integration selectors** (a `kind` — `tasks`, `notifications`, GitHub's
-`pulls` / `commits`, or Notion's `page` — plus an optional `query` and `limit`). A connection's *metadata* lives
-in the brief's frontmatter and round-trips with the file; its *token* lives in
-the OS keyring, scoped per brief. One connection can carry several feeds — e.g.
-two Notion databases — since a feed's identity is `(connection, kind, query)`.
-
-Manage them from the **integrations** button on a brief: add/edit/delete
-connections and feeds, paste a token, and *Test connection* to validate it. A
-**help icon** beside each token field opens inline setup steps, the required
-scopes, and a link to that provider's docs. Tokens are read-only API tokens you
-create in each provider; only GitHub exposes notifications, Jira needs a base URL
-+ account email, Asana needs a workspace id, and GitHub Enterprise needs a base
-URL. GitHub **notifications** require a *classic* personal access token with the
-`notifications` scope (fine-grained tokens can't reach the endpoint — WAID says
-so on a 403); the Enterprise base-URL field is ignored if you point it at public
-github.com.
-
-**GitHub** has four feed kinds. `tasks` and `notifications` hit the REST API
-(open issues/PRs assigned to you; unread notifications). `pulls` and `commits`
-are **search-backed** — `pulls` lists PRs matching a `query` (default `is:pr
-is:open author:@me`) and `commits` lists commits matching a `query` (default
-`author:@me`); they're independent feeds, so a brief can carry either, both, or
-neither. Because GitHub search returns *public* matches regardless of a token's
-repo grant, **every GitHub feed must name its repos** — set one or more
-`owner/name` repos on the connection. WAID injects them as `repo:` qualifiers on
-search feeds and filters the REST feeds down to them; an unscoped feed is
-**rejected**, never silently broadened to every repo you've ever touched. (A
-power-user `query` that already pins scope with a `repo:` / `org:` / `user:`
-qualifier is honored verbatim.)
-
-**Notion** is a little special: a connection (a Notion *internal integration*
-token) can pull a **database's rows** as items (`kind: tasks`), or treat a
-**page** (`kind: page`) as context that feeds AI synthesis — its text joins the
-evidence pool just like a `notion.so` link in the body. The integration only sees
-databases/pages you've explicitly *shared* with it via the page's *Connections*
-menu.
-
-**Gmail** surfaces recent, brief-relevant emails (`kind: email`): the selector's
-`query` is a **Gmail search string** (`from:acme.com subject:"redesign"
-newer_than:14d`), and matching messages appear as items (subject as the title,
-sender in the assignee slot, read/unread status). It's **read-only** and
-**metadata-only** — only subjects and short snippets ever leave Gmail, never
-message bodies. Unlike the token-paste providers, Gmail signs in with **Google
-OAuth** (it opens your browser once per Gmail account; the grant is stored in the
-OS keyring and reused across every brief pointed at that account).
-
-Don't know Gmail's search operators? The feed form offers one-click **search
-templates** (recent unread, needs my reply, important, starred, …) and a
-**"describe it" box** that turns plain English ("unread from my manager this
-week") into a query via the configured synthesis LLM — display-only, it just
-fills the field for you to tweak. In the manage view you can also **rename a
-connection** and **edit a feed's query in place**.
-
-> **One-time Google Cloud setup (per the user, not WAID).** WAID ships no shared
-> Google credentials — you bring your own OAuth client:
->
-> 1. Create (or reuse) a Google Cloud project and **enable the Gmail API**.
-> 2. **OAuth consent screen:** User type **External**; add the scope
->    `.../auth/gmail.readonly`. **Set the publishing status to “In production.”**
->    Leave it *unverified* — for personal use (< 100 users) you just click through
->    the “Google hasn't verified this app” warning at consent time; verification
->    is **not** required.
->    - ⚠️ **This is the line everyone gets wrong.** `gmail.readonly` is a
->      *restricted* scope, so in **Testing** status Google **revokes the refresh
->      token after 7 days** (`invalid_grant`) — you'd have to reconnect every
->      week. **Production** (even unverified) gives a long-lived grant.
-> 3. **Credentials → Create OAuth client ID → Application type: Desktop app.** Copy
->    the **client ID** and **client secret**.
-> 4. In WAID **Settings → Gmail (Google OAuth client)**, paste the ID + secret
->    (stored in the keyring). Loopback redirect URIs (`http://127.0.0.1:<port>`)
->    are auto-allowed for Desktop clients, so there's nothing to register.
->
-> Then, on a brief, pick **Gmail** in the integrations modal, click **Connect
-> Google account**, approve in the browser, and add an email feed with a search
-> query.
-
-**Slack** surfaces recent messages matching a search (`kind: messages`): the
-selector's `query` is a **Slack search string** (`in:#waid from:@dana
-after:2026-06-01`), and matching messages appear as items (the message text as
-the title, sender in the assignee slot, the channel and a cleaned-up snippet
-alongside). The read path is `search.messages` over whatever the *user* can see —
-scoped by the query, not by bot membership. Message feeds flow into the panel,
-digest, and morning briefing, but never into synthesis evidence (same deliberate
-exclusion as Gmail). Unlike Gmail, Slack is a plain **token-paste** provider:
-you paste a user token and *Test connection*, no OAuth dance. As with Gmail, the
-feed form offers one-click **search templates** and a **"describe it" box** that
-turns plain English into a query via the configured synthesis LLM.
-
-> **One-time Slack setup (per the user, not WAID).** WAID ships no shared Slack
-> app:
->
-> 1. Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps) →
->    *From scratch*, in your workspace.
-> 2. **OAuth & Permissions → User Token Scopes** → add `search:read`. (User Token
->    Scopes, **not** Bot Token Scopes — bot tokens can't search.)
-> 3. **Install to Workspace**, approve, and copy the **User OAuth Token**
->    (`xoxp-…`) from the same page.
-> 4. Paste it as the token when adding a Slack connection in WAID.
->
-> ⚠️ Do **not** enable the app's *Token Rotation* setting — it converts the token
-> to an expiring `xoxe.xoxp-…` that dies in 12 hours, and WAID's token-paste
-> connections don't refresh. Without rotation the token lives until you revoke it
-> or uninstall the app. One app per workspace; a second workspace means repeating
-> these steps there.
-
-**Figma** surfaces a file's comments (`kind: comments`): the selector's `query`
-is **required** and carries a **Figma file URL or key** (`figma.com/design/AbC123/…`
-or the bare `AbC123`) — the scope, because Figma's REST API has **no cross-file
-comment search**, so a feed is scoped to one file (the same call as GitHub's
-required repo scoping). Each comment maps to an item (the first line as the
-title, the author handle in the assignee slot, an `Open`/`Resolved` status, and
-a snippet alongside); the item link lands you in the file, since the API exposes
-no per-comment anchor. By default a feed shows recent **unresolved** comments;
-add **`mentions:me`** (or `@me`) anywhere in the query to keep only comments that
-@-mention you. That filter is **best-effort** — Figma has no structured mention
-field, so WAID matches your handle against the comment text, which can miss
-renamed/group mentions and occasionally catch your name typed in prose. Comment
-feeds flow into the panel, digest, and morning briefing, but never into synthesis
-evidence (same exclusion as Gmail/Slack). Like Slack, Figma is a plain
-**token-paste** provider — no OAuth dance.
-
-> **One-time Figma setup (per the user, not WAID).** WAID ships no shared Figma
-> app:
->
-> 1. In Figma, open **Settings → Account → Personal access tokens** (or
->    [figma.com/developers/apps](https://www.figma.com/developers/apps)).
-> 2. **Generate new token**, name it (e.g. "WAID"), and grant the
->    **`file_comments:read`** scope (and `current_user:read` for the @-me filter).
-> 3. Copy the token (it's a *user* token, sent in the `X-Figma-Token` header,
->    read-only) and paste it when adding a Figma connection in WAID.
-
-Everything here is deterministic and **strictly additive**: fetches never write
-into your `.md`, so a failed or auth-walled fetch is just a toast and a panel
-error state — the brief renders fully regardless.
-
-### Mind State (NeuroSkill, optional)
-
-Connect a brief to a local **[NeuroSkill](https://github.com/neuroskill/neuroskill)**
-EEG dashboard and WAID maintains a deterministic `## Mind State` region in the
-brief — a rolling-window (`today` / `7d` / `14d` / `30d`, default **14d**)
-aggregate of your focus / engagement / mood / relaxation over that project's
-**labeled** work sessions, with a per-metric trend and your deepest-focus block:
-
-```markdown
-## Mind State
-_Rolling 14 days · 4 sessions · 3.2 hrs tracked · updated 2026-06-19_
-
-| Metric      | Mean | Trend |
-|-------------|-----:|:-----:|
-| Focus       |   41 |   ↑   |
-| Engagement  |   37 |   ↑   |
-| Mood        |   62 |   →   |
-
-Deepest focus: Tue 2pm–3pm (focus 58).
-```
-
-The hard problem is **attribution** — an EEG reading at 2:47pm is about you, not a
-project. WAID solves it by *authoring* the answer: when you launch into work on a
-brief (open a link/webhook, or hit **Start session**) it writes a
-`waid:brief=<slug>:start` label into NeuroSkill, and a matching `:end` when you end
-the session, navigate away, or close the app. `## Mind State` then aggregates only
-the EEG epochs inside those labeled windows. (There's no guessing from window /
-terminal / browser activity — that's deliberately out of scope.)
-
-NeuroSkill's EEG table has **no project column** — an epoch belongs to a brief
-purely because its timestamp falls inside one of that brief's labeled windows,
-matched on the **exact** `waid:brief=<slug>` prefix, so a sibling project's
-sessions never bleed in. One practical corollary: if you forget to end a session,
-up to **4 hours** of EEG attributes to that brief before the interval cap closes
-it — the **End session** button and the on-close `:end` exist to keep the windows
-honest.
-
-It's unusual among the connectors:
-
-- **Local, token-authenticated** — NeuroSkill runs on your machine; WAID reaches
-  its daemon over localhost. The daemon gates its API with a bearer token it
-  writes to disk (`…/skill/daemon/auth.token`), which WAID reads at call time —
-  nothing for you to paste. Just pick it in the integrations modal; optionally
-  override the data directory, daemon URL, or token path.
-- **Read-only and tightly scoped** — WAID reads NeuroSkill's local SQLite
-  read-only and touches **only** the EEG timeseries and your own WAID session
-  labels. It never reads window titles, terminal/browser history, clipboard, or
-  files, so toggling NeuroSkill's capture settings on/off makes no difference. The
-  only thing it *writes* is the session label, via the daemon's local API.
-- **A body region, not panel items** — the feed shows as a slim status row with a
-  refresh that regenerates `## Mind State` (like `## Activity`), not a list of
-  cards. It's deterministic (no LLM) and replaced in place, so frontmatter and the
-  rest of your brief are preserved byte-for-byte.
-- **Feeds AI synthesis (optional)** — if you have an LLM provider configured, the
-  Mind State rollup also joins the evidence behind `## Current State` as a short
-  *descriptive* readout (worded trends, no raw data), so a synthesized summary can
-  note when you've been deep in focus on this project. Only for briefs with a
-  NeuroSkill feed; numbers only, framed as context rather than a directive.
-- **WSL2 note** — NeuroSkill runs on the Windows host; point the data directory at
-  the `/mnt/c/...AppData/Local/NeuroSkill` path and the token path at the
-  Windows-host `…/AppData/Roaming/skill/daemon/auth.token`. WAID reaches the daemon
-  on `127.0.0.1:18444` (override the daemon URL if it differs); from WSL2 that
-  requires mirrored networking with host loopback so localhost reaches the Windows
-  daemon (`.wslconfig`: `networkingMode=mirrored` + `[experimental]
-  hostAddressLoopback=true`).
-
-NeuroSkill is GPL-3.0 and WAID is MIT; WAID stays strictly at the process/file
-boundary (reads its data files, calls its local HTTP API) and links no GPL code.
-
-## Project structure
-
-```
-waid/
-├── src/                      # SvelteKit frontend
-│   ├── lib/
-│   │   ├── components/       # Titlebar, AppMenu, Sidebar, ProjectDetail, MarkdownView,
-│   │   │                     #   QuickCapture, Toasts, CredentialHelp, IntegrationPanel,
-│   │   │                     #   IntegrationsModal, WebhooksModal, BriefingModal, BootstrapModal,
-│   │   │                     #   ResizeHandles…
-│   │   ├── credentialHelp.ts # per-credential setup steps + scopes + docs links
-│   │   ├── stores/           # projects, settings, toasts, integrations
-│   │   ├── tauri.ts          # wrappers around invoke / plugins / secrets
-│   │   ├── types.ts          # Brief / Link / Webhook / Connection / Integration… types
-│   │   ├── providers.ts      # PM-provider display metadata (brand/monogram/kinds)
-│   │   ├── bootstrap.ts      # paste-a-prompt template + stub-brief detection
-│   │   ├── markdown.ts       # marked + DOMPurify
-│   │   └── time.ts           # relative-time helper
-│   └── routes/               # +layout, +page (main view)
-├── src-tauri/                # Rust backend
-│   └── src/
-│       ├── lib.rs            # plugin + command registration, global shortcut
-│       ├── commands.rs       # briefs · webhooks · sync · LLM synthesis · keyring · settings ·
-│       │                     #   PM connections/selectors/digests · mind state · brief bootstrap
-│       ├── provider/         # PM integrations (mod.rs + linear/jira/asana/github/notion/gmail/slack/figma)
-│       └── neuroskill/       # NeuroSkill EEG → ## Mind State (local SQLite read + WS write; mod/aggregate/labels/eeg/ws)
-├── briefs/                   # sample briefs (dev + bundled seed)
-└── README.md
-```
-
-## Out of scope for v1 (planned)
-
-- **Drag-to-reorder** the project list.
-- A richer markdown editor (CodeMirror / Tiptap / Milkdown).
-- A dedicated borderless "spotlight" window for quick capture.
-- **In-process inference** for synthesis — local means Ollama over localhost
-  HTTP, not embedded llama.cpp / Candle / mistral.rs.
-- A **due-date / overdue signal** in the integration rollup (`overdue` is `null`
-  today).
-
-A diff-and-confirm preview gate stays unneeded — synthesis and digests only write
-regenerable, app-owned regions (and digests don't write at all until you snapshot
-them), and bootstrap only proposes a draft into edit mode. The Linear / Asana /
-Jira / GitHub / Notion connectors, OS-keyring secret storage, Obsidian vault
-support, search + status filters, and brief bootstrap have all **shipped**.
-
-Mobile/web versions and any auth/multi-user/sync are explicitly **not** planned —
-WAID is single-user, local, desktop-only by design.
+Mobile/web versions, auth, multi-user, and sync are **not** planned — WAID is
+single-user, local, desktop-only by design. Still on the v1 list:
+drag-to-reorder, a richer markdown editor, a dedicated quick-capture window,
+in-process inference, and a due-date signal in the integration rollup.

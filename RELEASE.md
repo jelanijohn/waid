@@ -38,7 +38,7 @@ for Windows, macOS (Apple Silicon + Intel), and Linux, and attaches them to a
 * **Artifacts are unsigned for now.** Windows and macOS will show
   unknown-publisher warnings on install. When signing is set up, port the
   Azure Artifact Signing (Windows) and Apple notarization (macOS) steps from
-  whence's `release.yml` — they're written to skip cleanly when the secrets
-  are absent.
+  [whence](https://github.com/jelanijohn/whence)'s `release.yml` — they're
+  written to skip cleanly when the secrets are absent.
 * To re-run a broken release, delete the draft release and the tag
   (`git push origin :refs/tags/v0.1.1`, `git tag -d v0.1.1`), then tag again.

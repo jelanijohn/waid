@@ -286,6 +286,7 @@
       class="anim-pop flex h-[min(78vh,560px)] w-[min(94%,640px)] flex-col overflow-hidden rounded-[16px] border"
       style="background: var(--bg); border-color: var(--border); box-shadow: var(--shadow-pop);"
       role="dialog"
+      aria-modal="true"
       aria-label="Settings"
       tabindex="-1"
       onkeydown={onKeydown}

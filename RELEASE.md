@@ -35,10 +35,15 @@ for Windows, macOS (Apple Silicon + Intel), and Linux, and attaches them to a
 * **No in-repo version bump is needed.** The workflow stamps the version from
   the tag name into `src-tauri/tauri.conf.json` (`v0.1.1` → `0.1.1`), so the
   tag is the single source of truth for the release version.
-* **Artifacts are unsigned for now.** Windows and macOS will show
-  unknown-publisher warnings on install. When signing is set up, port the
-  Azure Artifact Signing (Windows) and Apple notarization (macOS) steps from
-  [whence](https://github.com/jelanijohn/whence)'s `release.yml` — they're
-  written to skip cleanly when the secrets are absent.
+* **Artifacts are signed.** Windows installers are signed via Azure Artifact
+  Signing (GitHub OIDC — the `release` environment's `AZURE_*` secrets plus an
+  Entra federated credential whose subject is exactly
+  `repo:jelanijohn/waid:environment:release`); macOS builds are Developer ID
+  signed and notarized (repo-level `APPLE_*` secrets). Both step groups are
+  ported from [whence](https://github.com/jelanijohn/whence)'s `release.yml` —
+  keep the two workflows in sync — and skip cleanly when the secrets are
+  absent, so forks build unsigned.
+* **A workflow re-run uses the tag's committed workflow file.** Fixes to
+  `release.yml` only take effect on a *new* tag, not a re-run of an old one.
 * To re-run a broken release, delete the draft release and the tag
   (`git push origin :refs/tags/v0.1.1`, `git tag -d v0.1.1`), then tag again.

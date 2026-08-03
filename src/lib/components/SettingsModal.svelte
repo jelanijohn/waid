@@ -28,6 +28,13 @@
 
   let { open, onclose }: { open: boolean; onclose: () => void } = $props();
 
+  // Move focus into the dialog on open — the Escape handler lives on the
+  // dialog's onkeydown, so it only works once focus is inside.
+  let dialogEl = $state<HTMLDivElement | null>(null);
+  $effect(() => {
+    if (open && dialogEl) dialogEl.focus();
+  });
+
   type Section = "appearance" | "sync" | "gmail" | "ai";
   let section = $state<Section>("appearance");
 
@@ -289,6 +296,7 @@
       aria-modal="true"
       aria-label="Settings"
       tabindex="-1"
+      bind:this={dialogEl}
       onkeydown={onKeydown}
     >
       <div class="flex items-center justify-between gap-3 border-b px-4 py-3" style="border-color: var(--border);">

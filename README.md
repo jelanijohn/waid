@@ -9,8 +9,6 @@ brief, pulls live state from its integrations, and lets you launch into work:
 open links, fire webhooks, jot quick captures. Optionally, a local or cloud
 LLM synthesizes a prose summary. Single-user, local, desktop-only by design.
 
-![WAID — project list, brief, and live-state panel](docs/screenshots/dashboard-dark.png)
-
 ![A connected brief — synthesized current state, decisions log, and live PM feeds](docs/screenshots/connected-panel-dark.png)
 
 ## Why

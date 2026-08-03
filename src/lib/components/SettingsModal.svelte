@@ -83,8 +83,12 @@
   }
 
   async function refreshGmailClientStatus() {
+    // Connect needs both halves of the OAuth client, so only report "saved"
+    // when both are present (a failed save can leave just the id behind).
     try {
-      gmailClientStored = await hasSecret(SECRET_GMAIL_CLIENT_ID);
+      gmailClientStored =
+        (await hasSecret(SECRET_GMAIL_CLIENT_ID)) &&
+        (await hasSecret(SECRET_GMAIL_CLIENT_SECRET));
     } catch {
       gmailClientStored = false;
     }

@@ -4,6 +4,10 @@ A local-first desktop dashboard for the macro state of all your projects.
 Where *What's Next?* answers "what task now?", WAID answers **"what's the
 state of everything?"**
 
+
+[https://wollabo.com/tools/waid](https://wollabo.com/tools/waid)
+
+
 Each project is one markdown file — a **brief**. WAID lists them, renders each
 brief, pulls live state from its integrations, and lets you launch into work:
 open links, fire webhooks, jot quick captures. Optionally, a local or cloud

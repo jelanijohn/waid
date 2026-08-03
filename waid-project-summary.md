@@ -39,7 +39,7 @@ tool, not a team tool**.
 
 - **Author:** Jelani John
 - **Version:** 0.1.0
-- **License:** MIT
+- **License:** GPL-3.0
 - **Scope:** single-user, local, **desktop-only by design**. Mobile/web, auth,
   multi-user, and sync are explicitly **not** planned.
 
@@ -695,8 +695,9 @@ body region** (`## Mind State`, marker `waid:mind`, a sibling of `## Activity`),
 pure/network-only). It lives in its own `src-tauri/src/neuroskill/` module, which
 reads **local SQLite read-only** and performs exactly one write, NeuroSkill's
 `label` command over the daemon's local HTTP API. It never links/vendors any
-NeuroSkill/GPL code — the integration is strictly at the process/file boundary
-(NeuroSkill is GPL-3.0; WAID is MIT).
+NeuroSkill code — the integration is strictly at the process/file boundary (both
+projects are GPL-3.0, so this is an architectural choice, not a license
+requirement).
 
 - **Two features, one join key.** (A) `## Mind State` shows a rolling-window
   (default **14d**; `today|7d|14d|30d`) aggregate of EEG focus/engagement/mood/

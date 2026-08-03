@@ -75,6 +75,6 @@ hostAddressLoopback=true`). Detailed findings from the WSL2 bring-up live in
 
 ## Licensing boundary
 
-NeuroSkill is GPL-3.0 and WAID is MIT; WAID stays strictly at the process/file
-boundary (reads its data files, calls its local HTTP API) and links no GPL
-code.
+NeuroSkill and WAID are both GPL-3.0. WAID nonetheless stays strictly at the
+process/file boundary (reads its data files, calls its local HTTP API) and
+links no NeuroSkill code — an architectural choice, not a license requirement.

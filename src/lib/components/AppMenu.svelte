@@ -14,7 +14,7 @@
   aria-label="Settings"
   onclick={() => (settingsOpen = true)}
 >
-  <Icon name="tune" size={16} />
+  <Icon name="tune" size={18} />
 </button>
 
 <SettingsModal open={settingsOpen} onclose={() => (settingsOpen = false)} />

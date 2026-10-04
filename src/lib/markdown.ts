@@ -82,3 +82,52 @@ export function renderMarkdown(
     resolveExists = null;
   }
 }
+
+/**
+ * Wrap each `##` heading and the content beneath it (up to the next `##`) in a
+ * native `<details class="md-section">` so sections collapse. Anything before
+ * the first `##` (the `#` title, intro paragraph) is left untouched; `###`+
+ * headings stay inside their parent section. Returns the input unchanged when
+ * the body has no `##` headings.
+ *
+ * Takes the *sanitized* output of `renderMarkdown` and only re-parents those
+ * nodes, adding elements/attributes it controls (`details`/`summary`/`div`,
+ * `class`, `data-section`), so the result stays safe for `{@html}`.
+ *
+ * `data-section` is a key derived from the heading text (lower-cased; a `#n`
+ * suffix disambiguates repeated headings) that callers use to persist which
+ * sections are collapsed. `isCollapsed(key)` decides the initial open state.
+ */
+export function sectionize(html: string, isCollapsed: (key: string) => boolean): string {
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html;
+  if (!tpl.content.querySelector("h2")) return html;
+
+  const out = document.createElement("div");
+  const seen = new Map<string, number>();
+  let body: HTMLElement | null = null;
+
+  for (const node of Array.from(tpl.content.childNodes)) {
+    const isH2 = node.nodeType === Node.ELEMENT_NODE && (node as Element).tagName === "H2";
+    if (!isH2) {
+      (body ?? out).appendChild(node);
+      continue;
+    }
+    const base = (node.textContent ?? "").trim().toLowerCase();
+    const n = (seen.get(base) ?? 0) + 1;
+    seen.set(base, n);
+    const key = n === 1 ? base : `${base}#${n}`;
+
+    const details = document.createElement("details");
+    details.className = "md-section";
+    details.dataset.section = key;
+    details.open = !isCollapsed(key);
+    const summary = document.createElement("summary");
+    summary.appendChild(node);
+    body = document.createElement("div");
+    body.className = "md-section-body";
+    details.append(summary, body);
+    out.appendChild(details);
+  }
+  return out.innerHTML;
+}

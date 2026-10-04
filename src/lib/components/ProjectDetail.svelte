@@ -279,7 +279,7 @@
 
 <!-- The brief body plus its "Linked from" backlinks. -->
 {#snippet bodyAndBacklinks()}
-  <MarkdownView source={brief.body} />
+  <MarkdownView source={brief.body} collapseKey={brief.path} />
 
   {#if backlinks.length}
     <section class="mt-[30px] border-t pt-[18px]" style="border-color: var(--border);">

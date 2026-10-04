@@ -11,6 +11,11 @@ export type BriefLayout = "two-col" | "body" | "quiet";
 /** Curated accent options exposed in settings (blue, green, indigo, coral). */
 export const ACCENTS = ["#1E88E5", "#40A87E", "#6366F1", "#E57373"] as const;
 
+/** Two-column live-state rail width in px. The upper bound (50% of the row)
+ *  depends on the live layout, so ProjectDetail enforces it. */
+export const RAIL_WIDTH_DEFAULT = 320;
+export const RAIL_WIDTH_MIN = 280;
+
 const KEY = "waid-settings";
 const LEGACY_THEME_KEY = "waid-theme"; // pre-Tidewater: just "dark"/"light"
 
@@ -18,9 +23,12 @@ interface Persisted {
   dark: boolean;
   accent: string;
   sidebarStyle: SidebarStyle;
+  /** Alternate-row shading in the rows/compact sidebar lists. */
+  sidebarZebra: boolean;
   briefLayout: BriefLayout;
   density: Density;
   autoSyncOnOpen: boolean;
+  railWidth: number;
 }
 
 function applyDark(dark: boolean): void {
@@ -37,11 +45,13 @@ class Settings {
   dark = $state(false);
   accent = $state<string>(ACCENTS[0]);
   sidebarStyle = $state<SidebarStyle>("rows");
+  sidebarZebra = $state(false);
   briefLayout = $state<BriefLayout>("two-col");
   density = $state<Density>("comfortable");
   /** Opt-in: auto-refresh a brief's sync block when it's opened. Off by
    *  default — sync is manual unless the user turns this on. */
   autoSyncOnOpen = $state(false);
+  railWidth = $state(RAIL_WIDTH_DEFAULT);
 
   /** Resolve saved prefs (or sensible defaults) and apply the dark class. */
   init(): void {
@@ -59,9 +69,14 @@ class Settings {
     this.dark = saved.dark ?? legacyDark ?? systemDark;
     this.accent = saved.accent ?? ACCENTS[0];
     this.sidebarStyle = saved.sidebarStyle ?? "rows";
+    this.sidebarZebra = saved.sidebarZebra ?? false;
     this.briefLayout = saved.briefLayout ?? "two-col";
     this.density = saved.density ?? "comfortable";
     this.autoSyncOnOpen = saved.autoSyncOnOpen ?? false;
+    this.railWidth =
+      typeof saved.railWidth === "number" && Number.isFinite(saved.railWidth)
+        ? Math.max(RAIL_WIDTH_MIN, Math.round(saved.railWidth))
+        : RAIL_WIDTH_DEFAULT;
     applyDark(this.dark);
     applyAccent(this.accent);
   }
@@ -71,9 +86,11 @@ class Settings {
       dark: this.dark,
       accent: this.accent,
       sidebarStyle: this.sidebarStyle,
+      sidebarZebra: this.sidebarZebra,
       briefLayout: this.briefLayout,
       density: this.density,
       autoSyncOnOpen: this.autoSyncOnOpen,
+      railWidth: this.railWidth,
     };
     localStorage.setItem(KEY, JSON.stringify(data));
   }
@@ -99,6 +116,11 @@ class Settings {
     this.persist();
   }
 
+  setSidebarZebra(on: boolean): void {
+    this.sidebarZebra = on;
+    this.persist();
+  }
+
   setBriefLayout(layout: BriefLayout): void {
     this.briefLayout = layout;
     this.persist();
@@ -112,6 +134,13 @@ class Settings {
   setAutoSyncOnOpen(on: boolean): void {
     this.autoSyncOnOpen = on;
     this.persist();
+  }
+
+  /** `save = false` while dragging — state updates live, localStorage is
+   *  written once on release. */
+  setRailWidth(px: number, save = true): void {
+    this.railWidth = Math.max(RAIL_WIDTH_MIN, Math.round(px));
+    if (save) this.persist();
   }
 }
 

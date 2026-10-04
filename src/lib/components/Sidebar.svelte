@@ -156,23 +156,27 @@
 
     {:else if settings.sidebarStyle === "rows"}
       <!-- a) ROWS — flat, detailed -->
-      {#each projects.filtered as brief (brief.path)}
+      {#each projects.filtered as brief, i (brief.path)}
         {@const sel = brief.path === projects.selectedPath}
-        <button
-          class="mb-px w-full rounded-[9px] px-[10px] py-2 text-left transition-colors {sel
-            ? 'bg-[var(--sel)] shadow-[inset_2px_0_0_var(--accent)]'
-            : 'hover:bg-[var(--hover)]'}"
-          onclick={() => projects.select(brief.path)}
-        >
-          <div class="flex items-center gap-2">
-            <span class="flex-1 truncate text-[13px] text-[var(--fg)] {sel ? 'font-semibold' : 'font-medium'}">{brief.name}</span>
-            <StatusPill status={brief.status} />
-          </div>
-          {#if brief.description}
-            <p class="mt-[3px] truncate text-[11.5px] text-[var(--fg3)]">{brief.description}</p>
-          {/if}
-          <p class="mt-1 text-[10.5px] text-[var(--fg4)]">{relativeTime(brief.lastOpened)}</p>
-        </button>
+        <div class="mx-[6px] border-b py-px last:border-b-0" style="border-color: var(--border-soft);">
+          <button
+            class="w-full rounded-[9px] px-[10px] py-2 text-left transition-colors {sel
+              ? 'bg-[var(--sel)] shadow-[inset_2px_0_0_var(--accent)]'
+              : settings.sidebarZebra && i % 2 === 1
+                ? 'row-alt'
+                : 'hover:bg-[var(--hover)]'}"
+            onclick={() => projects.select(brief.path)}
+          >
+            <div class="flex items-center gap-2">
+              <span class="flex-1 truncate text-[13px] text-[var(--fg)] {sel ? 'font-semibold' : 'font-medium'}">{brief.name}</span>
+              <StatusPill status={brief.status} />
+            </div>
+            {#if brief.description}
+              <p class="mt-[3px] truncate text-[11.5px] text-[var(--fg3)]">{brief.description}</p>
+            {/if}
+            <p class="mt-1 text-[10.5px] text-[var(--fg4)]">{relativeTime(brief.lastOpened)}</p>
+          </button>
+        </div>
       {/each}
 
     {:else if settings.sidebarStyle === "compact"}
@@ -184,18 +188,22 @@
           {groupLabel(group.status)}
           <span class="ml-auto tabular-nums">{group.items.length}</span>
         </div>
-        {#each group.items as brief (brief.path)}
+        {#each group.items as brief, i (brief.path)}
           {@const sel = brief.path === projects.selectedPath}
-          <button
-            class="flex h-[30px] w-full items-center gap-[9px] rounded-[7px] px-[9px] text-left {sel
-              ? 'bg-[var(--sel)] shadow-[inset_2px_0_0_var(--accent)]'
-              : 'hover:bg-[var(--hover)]'}"
-            onclick={() => projects.select(brief.path)}
-          >
-            <span class="sdot h-[6px] w-[6px]" style="--sc: {statusColor(brief.status)};"></span>
-            <span class="flex-1 truncate text-[12.5px] text-[var(--fg)] {sel ? 'font-semibold' : 'font-[450]'}">{brief.name}</span>
-            <span class="text-[10px] tabular-nums text-[var(--fg4)]">{relativeTime(brief.lastOpened)}</span>
-          </button>
+          <div class="mx-[6px] border-b py-px last:border-b-0" style="border-color: var(--border-soft);">
+            <button
+              class="flex h-[30px] w-full items-center gap-[9px] rounded-[7px] px-[9px] text-left {sel
+                ? 'bg-[var(--sel)] shadow-[inset_2px_0_0_var(--accent)]'
+                : settings.sidebarZebra && i % 2 === 1
+                  ? 'row-alt'
+                  : 'hover:bg-[var(--hover)]'}"
+              onclick={() => projects.select(brief.path)}
+            >
+              <span class="sdot h-[6px] w-[6px]" style="--sc: {statusColor(brief.status)};"></span>
+              <span class="flex-1 truncate text-[12.5px] text-[var(--fg)] {sel ? 'font-semibold' : 'font-[450]'}">{brief.name}</span>
+              <span class="text-[10px] tabular-nums text-[var(--fg4)]">{relativeTime(brief.lastOpened)}</span>
+            </button>
+          </div>
         {/each}
       {/each}
 

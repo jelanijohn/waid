@@ -2,7 +2,8 @@
   import { onDestroy } from "svelte";
   import type { Brief, Webhook } from "$lib/types";
   import { projects, isSyncableBrief } from "$lib/stores/projects.svelte";
-  import { settings } from "$lib/stores/settings.svelte";
+  import { getCurrentWindow, type CursorIcon } from "@tauri-apps/api/window";
+  import { settings, RAIL_WIDTH_DEFAULT, RAIL_WIDTH_MIN } from "$lib/stores/settings.svelte";
   import { toasts } from "$lib/stores/toasts.svelte";
   import { openExternal, fireWebhook } from "$lib/tauri";
   import { relativeTime } from "$lib/time";
@@ -202,6 +203,45 @@
 
   function manage() {
     integrationsOpen = true;
+  }
+
+  // Two-column layout: drag the rail's left border to resize it, between
+  // RAIL_WIDTH_MIN and half of the row. Width persists via the settings store.
+  let railRow = $state<HTMLDivElement | null>(null);
+  let railDragging = $state(false);
+
+  // WebKitGTK (Linux/WSL) often ignores the CSS `cursor` (see ResizeHandles),
+  // so drive the native cursor too. No-op outside Tauri (plain `vite dev`).
+  function setCursor(icon: CursorIcon) {
+    try {
+      getCurrentWindow().setCursorIcon(icon).catch(() => {});
+    } catch {
+      // Window APIs unavailable.
+    }
+  }
+
+  function startRailDrag(e: PointerEvent) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    railDragging = true;
+  }
+
+  function moveRailDrag(e: PointerEvent) {
+    if (!railDragging || !railRow) return;
+    const r = railRow.getBoundingClientRect();
+    const max = Math.max(RAIL_WIDTH_MIN, r.width * 0.5);
+    const w = Math.min(max, Math.max(RAIL_WIDTH_MIN, r.right - e.clientX));
+    settings.setRailWidth(w, false);
+  }
+
+  function endRailDrag(e: PointerEvent) {
+    if (!railDragging) return;
+    const el = e.currentTarget as HTMLElement;
+    if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+    railDragging = false;
+    settings.setRailWidth(settings.railWidth);
+    setCursor("default");
   }
 </script>
 
@@ -408,15 +448,37 @@
   {:else if settings.briefLayout === "two-col"}
     <!-- Two-column: brief body left, live-state rail right. Scrolls as one. -->
     <div class="scroll-thin min-h-0 flex-1 overflow-y-auto">
-      <div class="flex min-h-full items-stretch">
+      <div
+        bind:this={railRow}
+        class="flex min-h-full items-stretch"
+        class:select-none={railDragging}
+      >
         <div class="min-w-0 flex-1" style="padding: var(--pane-py) var(--pane-px);">
           {#if isStub}{@render generateCTA()}{/if}
           {@render bodyAndBacklinks()}
         </div>
+        <!-- max-width keeps the 50% cap true when the window shrinks, without
+             rewriting the saved width. -->
         <aside
-          class="shrink-0 border-l"
-          style="width: 320px; border-color: var(--border); background: var(--rail-bg); padding: var(--pane-py) 22px;"
+          class="relative shrink-0 border-l"
+          style="width: {settings.railWidth}px; max-width: 50%; border-color: var(--border); background: var(--rail-bg); padding: var(--pane-py) 22px;"
         >
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <div
+            class="rail-grip"
+            class:dragging={railDragging}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize live state panel"
+            title="Drag to resize · double-click to reset"
+            onpointerdown={startRailDrag}
+            onpointermove={moveRailDrag}
+            onpointerup={endRailDrag}
+            onpointercancel={endRailDrag}
+            ondblclick={() => settings.setRailWidth(RAIL_WIDTH_DEFAULT)}
+            onmouseenter={() => setCursor("ewResize")}
+            onmouseleave={() => !railDragging && setCursor("default")}
+          ></div>
           {@render sectionLabel("Live state", true)}
           <IntegrationPanel {brief} narrow onManage={manage} />
         </aside>
@@ -459,3 +521,34 @@
 {#if bootstrapOpen}
   <BootstrapModal {brief} onclose={() => (bootstrapOpen = false)} onDraft={acceptDraft} />
 {/if}
+
+<style>
+  /* Grab strip straddling the rail's left border; the visible hairline is the
+     ::after so the hit area stays generous. */
+  .rail-grip {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -4px;
+    width: 8px;
+    z-index: 5;
+    cursor: col-resize;
+    touch-action: none;
+  }
+  .rail-grip::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 3px;
+    width: 2px;
+    background: transparent;
+    transition: background 120ms ease;
+  }
+  .rail-grip:hover::after {
+    background: var(--accent-line);
+  }
+  .rail-grip.dragging::after {
+    background: var(--accent);
+  }
+</style>

@@ -7,7 +7,6 @@
   import { onMount } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { projects } from "$lib/stores/projects.svelte";
-  import { settings } from "$lib/stores/settings.svelte";
   import { toasts } from "$lib/stores/toasts.svelte";
   import { statusColor } from "$lib/status";
   import Icon from "./Icon.svelte";
@@ -113,9 +112,6 @@
       <Icon name="sync" size={16} class={syncing ? "spin" : ""} />
     </button>
     <AppMenu />
-    <button class="btn-icon" title="Toggle theme" aria-label="Toggle theme" onclick={() => settings.toggleDark()}>
-      <Icon name={settings.dark ? "light_mode" : "dark_mode"} size={16} />
-    </button>
   </div>
 
   <!-- Windows / Linux: custom caption buttons, flush right. -->

@@ -3276,9 +3276,29 @@ pub fn set_briefs_dir(app: AppHandle, dir: String) -> Result<String, String> {
         fs::create_dir_all(&path).map_err(|e| format!("could not create {dir}: {e}"))?;
     }
     let mut settings = load_settings(&app);
+    // The manual sidebar order is keyed by paths relative to the briefs dir,
+    // so an order from one folder would silently apply to any same-named
+    // files in another. Forget it when the folder actually changes.
+    let same_dir = settings
+        .briefs_dir
+        .as_deref()
+        .map(|old| same_path(Path::new(old), &path))
+        .unwrap_or(false);
+    if !same_dir {
+        settings.brief_order = None;
+    }
     settings.briefs_dir = Some(dir);
     save_settings(&app, &settings)?;
     Ok(path.to_string_lossy().to_string())
+}
+
+/// Whether two paths name the same directory (canonicalized when possible,
+/// so `a/` and `a` or a symlink alias compare equal).
+fn same_path(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a == b,
+    }
 }
 
 /// Create a new, empty-ish brief from a name and return it. The filename is a

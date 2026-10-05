@@ -40,6 +40,9 @@ Tokens and keys live in the platform keychain, never in settings, env, or the
 
 - `github.token` — GitHub token for private-repo brief sync
 - `anthropic.api_key` — Anthropic API key for synthesis
+- `openai.api_key:<origin>` — optional API key for the OpenAI-compatible
+  synthesis endpoint, scoped to the endpoint URL's origin (scheme + host +
+  non-default port) so a saved key never follows a host change
 - `bconn:<brief-path>:<id>` — per-brief PM connection tokens
 - `whook:<brief-path>:<id>` — per-brief webhook secrets
 - `gmail.client_id` / `gmail.client_secret` — the bring-your-own Google

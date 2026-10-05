@@ -67,6 +67,7 @@ pub fn run() {
             commands::read_brief,
             commands::save_brief,
             commands::touch_brief,
+            commands::set_brief_status,
             commands::append_capture,
             commands::fire_webhook,
             commands::save_brief_webhook,

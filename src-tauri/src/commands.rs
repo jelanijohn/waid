@@ -631,6 +631,39 @@ pub fn touch_brief(path: String) -> Result<Brief, String> {
     Ok(parse_brief(&p, new_raw))
 }
 
+/// Set a brief's `status` frontmatter key in place. Same discipline as
+/// `touch_brief`: the frontmatter is edited as a `serde_yaml::Mapping` so
+/// every other key (and the body) survives untouched. The status is a free
+/// string — the known set (active/paused/blocked/archived) is a UI convention,
+/// and custom statuses already present in a vault round-trip unchanged.
+#[tauri::command]
+pub fn set_brief_status(path: String, status: String) -> Result<Brief, String> {
+    let status = status.trim().to_string();
+    if status.is_empty() {
+        return Err("status cannot be empty".into());
+    }
+    let p = PathBuf::from(&path);
+    let raw = fs::read_to_string(&p).map_err(|e| format!("could not read {path}: {e}"))?;
+    let new_raw = splice_status(&raw, &status)?;
+    fs::write(&p, &new_raw).map_err(|e| format!("could not write {path}: {e}"))?;
+    Ok(parse_brief(&p, new_raw))
+}
+
+/// Pure core of `set_brief_status`: return `raw` with its `status` key set.
+fn splice_status(raw: &str, status: &str) -> Result<String, String> {
+    let (yaml, body) = split_frontmatter(raw);
+    let mut map: serde_yaml::Mapping = match &yaml {
+        Some(y) => serde_yaml::from_str(y).unwrap_or_default(),
+        None => serde_yaml::Mapping::new(),
+    };
+    map.insert(
+        serde_yaml::Value::from("status"),
+        serde_yaml::Value::from(status),
+    );
+    let yaml_out = serde_yaml::to_string(&map).map_err(|e| e.to_string())?;
+    Ok(format!("---\n{}---\n\n{}", yaml_out, body))
+}
+
 /// Append a timestamped note under a `## Captures` heading in a brief's body.
 /// Creates the heading if it doesn't exist yet. (Quick-capture path.)
 #[tauri::command]
@@ -4071,6 +4104,40 @@ mod tests {
         let (yaml, body) = split_frontmatter(raw);
         assert!(yaml.is_none());
         assert_eq!(body, raw);
+    }
+
+    #[test]
+    fn splice_status_replaces_key_and_preserves_everything_else() {
+        let raw = "---\nname: Test\nstatus: active\ncustom_key: keep me\ntags: [a, b]\n---\n\n# Body\n\nhello\n";
+        let out = splice_status(raw, "paused").unwrap();
+        let brief = parse_brief(&PathBuf::from("/x/test.md"), out.clone());
+        assert_eq!(brief.status.as_deref(), Some("paused"));
+        assert_eq!(brief.tags, vec!["a", "b"]);
+        assert!(out.contains("custom_key: keep me"));
+        assert!(out.contains("# Body\n\nhello"));
+        assert!(!out.contains("status: active"));
+    }
+
+    #[test]
+    fn splice_status_adds_key_when_missing() {
+        let raw = "---\nname: Test\n---\nbody";
+        let out = splice_status(raw, "blocked").unwrap();
+        let brief = parse_brief(&PathBuf::from("/x/test.md"), out.clone());
+        assert_eq!(brief.status.as_deref(), Some("blocked"));
+        assert_eq!(brief.name, "Test");
+        assert!(out.ends_with("---\n\nbody"));
+    }
+
+    #[test]
+    fn set_brief_status_rejects_empty() {
+        let root = scratch_dir("status-empty");
+        let path = root.join("p.md");
+        fs::write(&path, "---\nname: P\nstatus: active\n---\nbody").unwrap();
+        let err = set_brief_status(path.to_string_lossy().into_owned(), "   ".into()).unwrap_err();
+        assert!(err.contains("empty"));
+        // File untouched.
+        assert!(fs::read_to_string(&path).unwrap().contains("status: active"));
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

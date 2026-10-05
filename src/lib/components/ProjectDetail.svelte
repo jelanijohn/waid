@@ -7,8 +7,9 @@
   import { toasts } from "$lib/stores/toasts.svelte";
   import { openExternal, fireWebhook } from "$lib/tauri";
   import { relativeTime } from "$lib/time";
-  import { statusColor } from "$lib/status";
+  import { statusColor, STATUS_ORDER, STATUS_LABEL } from "$lib/status";
   import { isStubBrief } from "$lib/bootstrap";
+  import { collapsedSections, setSectionCollapsed, DESCRIPTION_SECTION } from "$lib/sections";
   import MarkdownView from "./MarkdownView.svelte";
   import IntegrationPanel from "./IntegrationPanel.svelte";
   import IntegrationsModal from "./IntegrationsModal.svelte";
@@ -32,6 +33,76 @@
   const justCreated = projects.bootstrapPath === brief.path;
   if (justCreated) projects.bootstrapPath = null;
   let bootstrapOpen = $state(justCreated);
+
+  // Header description folds to a single truncated line; remembered per brief
+  // alongside the body's collapsed `##` sections.
+  // svelte-ignore state_referenced_locally -- intentional: read once per mount ({#key brief.path}).
+  let descCollapsed = $state(collapsedSections(brief.path).has(DESCRIPTION_SECTION));
+  function toggleDescription() {
+    descCollapsed = !descCollapsed;
+    setSectionCollapsed(brief.path, DESCRIPTION_SECTION, descCollapsed);
+  }
+
+  // Status menu: the header's status pill opens a small anchored popover
+  // listing the known statuses plus any custom ones already in the vault.
+  // Picking one splices only the `status` frontmatter key (set_brief_status).
+  let statusMenuOpen = $state(false);
+  let statusSaving = $state(false);
+  let statusMenuEl = $state<HTMLDivElement | null>(null);
+  let statusOptions = $derived.by(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const s of [...STATUS_ORDER, ...projects.statuses]) {
+      const k = s.toLowerCase();
+      if (!seen.has(k)) {
+        seen.add(k);
+        out.push(s);
+      }
+    }
+    return out;
+  });
+  function statusLabel(s: string): string {
+    return STATUS_LABEL[s.toLowerCase()] ?? s;
+  }
+  function isCurrentStatus(s: string): boolean {
+    return (brief.status ?? "").toLowerCase() === s.toLowerCase();
+  }
+  function toggleStatusMenu() {
+    statusMenuOpen = !statusMenuOpen;
+  }
+  async function pickStatus(status: string) {
+    statusMenuOpen = false;
+    if (isCurrentStatus(status)) return;
+    statusSaving = true;
+    try {
+      await projects.setStatus(brief.path, status);
+      toasts.success(`Status → ${statusLabel(status)}`);
+    } catch (e) {
+      toasts.error(`Could not set status: ${e}`);
+    } finally {
+      statusSaving = false;
+    }
+  }
+  // Close the status menu on outside click / Escape (listeners attached only
+  // while it's open; document-level so clicks anywhere in the pane count).
+  $effect(() => {
+    if (!statusMenuOpen) return;
+    const onPointer = (ev: PointerEvent) => {
+      if (statusMenuEl && !statusMenuEl.contains(ev.target as Node)) statusMenuOpen = false;
+    };
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") {
+        ev.stopPropagation();
+        statusMenuOpen = false;
+      }
+    };
+    document.addEventListener("pointerdown", onPointer, true);
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer, true);
+      document.removeEventListener("keydown", onKey, true);
+    };
+  });
 
   // A freshly-created brief still on its stub body → offer to generate one.
   let isStub = $derived(isStubBrief(brief));
@@ -305,17 +376,62 @@
     <div class="flex items-start justify-between gap-4">
       <div class="min-w-0">
         <div class="flex items-center gap-[9px]">
-          {#if brief.status}
-            <span class="sdot h-2 w-2" style="--sc: {statusColor(brief.status)};"></span>
-          {/if}
           <h2 class="truncate font-bold tracking-[-0.02em] text-[var(--fg)]" style="font-size: var(--title-size);">
             {brief.name}
           </h2>
+          <!-- Status pill doubles as the status toggle. -->
+          <div class="status-menu relative shrink-0" bind:this={statusMenuEl}>
+            <button
+              type="button"
+              class="pill status-trigger"
+              class:open={statusMenuOpen}
+              style="--sc: {statusColor(brief.status)};"
+              title="Change status"
+              aria-haspopup="listbox"
+              aria-expanded={statusMenuOpen}
+              disabled={statusSaving || editing}
+              onclick={toggleStatusMenu}
+            >
+              <span class="dot"></span>
+              {brief.status ? statusLabel(brief.status) : "No status"}
+              <Icon name="expand_more" size={12} />
+            </button>
+            {#if statusMenuOpen}
+              <div class="status-popover" role="listbox" aria-label="Project status">
+                {#each statusOptions as option (option.toLowerCase())}
+                  {@const current = isCurrentStatus(option)}
+                  <button
+                    type="button"
+                    class="status-option"
+                    class:current
+                    role="option"
+                    aria-selected={current}
+                    onclick={() => pickStatus(option)}
+                  >
+                    <span class="sdot h-[7px] w-[7px]" style="--sc: {statusColor(option)};"></span>
+                    <span class="flex-1 text-left">{statusLabel(option)}</span>
+                    {#if current}
+                      <Icon name="check" size={13} />
+                    {/if}
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </div>
         </div>
         {#if brief.description}
-          <p class="mt-[7px] max-w-[60ch] text-[13.5px] leading-[1.5] text-[var(--fg2)]">
-            {brief.description}
-          </p>
+          <button
+            type="button"
+            class="desc-toggle mt-[7px] flex max-w-[60ch] items-start gap-[7px] text-left"
+            class:open={!descCollapsed}
+            aria-expanded={!descCollapsed}
+            title={descCollapsed ? "Expand description" : "Collapse description"}
+            onclick={toggleDescription}
+          >
+            <p class="min-w-0 text-[13.5px] leading-[1.5] text-[var(--fg2)]" class:truncate={descCollapsed}>
+              {brief.description}
+            </p>
+          </button>
         {/if}
       </div>
 
@@ -446,43 +562,46 @@
       </p>
     </div>
   {:else if settings.briefLayout === "two-col"}
-    <!-- Two-column: brief body left, live-state rail right. Scrolls as one. -->
-    <div class="scroll-thin min-h-0 flex-1 overflow-y-auto">
-      <div
-        bind:this={railRow}
-        class="flex min-h-full items-stretch"
-        class:select-none={railDragging}
+    <!-- Two-column: brief body left, live-state rail right. Each column is
+         its own scroll container, so a long brief and a long feed scroll
+         independently. -->
+    <div
+      bind:this={railRow}
+      class="flex min-h-0 flex-1 items-stretch"
+      class:select-none={railDragging}
+    >
+      <div class="scroll-thin min-w-0 flex-1 overflow-y-auto" style="padding: var(--pane-py) var(--pane-px);">
+        {#if isStub}{@render generateCTA()}{/if}
+        {@render bodyAndBacklinks()}
+      </div>
+      <!-- max-width keeps the 50% cap true when the window shrinks, without
+           rewriting the saved width. The grip sits on the non-scrolling
+           aside so it spans the full height; the content scrolls inside. -->
+      <aside
+        class="relative flex min-h-0 shrink-0 flex-col border-l"
+        style="width: {settings.railWidth}px; max-width: 50%; border-color: var(--border); background: var(--rail-bg);"
       >
-        <div class="min-w-0 flex-1" style="padding: var(--pane-py) var(--pane-px);">
-          {#if isStub}{@render generateCTA()}{/if}
-          {@render bodyAndBacklinks()}
-        </div>
-        <!-- max-width keeps the 50% cap true when the window shrinks, without
-             rewriting the saved width. -->
-        <aside
-          class="relative shrink-0 border-l"
-          style="width: {settings.railWidth}px; max-width: 50%; border-color: var(--border); background: var(--rail-bg); padding: var(--pane-py) 22px;"
-        >
-          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-          <div
-            class="rail-grip"
-            class:dragging={railDragging}
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize live state panel"
-            title="Drag to resize · double-click to reset"
-            onpointerdown={startRailDrag}
-            onpointermove={moveRailDrag}
-            onpointerup={endRailDrag}
-            onpointercancel={endRailDrag}
-            ondblclick={() => settings.setRailWidth(RAIL_WIDTH_DEFAULT)}
-            onmouseenter={() => setCursor("ewResize")}
-            onmouseleave={() => !railDragging && setCursor("default")}
-          ></div>
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <div
+          class="rail-grip"
+          class:dragging={railDragging}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize live state panel"
+          title="Drag to resize · double-click to reset"
+          onpointerdown={startRailDrag}
+          onpointermove={moveRailDrag}
+          onpointerup={endRailDrag}
+          onpointercancel={endRailDrag}
+          ondblclick={() => settings.setRailWidth(RAIL_WIDTH_DEFAULT)}
+          onmouseenter={() => setCursor("ewResize")}
+          onmouseleave={() => !railDragging && setCursor("default")}
+        ></div>
+        <div class="scroll-thin min-h-0 flex-1 overflow-y-auto" style="padding: var(--pane-py) 22px;">
           {@render sectionLabel("Live state", true)}
           <IntegrationPanel {brief} narrow onManage={manage} />
-        </aside>
-      </div>
+        </div>
+      </aside>
     </div>
   {:else if settings.briefLayout === "body"}
     <!-- Body first, then the live-state block below a hairline divider. -->
@@ -550,5 +669,51 @@
   }
   .rail-grip.dragging::after {
     background: var(--accent);
+  }
+
+  /* Status pill as a toggle: same look as the read-only pill, plus a hover
+     ring and a tiny chevron so it reads as interactive. */
+  .status-trigger {
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: border-color 120ms ease, filter 120ms ease;
+  }
+  .status-trigger:hover,
+  .status-trigger.open {
+    border-color: color-mix(in srgb, var(--sc) 45%, transparent);
+  }
+  .status-trigger:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
+  .status-popover {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 20;
+    min-width: 150px;
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg);
+    box-shadow: var(--shadow-pop);
+  }
+  .status-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 8px;
+    border-radius: 6px;
+    font-size: 12.5px;
+    color: var(--fg);
+    cursor: pointer;
+    text-transform: capitalize;
+  }
+  .status-option:hover {
+    background: var(--hover);
+  }
+  .status-option.current {
+    color: var(--fg2);
   }
 </style>

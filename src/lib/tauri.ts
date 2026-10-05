@@ -26,6 +26,10 @@ export const saveBrief = (path: string, content: string) =>
 
 export const touchBrief = (path: string) => invoke<Brief>("touch_brief", { path });
 
+/** Set a brief's `status` frontmatter key; returns the reparsed brief. */
+export const setBriefStatus = (path: string, status: string) =>
+  invoke<Brief>("set_brief_status", { path, status });
+
 export const appendCapture = (path: string, note: string) =>
   invoke<Brief>("append_capture", { path, note });
 

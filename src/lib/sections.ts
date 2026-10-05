@@ -5,6 +5,11 @@
 
 const KEY = "waid-collapsed-sections";
 
+/** Pseudo-section key for the header description. Real section keys come
+ *  from trimmed heading text (see `sectionize`), so a leading space can
+ *  never collide with one. */
+export const DESCRIPTION_SECTION = " description";
+
 type Store = Record<string, string[]>;
 
 function read(): Store {

@@ -7,6 +7,7 @@ import {
   getVaultInfo,
   isWsl as isWslCmd,
   touchBrief,
+  setBriefStatus as setBriefStatusCmd,
   saveBrief as saveBriefCmd,
   syncBrief as syncBriefCmd,
   syncAll as syncAllCmd,
@@ -199,6 +200,13 @@ class ProjectStore {
     }
     // Opt-in: auto-refresh the brief's sync block on open (debounced).
     this.maybeAutoSync(path);
+  }
+
+  /** Set a brief's status on disk and refresh that brief in place. */
+  async setStatus(path: string, status: string): Promise<Brief> {
+    const updated = await setBriefStatusCmd(path, status);
+    this.upsert(updated);
+    return updated;
   }
 
   /** Save edited raw content back to disk and refresh that brief in place. */

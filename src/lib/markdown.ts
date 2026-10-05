@@ -85,10 +85,10 @@ export function renderMarkdown(
 
 /**
  * Wrap each `##` heading and the content beneath it (up to the next `##`) in a
- * native `<details class="md-section">` so sections collapse. Anything before
- * the first `##` (the `#` title, intro paragraph) is left untouched; `###`+
- * headings stay inside their parent section. Returns the input unchanged when
- * the body has no `##` headings.
+ * native `<details class="md-section">` so sections collapse. The `#` title
+ * is treated the same way, so the intro paragraph under it folds too; `###`+
+ * headings stay inside their parent section. Anything before the first `#`/`##`
+ * is left untouched. Returns the input unchanged when the body has neither.
  *
  * Takes the *sanitized* output of `renderMarkdown` and only re-parents those
  * nodes, adding elements/attributes it controls (`details`/`summary`/`div`,
@@ -101,15 +101,15 @@ export function renderMarkdown(
 export function sectionize(html: string, isCollapsed: (key: string) => boolean): string {
   const tpl = document.createElement("template");
   tpl.innerHTML = html;
-  if (!tpl.content.querySelector("h2")) return html;
+  if (!tpl.content.querySelector("h1, h2")) return html;
 
   const out = document.createElement("div");
   const seen = new Map<string, number>();
   let body: HTMLElement | null = null;
 
   for (const node of Array.from(tpl.content.childNodes)) {
-    const isH2 = node.nodeType === Node.ELEMENT_NODE && (node as Element).tagName === "H2";
-    if (!isH2) {
+    const tag = node.nodeType === Node.ELEMENT_NODE ? (node as Element).tagName : "";
+    if (tag !== "H1" && tag !== "H2") {
       (body ?? out).appendChild(node);
       continue;
     }

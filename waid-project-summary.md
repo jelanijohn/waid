@@ -154,7 +154,7 @@ Registered in `src-tauri/src/lib.rs`, implemented in `commands.rs`:
 | `save_brief` | Overwrite a brief's raw contents (edit-mode save) |
 | `touch_brief` | Update/insert `last_opened`, preserving all other frontmatter keys |
 | `set_brief_status` | Set (or, with an empty string, remove) the `status` key, preserving all other frontmatter keys; malformed YAML is an error, never a rewrite |
-| `set_brief_order` | Persist the sidebar's manual order to `settings.json` as vault-relative paths (an empty list restores recency sorting) |
+| `set_brief_order` | Persist the sidebar's manual order to `settings.json` as paths relative to the configured briefs directory (an empty list restores recency sorting) |
 | `append_capture` | Append a timestamped note under a `## Captures` heading (creates it if absent) |
 | `fire_webhook` | Async HTTP request (GET/POST/PUT/PATCH/DELETE), JSON body, custom headers (one value may interpolate a `{{secret}}` loaded internally from the keyring), returns status for toast |
 | `save_brief_webhook` / `delete_brief_webhook` | Add/update or remove a per-brief webhook (header shapes → frontmatter, secret → keyring keyed `whook:<brief-path>:<id>`); identity = stable slug `id` |
@@ -968,9 +968,12 @@ The visual layer has a named theme and shares branding with What's Next.
 - **Search & status filtering** — text filter (`⌘/Ctrl+F`) + status filter;
   archived briefs hidden by default, surfaced via the "archived" status (archive
   view).
-- **Manual project order** — drag rows in the sidebar (HTML5 drag-and-drop,
-  enabled in `tauri.conf.json`) or press `Alt+↑/↓` on the selected project.
-  The full order is persisted via `set_brief_order` as vault-relative paths;
+- **Manual project order** — drag rows in the sidebar (HTML5 drag-and-drop;
+  `tauri.conf.json` sets `dragDropEnabled: false` so the webview's native
+  file-drop interception doesn't swallow it) or press `Alt+↑/↓` on the
+  selected project. The full order is persisted via `set_brief_order` as
+  paths relative to the configured briefs directory (which may be a vault
+  subfolder);
   the list updates optimistically and rolls back if the write fails.
   *Reset to recent* in the appearance settings forgets it.
 - **Brief sync (deterministic)** — pull live state (open PRs/issues, last push,

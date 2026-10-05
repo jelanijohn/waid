@@ -768,6 +768,7 @@
                 type="text"
                 autocomplete="off"
                 placeholder="https://openrouter.ai/api/v1 · http://localhost:1234/v1"
+                aria-label="Endpoint URL"
                 bind:value={openaiUrl}
                 onblur={() => {
                   saveLlmSettings();
@@ -785,6 +786,7 @@
                 type="text"
                 autocomplete="off"
                 placeholder="e.g. mistralai/mistral-small · llama-3.1-8b"
+                aria-label="Model id"
                 bind:value={openaiModel}
                 onblur={saveLlmSettings}
               />
@@ -807,6 +809,7 @@
                   type="password"
                   autocomplete="off"
                   placeholder={openaiStored ? "Replace key…" : "API key (optional)"}
+                  aria-label="API key"
                   bind:value={openaiKey}
                   disabled={llmBusy || !openaiUrl.trim()}
                   onkeydown={(e) => {

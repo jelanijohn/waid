@@ -1921,13 +1921,31 @@ impl LlmProvider for AnthropicProvider {
 /// trailing slash and a pasted full endpoint (the Brave-BYOM-style habit of
 /// entering ".../v1/chat/completions" directly). The base is expected to
 /// already include any `/v1` the server wants — servers disagree about it, so
-/// WAID never guesses one in.
+/// WAID never guesses one in. The suffix is appended to the URL *path*, so a
+/// query string (Azure-style `?api-version=…`) survives in place; input that
+/// doesn't parse as a URL falls back to plain string handling (and then fails
+/// at request time with the server's/reqwest's own error).
 fn openai_chat_url(base: &str) -> String {
-    let base = base.trim().trim_end_matches('/');
-    if base.ends_with("/chat/completions") {
-        base.to_string()
-    } else {
-        format!("{base}/chat/completions")
+    const SUFFIX: &str = "/chat/completions";
+    let base = base.trim();
+    match reqwest::Url::parse(base) {
+        Ok(mut url) if !url.cannot_be_a_base() => {
+            let path = url.path().trim_end_matches('/').to_string();
+            if !path.ends_with(SUFFIX) {
+                url.set_path(&format!("{path}{SUFFIX}"));
+            } else if path != url.path() {
+                url.set_path(&path);
+            }
+            url.to_string()
+        }
+        _ => {
+            let base = base.trim_end_matches('/');
+            if base.ends_with(SUFFIX) {
+                base.to_string()
+            } else {
+                format!("{base}{SUFFIX}")
+            }
+        }
     }
 }
 
@@ -5020,6 +5038,26 @@ mod tests {
             openai_chat_url("http://localhost:8080"),
             "http://localhost:8080/chat/completions"
         );
+    }
+
+    #[test]
+    fn openai_chat_url_preserves_query_strings() {
+        // Azure-style versioned endpoint pasted in full…
+        assert_eq!(
+            openai_chat_url(
+                "https://x.openai.azure.com/openai/deployments/d/chat/completions?api-version=2026-01-01"
+            ),
+            "https://x.openai.azure.com/openai/deployments/d/chat/completions?api-version=2026-01-01"
+        );
+        // …or given as a base with a query: the suffix goes on the path, not after the query.
+        assert_eq!(
+            openai_chat_url("https://x.openai.azure.com/openai/deployments/d/?api-version=2026-01-01"),
+            "https://x.openai.azure.com/openai/deployments/d/chat/completions?api-version=2026-01-01"
+        );
+        // A bare origin gets a path.
+        assert_eq!(openai_chat_url("http://localhost:8080"), "http://localhost:8080/chat/completions");
+        // Non-URL input keeps the plain string behaviour.
+        assert_eq!(openai_chat_url("not a url/"), "not a url/chat/completions");
     }
 
     #[test]

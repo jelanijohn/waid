@@ -281,6 +281,56 @@
   let railRow = $state<HTMLDivElement | null>(null);
   let railDragging = $state(false);
 
+  // Upper bound for the rail (half the row), tracked so the separator can
+  // report it as aria-valuemax and clamp keyboard resizes. Follows the row
+  // as the window resizes.
+  let railMax = $state(RAIL_WIDTH_MIN);
+  $effect(() => {
+    if (!railRow) return;
+    const ro = new ResizeObserver(([entry]) => {
+      railMax = Math.max(RAIL_WIDTH_MIN, Math.floor(entry.contentRect.width * 0.5));
+    });
+    ro.observe(railRow);
+    return () => ro.disconnect();
+  });
+
+  function clampRail(px: number): number {
+    return Math.min(railMax, Math.max(RAIL_WIDTH_MIN, px));
+  }
+
+  // Keyboard resize for the separator (WAI-ARIA "window splitter"): arrows
+  // nudge by 16px (64px with Shift), Home/End jump to the bounds, Enter
+  // resets like a double-click. The rail sits on the right, so ArrowLeft
+  // moves the splitter left and widens it.
+  const RAIL_KEY_STEP = 16;
+  function onRailKeydown(e: KeyboardEvent) {
+    const step = e.shiftKey ? RAIL_KEY_STEP * 4 : RAIL_KEY_STEP;
+    let next: number;
+    switch (e.key) {
+      case "ArrowLeft":
+      case "ArrowUp":
+        next = settings.railWidth + step;
+        break;
+      case "ArrowRight":
+      case "ArrowDown":
+        next = settings.railWidth - step;
+        break;
+      case "Home":
+        next = RAIL_WIDTH_MIN;
+        break;
+      case "End":
+        next = railMax;
+        break;
+      case "Enter":
+        next = RAIL_WIDTH_DEFAULT;
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+    settings.setRailWidth(clampRail(next));
+  }
+
   // WebKitGTK (Linux/WSL) often ignores the CSS `cursor` (see ResizeHandles),
   // so drive the native cursor too. No-op outside Tauri (plain `vite dev`).
   function setCursor(icon: CursorIcon) {
@@ -301,9 +351,7 @@
   function moveRailDrag(e: PointerEvent) {
     if (!railDragging || !railRow) return;
     const r = railRow.getBoundingClientRect();
-    const max = Math.max(RAIL_WIDTH_MIN, r.width * 0.5);
-    const w = Math.min(max, Math.max(RAIL_WIDTH_MIN, r.right - e.clientX));
-    settings.setRailWidth(w, false);
+    settings.setRailWidth(clampRail(r.right - e.clientX), false);
   }
 
   function endRailDrag(e: PointerEvent) {
@@ -581,14 +629,20 @@
         class="relative flex min-h-0 shrink-0 flex-col border-l"
         style="width: {settings.railWidth}px; max-width: 50%; border-color: var(--border); background: var(--rail-bg);"
       >
-        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <!-- A focusable separator: pointer drag, or arrow/Home/End/Enter keys. -->
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_tabindex -->
         <div
           class="rail-grip"
           class:dragging={railDragging}
           role="separator"
+          tabindex="0"
           aria-orientation="vertical"
           aria-label="Resize live state panel"
-          title="Drag to resize · double-click to reset"
+          aria-valuemin={RAIL_WIDTH_MIN}
+          aria-valuenow={settings.railWidth}
+          aria-valuemax={railMax}
+          title="Drag to resize · double-click to reset · arrow keys to adjust"
+          onkeydown={onRailKeydown}
           onpointerdown={startRailDrag}
           onpointermove={moveRailDrag}
           onpointerup={endRailDrag}
@@ -667,8 +721,12 @@
   .rail-grip:hover::after {
     background: var(--accent-line);
   }
-  .rail-grip.dragging::after {
+  .rail-grip.dragging::after,
+  .rail-grip:focus-visible::after {
     background: var(--accent);
+  }
+  .rail-grip:focus-visible {
+    outline: none;
   }
 
   /* Status pill as a toggle: same look as the read-only pill, plus a hover

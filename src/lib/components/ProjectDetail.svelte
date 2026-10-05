@@ -70,13 +70,14 @@
   function toggleStatusMenu() {
     statusMenuOpen = !statusMenuOpen;
   }
+  /** Empty `status` clears the key ("No status"). */
   async function pickStatus(status: string) {
     statusMenuOpen = false;
     if (isCurrentStatus(status)) return;
     statusSaving = true;
     try {
       await projects.setStatus(brief.path, status);
-      toasts.success(`Status → ${statusLabel(status)}`);
+      toasts.success(status ? `Status → ${statusLabel(status)}` : "Status cleared");
     } catch (e) {
       toasts.error(`Could not set status: ${e}`);
     } finally {
@@ -476,6 +477,21 @@
                     {/if}
                   </button>
                 {/each}
+                <!-- Clears the key so the brief returns to "No status". -->
+                <button
+                  type="button"
+                  class="status-option"
+                  class:current={!brief.status}
+                  role="option"
+                  aria-selected={!brief.status}
+                  onclick={() => pickStatus("")}
+                >
+                  <span class="sdot h-[7px] w-[7px]" style="--sc: transparent; box-shadow: inset 0 0 0 1px var(--fg3);"></span>
+                  <span class="flex-1 text-left text-[var(--fg2)]">No status</span>
+                  {#if !brief.status}
+                    <Icon name="check" size={13} />
+                  {/if}
+                </button>
               </div>
             {/if}
           </div>

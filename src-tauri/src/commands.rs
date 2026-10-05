@@ -685,13 +685,13 @@ pub fn touch_brief(path: String) -> Result<Brief, String> {
 /// `touch_brief`: the frontmatter is edited as a `serde_yaml::Mapping` so
 /// every other key (and the body) survives untouched. The status is a free
 /// string — the known set (active/paused/blocked/archived) is a UI convention,
-/// and custom statuses already present in a vault round-trip unchanged.
+/// and custom statuses already present in a vault round-trip unchanged. An
+/// empty (or whitespace) status *removes* the key, restoring "no status" —
+/// status is optional everywhere else in the model, so assigning one must
+/// not be a one-way door.
 #[tauri::command]
 pub fn set_brief_status(path: String, status: String) -> Result<Brief, String> {
     let status = status.trim().to_string();
-    if status.is_empty() {
-        return Err("status cannot be empty".into());
-    }
     let p = PathBuf::from(&path);
     let raw = fs::read_to_string(&p).map_err(|e| format!("could not read {path}: {e}"))?;
     let new_raw = splice_status(&raw, &status)?;
@@ -699,7 +699,8 @@ pub fn set_brief_status(path: String, status: String) -> Result<Brief, String> {
     Ok(parse_brief(&p, new_raw))
 }
 
-/// Pure core of `set_brief_status`: return `raw` with its `status` key set.
+/// Pure core of `set_brief_status`: return `raw` with its `status` key set,
+/// or removed when `status` is empty.
 /// Frontmatter that fails to parse is an error, not an empty mapping — the
 /// alternative would silently rewrite the file with every other key gone.
 fn splice_status(raw: &str, status: &str) -> Result<String, String> {
@@ -709,10 +710,12 @@ fn splice_status(raw: &str, status: &str) -> Result<String, String> {
             .map_err(|e| format!("frontmatter is not valid YAML, leaving the file untouched: {e}"))?,
         None => serde_yaml::Mapping::new(),
     };
-    map.insert(
-        serde_yaml::Value::from("status"),
-        serde_yaml::Value::from(status),
-    );
+    let key = serde_yaml::Value::from("status");
+    if status.is_empty() {
+        map.remove(&key);
+    } else {
+        map.insert(key, serde_yaml::Value::from(status));
+    }
     let yaml_out = serde_yaml::to_string(&map).map_err(|e| e.to_string())?;
     Ok(format!("---\n{}---\n\n{}", yaml_out, body))
 }
@@ -4244,14 +4247,27 @@ mod tests {
     }
 
     #[test]
-    fn set_brief_status_rejects_empty() {
+    fn splice_status_empty_removes_key_and_preserves_the_rest() {
+        let raw = "---\nname: Test\nstatus: active\ncustom_key: keep me\n---\nbody";
+        let out = splice_status(raw, "").unwrap();
+        let brief = parse_brief(&PathBuf::from("/x/test.md"), out.clone());
+        assert_eq!(brief.status, None);
+        assert_eq!(brief.name, "Test");
+        assert!(out.contains("custom_key: keep me"));
+        assert!(!out.contains("status"));
+        // Clearing an already-absent status is a no-op, not an error.
+        let again = splice_status(&out, "").unwrap();
+        assert_eq!(again, out);
+    }
+
+    #[test]
+    fn set_brief_status_clears_on_whitespace() {
         let root = scratch_dir("status-empty");
         let path = root.join("p.md");
         fs::write(&path, "---\nname: P\nstatus: active\n---\nbody").unwrap();
-        let err = set_brief_status(path.to_string_lossy().into_owned(), "   ".into()).unwrap_err();
-        assert!(err.contains("empty"));
-        // File untouched.
-        assert!(fs::read_to_string(&path).unwrap().contains("status: active"));
+        let brief = set_brief_status(path.to_string_lossy().into_owned(), "   ".into()).unwrap();
+        assert_eq!(brief.status, None);
+        assert!(!fs::read_to_string(&path).unwrap().contains("status:"));
         fs::remove_dir_all(&root).unwrap();
     }
 

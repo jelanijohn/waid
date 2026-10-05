@@ -360,7 +360,11 @@
   function moveRailDrag(e: PointerEvent) {
     if (!railDragging || !railRow) return;
     const r = railRow.getBoundingClientRect();
-    settings.setRailWidth(clampRail(r.right - e.clientX), false);
+    const next = clampRail(r.right - e.clientX);
+    // Same guard as the keyboard path: when the visible width cannot change
+    // (cramped window), don't let the store's floor overwrite the preference.
+    if (next === railNow) return;
+    settings.setRailWidth(next, false);
   }
 
   function endRailDrag(e: PointerEvent) {

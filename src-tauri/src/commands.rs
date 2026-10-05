@@ -713,28 +713,115 @@ pub fn set_brief_status(path: String, status: String) -> Result<Brief, String> {
 
 /// Pure core of `set_brief_status`: return `raw` with its `status` key set,
 /// or removed when `status` is empty.
-/// Frontmatter that fails to parse is an error, not an empty mapping — the
-/// alternative would silently rewrite the file with every other key gone.
+///
+/// This is a *textual* splice, not a reserialized mapping: only the one
+/// `status:` line changes (replaced, removed, or appended just above the
+/// closing `---`), so comments, key order, quoting, blank lines, CRLF and a
+/// BOM in hand-authored frontmatter all survive byte-for-byte. The YAML is
+/// still parsed first so malformed frontmatter is an error — never a rewrite.
 fn splice_status(raw: &str, status: &str) -> Result<String, String> {
-    let (yaml, body) = split_frontmatter(raw);
+    let (yaml, _) = split_frontmatter(raw);
     if yaml.is_none() && has_unterminated_frontmatter(raw) {
         // `split_frontmatter` hands back an opener with no closing `---` as
         // plain body; inserting a new block above it would leave two openers.
         return Err("frontmatter opens with `---` but never closes, leaving the file untouched".into());
     }
-    let mut map: serde_yaml::Mapping = match &yaml {
-        Some(y) => serde_yaml::from_str(y)
-            .map_err(|e| format!("frontmatter is not valid YAML, leaving the file untouched: {e}"))?,
-        None => serde_yaml::Mapping::new(),
-    };
-    let key = serde_yaml::Value::from("status");
-    if status.is_empty() {
-        map.remove(&key);
-    } else {
-        map.insert(key, serde_yaml::Value::from(status));
+    if let Some(y) = &yaml {
+        let v: serde_yaml::Value = serde_yaml::from_str(y)
+            .map_err(|e| format!("frontmatter is not valid YAML, leaving the file untouched: {e}"))?;
+        if !matches!(v, serde_yaml::Value::Null | serde_yaml::Value::Mapping(_)) {
+            return Err("frontmatter is not a key/value mapping, leaving the file untouched".into());
+        }
     }
-    let yaml_out = serde_yaml::to_string(&map).map_err(|e| e.to_string())?;
-    Ok(format!("---\n{}---\n\n{}", yaml_out, body))
+
+    // Let serde_yaml quote the value so odd statuses (`yes`, `1.0`, `a: b`)
+    // stay strings; it yields a single `status: <value>` line.
+    let status_line: Option<String> = if status.is_empty() {
+        None
+    } else {
+        let mut m = serde_yaml::Mapping::new();
+        m.insert(serde_yaml::Value::from("status"), serde_yaml::Value::from(status));
+        Some(serde_yaml::to_string(&m).map_err(|e| e.to_string())?.trim_end().to_string())
+    };
+
+    let Some((start, end)) = frontmatter_span(raw) else {
+        // No frontmatter at all: nothing to remove, or add a minimal block.
+        return Ok(match status_line {
+            None => raw.to_string(),
+            Some(line) => format!("---\n{line}\n---\n\n{raw}"),
+        });
+    };
+
+    let yaml_text = &raw[start..end];
+    let nl = if raw[..start].contains("\r\n") || yaml_text.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut out = String::with_capacity(raw.len() + 32);
+    out.push_str(&raw[..start]);
+    let mut replaced = false;
+    let mut skipping_continuation = false;
+    for line in yaml_text.split_inclusive('\n') {
+        let bare = line.trim_end_matches(['\r', '\n']);
+        if skipping_continuation {
+            // Indented lines after a block/folded `status: |` belong to it.
+            if bare.starts_with(' ') || bare.starts_with('\t') {
+                continue;
+            }
+            skipping_continuation = false;
+        }
+        if !replaced && is_top_level_status_line(bare) {
+            replaced = true;
+            skipping_continuation = true;
+            if let Some(l) = &status_line {
+                out.push_str(l);
+                out.push_str(nl);
+            }
+            continue;
+        }
+        out.push_str(line);
+    }
+    if !replaced {
+        if let Some(l) = &status_line {
+            if !out.ends_with('\n') {
+                out.push_str(nl);
+            }
+            out.push_str(l);
+            out.push_str(nl);
+        }
+    }
+    out.push_str(&raw[end..]);
+    Ok(out)
+}
+
+/// Byte range `[start, end)` of the YAML text inside `raw`'s frontmatter —
+/// after the opening `---` line, up to the start of the closing `---` line —
+/// or `None` when there is no (closed) frontmatter. Mirrors
+/// `split_frontmatter`'s BOM/CRLF handling but keeps offsets into `raw`.
+fn frontmatter_span(raw: &str) -> Option<(usize, usize)> {
+    let bom = if raw.starts_with('\u{feff}') { '\u{feff}'.len_utf8() } else { 0 };
+    let after = &raw[bom..];
+    let open_len = if after.starts_with("---\n") {
+        4
+    } else if after.starts_with("---\r\n") {
+        5
+    } else {
+        return None;
+    };
+    let start = bom + open_len;
+    let mut idx = start;
+    for line in raw[start..].split_inclusive('\n') {
+        if line.trim_end_matches(['\r', '\n']) == "---" {
+            return Some((start, idx));
+        }
+        idx += line.len();
+    }
+    None
+}
+
+/// `status:` as a top-level key on this (newline-stripped) line: no leading
+/// indentation, and the key is followed by end-of-line or whitespace.
+fn is_top_level_status_line(bare: &str) -> bool {
+    bare.strip_prefix("status:")
+        .map(|rest| rest.is_empty() || rest.starts_with(' ') || rest.starts_with('\t'))
+        .unwrap_or(false)
 }
 
 /// Append a timestamped note under a `## Captures` heading in a brief's body.
@@ -4276,7 +4363,49 @@ mod tests {
         let brief = parse_brief(&PathBuf::from("/x/test.md"), out.clone());
         assert_eq!(brief.status.as_deref(), Some("blocked"));
         assert_eq!(brief.name, "Test");
-        assert!(out.ends_with("---\n\nbody"));
+        assert_eq!(out, "---\nname: Test\nstatus: blocked\n---\nbody");
+    }
+
+    #[test]
+    fn splice_status_touches_only_the_status_line() {
+        // Comments, key order, quoting, blank lines and the body are preserved
+        // byte-for-byte; only the `status:` line changes.
+        let raw = "---\n# project meta\nname: \"Quoted: name\"\n\nstatus: active # was set by hand\ntags: [a, b]\n---\n\n# Body\n";
+        let out = splice_status(raw, "paused").unwrap();
+        assert_eq!(
+            out,
+            "---\n# project meta\nname: \"Quoted: name\"\n\nstatus: paused\ntags: [a, b]\n---\n\n# Body\n"
+        );
+        // Removing it drops exactly that line.
+        let cleared = splice_status(&out, "").unwrap();
+        assert_eq!(cleared, "---\n# project meta\nname: \"Quoted: name\"\n\ntags: [a, b]\n---\n\n# Body\n");
+        // Appending goes just above the closing delimiter.
+        let added = splice_status(&cleared, "blocked").unwrap();
+        assert_eq!(added, "---\n# project meta\nname: \"Quoted: name\"\n\ntags: [a, b]\nstatus: blocked\n---\n\n# Body\n");
+    }
+
+    #[test]
+    fn splice_status_preserves_bom_and_crlf() {
+        let raw = "\u{feff}---\r\nname: Test\r\nstatus: active\r\n---\r\nbody\r\n";
+        let out = splice_status(raw, "paused").unwrap();
+        assert_eq!(out, "\u{feff}---\r\nname: Test\r\nstatus: paused\r\n---\r\nbody\r\n");
+        let added = splice_status("---\r\nname: Test\r\n---\r\nbody", "active").unwrap();
+        assert_eq!(added, "---\r\nname: Test\r\nstatus: active\r\n---\r\nbody");
+    }
+
+    #[test]
+    fn splice_status_replaces_block_scalar_and_quotes_odd_values() {
+        let raw = "---\nstatus: |\n  multi\n  line\nname: Test\n---\nbody";
+        let out = splice_status(raw, "paused").unwrap();
+        assert_eq!(out, "---\nstatus: paused\nname: Test\n---\nbody");
+        // A value YAML would otherwise read as a bool/number stays a string.
+        let out = splice_status("---\nname: Test\n---\nbody", "yes").unwrap();
+        let brief = parse_brief(&PathBuf::from("/x/test.md"), out);
+        assert_eq!(brief.status.as_deref(), Some("yes"));
+        // Nested `status:` keys are not top-level and are left alone.
+        let raw = "---\nmeta:\n  status: inner\n---\nbody";
+        let out = splice_status(raw, "active").unwrap();
+        assert_eq!(out, "---\nmeta:\n  status: inner\nstatus: active\n---\nbody");
     }
 
     #[test]
@@ -4320,7 +4449,7 @@ mod tests {
         let out = splice_status("---\n---\nbody", "active").unwrap();
         let brief = parse_brief(&PathBuf::from("/x/test.md"), out.clone());
         assert_eq!(brief.status.as_deref(), Some("active"));
-        assert!(out.ends_with("---\n\nbody"));
+        assert_eq!(out, "---\nstatus: active\n---\nbody");
         let out = splice_status("---\n\n---\nbody", "active").unwrap();
         assert!(out.contains("status: active"));
     }

@@ -1937,7 +1937,11 @@ fn openai_chat_url(base: &str) -> String {
 /// the OS keyring (`openai.api_key`) and is OPTIONAL (local servers need none).
 /// Modelled on `AnthropicProvider`: no `response_format` enforcement — many
 /// compat servers 400 on unknown params, and the closed-schema prompts don't
-/// need it.
+/// need it. Likewise no output-token limit: the field is optional on this
+/// protocol and servers disagree about its *name* (`max_tokens` vs the newer
+/// `max_completion_tokens`, each rejected with a 400 by some endpoints), so
+/// like the native Ollama path we rely on the server default — the prompts ask
+/// for a small closed JSON object anyway.
 struct OpenAiCompatProvider {
     client: reqwest::Client,
     /// Full chat-completions URL, pre-resolved via `openai_chat_url`.
@@ -1955,9 +1959,6 @@ impl LlmProvider for OpenAiCompatProvider {
                 { "role": "system", "content": system },
                 { "role": "user", "content": user },
             ],
-            // Same output bound as the Anthropic path; the legacy param name is
-            // the one every compat server accepts.
-            "max_tokens": 1024,
             "stream": false,
         });
         let mut req = self

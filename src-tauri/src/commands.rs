@@ -756,27 +756,47 @@ fn splice_status(raw: &str, status: &str) -> Result<String, String> {
     let nl = if raw[..start].contains("\r\n") || yaml_text.contains("\r\n") { "\r\n" } else { "\n" };
     let mut out = String::with_capacity(raw.len() + 32);
     out.push_str(&raw[..start]);
+    let lines: Vec<&str> = yaml_text.split_inclusive('\n').collect();
+    let indented = |l: &str| l.starts_with(' ') || l.starts_with('\t');
+    let blank = |l: &str| l.trim().is_empty();
     let mut replaced = false;
-    let mut skipping_continuation = false;
-    for line in yaml_text.split_inclusive('\n') {
-        let bare = line.trim_end_matches(['\r', '\n']);
-        if skipping_continuation {
-            // Indented lines after a block/folded `status: |` belong to it.
-            if bare.starts_with(' ') || bare.starts_with('\t') {
-                continue;
-            }
-            skipping_continuation = false;
-        }
+    let mut i = 0;
+    while i < lines.len() {
+        let bare = lines[i].trim_end_matches(['\r', '\n']);
         if !replaced && is_top_level_status_line(bare) {
             replaced = true;
-            skipping_continuation = true;
             if let Some(l) = &status_line {
                 out.push_str(l);
                 out.push_str(nl);
             }
+            // Drop the old value's continuation: indented lines after a
+            // block/folded `status: |`, including blank lines *inside* it
+            // (a blank followed by more indented text). A trailing blank
+            // before the next top-level entry is not part of the value and
+            // is kept.
+            i += 1;
+            while i < lines.len() {
+                let b = lines[i].trim_end_matches(['\r', '\n']);
+                if indented(b) {
+                    i += 1;
+                    continue;
+                }
+                if blank(b) {
+                    let mut j = i + 1;
+                    while j < lines.len() && blank(lines[j].trim_end_matches(['\r', '\n'])) {
+                        j += 1;
+                    }
+                    if j < lines.len() && indented(lines[j].trim_end_matches(['\r', '\n'])) {
+                        i = j;
+                        continue;
+                    }
+                }
+                break;
+            }
             continue;
         }
-        out.push_str(line);
+        out.push_str(lines[i]);
+        i += 1;
     }
     if !replaced {
         if let Some(l) = &status_line {
@@ -4401,6 +4421,18 @@ mod tests {
         let raw = "---\nstatus: |\n  multi\n  line\nname: Test\n---\nbody";
         let out = splice_status(raw, "paused").unwrap();
         assert_eq!(out, "---\nstatus: paused\nname: Test\n---\nbody");
+        // Blank lines inside a block scalar belong to it and go with it ...
+        let raw = "---\nstatus: |\n  first\n\n  second\nname: Test\n---\nbody";
+        let out = splice_status(raw, "paused").unwrap();
+        assert_eq!(out, "---\nstatus: paused\nname: Test\n---\nbody");
+        assert_eq!(parse_brief(&PathBuf::from("/x/t.md"), out).status.as_deref(), Some("paused"));
+        // ... while a trailing blank line before the next key is kept.
+        let raw = "---\nstatus: active\n\nname: Test\n---\nbody";
+        let out = splice_status(raw, "paused").unwrap();
+        assert_eq!(out, "---\nstatus: paused\n\nname: Test\n---\nbody");
+        // Removing a block scalar at the end of the frontmatter is clean too.
+        let raw = "---\nname: Test\nstatus: >\n  folded\n\n  text\n---\nbody";
+        assert_eq!(splice_status(raw, "").unwrap(), "---\nname: Test\n---\nbody");
         // A value YAML would otherwise read as a bool/number stays a string.
         let out = splice_status("---\nname: Test\n---\nbody", "yes").unwrap();
         let brief = parse_brief(&PathBuf::from("/x/test.md"), out);

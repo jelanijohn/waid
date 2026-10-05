@@ -293,16 +293,21 @@ body {
   color: var(--fg3);
 }
 
-/* Sidebar status-filter dropdown. A native <select> ignores CSS variables for
-   its arrow and popup list, so each theme sets color-scheme + its own chevron. */
-.status-select {
+/* Themed native dropdowns. A native <select> ignores CSS variables for its
+   text, arrow and popup list (in dark mode the selected value can render
+   nearly invisible), so each theme sets color-scheme + its own chevron.
+   `.themed-select` is the generic form-field variant (Settings, etc.);
+   `.status-select` is the sidebar status filter built on the same rules. */
+.status-select,
+.themed-select {
   appearance: none;
   -webkit-appearance: none;
   color-scheme: light;
   background-color: var(--input-bg);
   border: 1px solid var(--border);
-  color: var(--fg2);
-  padding: 0 26px 0 10px;
+  color: var(--fg);
+  padding-left: 10px;
+  padding-right: 26px;
   outline: none;
   cursor: pointer;
   background-repeat: no-repeat;
@@ -311,11 +316,18 @@ body {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236a6f7a' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   transition: border-color 0.14s, box-shadow 0.14s, color 0.14s;
 }
-.status-select:hover {
+.status-select {
+  color: var(--fg2);
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.status-select:hover,
+.themed-select:hover {
   color: var(--fg);
   border-color: color-mix(in srgb, var(--fg3) 55%, var(--border));
 }
-.status-select:focus-visible {
+.status-select:focus-visible,
+.themed-select:focus-visible {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-tint);
 }
@@ -323,16 +335,21 @@ body {
   color: var(--fg);
   border-color: var(--accent-line);
 }
-.status-select option {
+.status-select option,
+.themed-select option {
   background: var(--input-bg);
   color: var(--fg);
+}
+.status-select option {
   text-transform: capitalize;
 }
-.dark .status-select {
+.dark .status-select,
+.dark .themed-select {
   color-scheme: dark;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23868c97' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 }
-.dark .status-select:hover {
+.dark .status-select:hover,
+.dark .themed-select:hover {
   border-color: rgba(255, 255, 255, 0.16);
 }
 

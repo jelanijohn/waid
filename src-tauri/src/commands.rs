@@ -4745,9 +4745,154 @@ mod tests {
         delete_secret_value(key).unwrap(); // idempotent
     }
 
+    // --- OpenAI-compatible provider (hermetic, mock server) -----------------
+
+    /// Spawn a one-shot HTTP/1.1 server on a random loopback port that answers
+    /// the first request with `status`/`body` and returns the raw request it
+    /// received (start line + headers + body) for assertions.
+    async fn mock_http_once(
+        status: u16,
+        body: &str,
+    ) -> (String, tokio::task::JoinHandle<String>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1", listener.local_addr().unwrap());
+        let body = body.to_string();
+        let handle = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = Vec::new();
+            let mut tmp = [0u8; 4096];
+            // Read until the headers are complete, then until Content-Length
+            // bytes of body have arrived.
+            loop {
+                let n = sock.read(&mut tmp).await.unwrap();
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&tmp[..n]);
+                if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&buf[..pos]).to_string();
+                    let len = head
+                        .lines()
+                        .find_map(|l| {
+                            let (k, v) = l.split_once(':')?;
+                            k.eq_ignore_ascii_case("content-length")
+                                .then(|| v.trim().parse::<usize>().ok())
+                                .flatten()
+                        })
+                        .unwrap_or(0);
+                    if buf.len() >= pos + 4 + len {
+                        break;
+                    }
+                }
+            }
+            let resp = format!(
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            sock.write_all(resp.as_bytes()).await.unwrap();
+            sock.shutdown().await.ok();
+            String::from_utf8_lossy(&buf).to_string()
+        });
+        (url, handle)
+    }
+
+    fn mock_provider(base: &str, api_key: Option<&str>) -> OpenAiCompatProvider {
+        OpenAiCompatProvider {
+            client: http_client(5, 10).unwrap(),
+            url: openai_chat_url(base),
+            model: "test-model".into(),
+            api_key: api_key.map(str::to_string),
+        }
+    }
+
+    /// Split a captured raw request into (start line + headers, JSON body).
+    fn split_request(raw: &str) -> (String, serde_json::Value) {
+        let (head, body) = raw.split_once("\r\n\r\n").expect("request has a body");
+        (head.to_lowercase(), serde_json::from_str(body).expect("body is JSON"))
+    }
+
+    #[tokio::test]
+    async fn openai_compat_sends_bearer_and_minimal_chat_payload() {
+        let (base, server) = mock_http_once(
+            200,
+            r#"{"choices":[{"message":{"role":"assistant","content":"{\"current_state\":\"ok\"}"}}]}"#,
+        )
+        .await;
+        let out = mock_provider(&base, Some("sk-test"))
+            .complete("SYS", "USER")
+            .await
+            .unwrap();
+        assert_eq!(out, r#"{"current_state":"ok"}"#);
+
+        let (head, body) = split_request(&server.await.unwrap());
+        assert!(head.starts_with("post /v1/chat/completions http/1.1"), "{head}");
+        assert!(head.contains("authorization: bearer sk-test"), "{head}");
+        assert!(head.contains("content-type: application/json"), "{head}");
+        assert_eq!(body["model"], "test-model");
+        assert_eq!(body["stream"], false);
+        assert_eq!(body["messages"][0]["role"], "system");
+        assert_eq!(body["messages"][0]["content"], "SYS");
+        assert_eq!(body["messages"][1]["role"], "user");
+        assert_eq!(body["messages"][1]["content"], "USER");
+        // Deliberately absent: fields some compat servers reject with a 400.
+        for forbidden in ["response_format", "max_tokens", "max_completion_tokens"] {
+            assert!(body.get(forbidden).is_none(), "payload must not send {forbidden}");
+        }
+    }
+
+    #[tokio::test]
+    async fn openai_compat_omits_authorization_without_a_key() {
+        let (base, server) = mock_http_once(
+            200,
+            r#"{"choices":[{"message":{"content":"hi"}}]}"#,
+        )
+        .await;
+        assert_eq!(mock_provider(&base, None).complete("s", "u").await.unwrap(), "hi");
+        let (head, _) = split_request(&server.await.unwrap());
+        assert!(!head.contains("authorization"), "{head}");
+    }
+
+    #[tokio::test]
+    async fn openai_compat_surfaces_http_errors_with_status_and_body() {
+        let (base, server) = mock_http_once(
+            401,
+            r#"{"error":{"message":"Invalid API key"}}"#,
+        )
+        .await;
+        let err = mock_provider(&base, Some("bad")).complete("s", "u").await.unwrap_err();
+        assert!(err.contains("401"), "{err}");
+        assert!(err.contains("Invalid API key"), "{err}");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn openai_compat_rejects_empty_or_missing_content() {
+        for body in [
+            r#"{"choices":[]}"#,
+            r#"{"choices":[{"message":{"content":"   "}}]}"#,
+            r#"{"id":"x"}"#,
+        ] {
+            let (base, server) = mock_http_once(200, body).await;
+            let err = mock_provider(&base, None).complete("s", "u").await.unwrap_err();
+            assert!(err.contains("no message content"), "{body} -> {err}");
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn openai_compat_rejects_non_json_success_body() {
+        let (base, server) = mock_http_once(200, "<html>not json</html>").await;
+        let err = mock_provider(&base, None).complete("s", "u").await.unwrap_err();
+        assert!(err.contains("invalid JSON"), "{err}");
+        server.await.unwrap();
+    }
+
     /// Live smoke test for the OpenAI-compatible provider against Ollama's own
-    /// `/v1` facade — validates the whole wire path (no `response_format`,
-    /// `max_tokens`, bearer-less local server) with zero extra infrastructure.
+    /// `/v1` facade — validates the whole wire path against a real server (the
+    /// hermetic `openai_compat_*` tests above cover the request/response
+    /// contract; this one proves a real model accepts it) with zero extra
+    /// infrastructure.
     /// Needs Ollama on localhost:11434 with the model below pulled; run with
     /// `cargo test openai_compat_live -- --ignored`.
     #[tokio::test]

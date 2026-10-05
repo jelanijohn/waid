@@ -549,9 +549,12 @@ fn resolve_vault(start: &Path) -> Option<(PathBuf, String)> {
 
 // --- Commands -------------------------------------------------------------
 
-/// List every `.md` brief under the configured directory, parsed and sorted by
-/// most-recently-opened (then name). Recurses into subfolders (Obsidian vaults
-/// nest notes) while skipping dot-entries like `.obsidian/`, `.trash/`, `.git/`.
+/// List every `.md` brief under the configured directory, parsed and sorted:
+/// briefs in the saved manual order (`set_brief_order`) by their position,
+/// after any not yet ordered, which sort most-recently-opened (then name) — so
+/// with no manual order this is the classic recency sort (see `sort_briefs`).
+/// Recurses into subfolders (Obsidian vaults nest notes) while skipping
+/// dot-entries like `.obsidian/`, `.trash/`, `.git/`.
 #[tauri::command]
 pub fn list_briefs(app: AppHandle) -> Result<Vec<Brief>, String> {
     let dir = briefs_dir(&app)?;

@@ -4289,6 +4289,18 @@ mod tests {
     }
 
     #[test]
+    fn splice_status_handles_empty_frontmatter() {
+        // `---\n---` is valid, empty frontmatter: serde_yaml reads the empty
+        // document as an empty mapping, so a first status can be assigned.
+        let out = splice_status("---\n---\nbody", "active").unwrap();
+        let brief = parse_brief(&PathBuf::from("/x/test.md"), out.clone());
+        assert_eq!(brief.status.as_deref(), Some("active"));
+        assert!(out.ends_with("---\n\nbody"));
+        let out = splice_status("---\n\n---\nbody", "active").unwrap();
+        assert!(out.contains("status: active"));
+    }
+
+    #[test]
     fn set_brief_status_clears_on_whitespace() {
         let root = scratch_dir("status-empty");
         let path = root.join("p.md");

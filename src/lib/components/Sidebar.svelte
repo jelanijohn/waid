@@ -175,6 +175,17 @@
     projects.statusFilter = value === "" ? null : value;
   }
 
+  // The dropdown's options: every status present, plus the active filter if
+  // it no longer matches any brief (e.g. the only "blocked" brief was just
+  // re-labelled from the header picker). Keeping it listed keeps the
+  // "All statuses" control reachable so the user can clear the empty view.
+  let filterOptions = $derived.by(() => {
+    const f = projects.statusFilter;
+    const present = projects.statuses;
+    if (!f || present.some((s) => s.toLowerCase() === f.toLowerCase())) return present;
+    return [...present, f];
+  });
+
   function startNew() {
     newName = "";
     creating = true;
@@ -241,8 +252,9 @@
       </div>
     </div>
 
-    <!-- Status filter dropdown -->
-    {#if projects.statuses.length > 1}
+    <!-- Status filter dropdown: shown when there's something to filter by,
+         and always while a filter is active so it can be cleared. -->
+    {#if projects.statuses.length > 1 || projects.statusFilter}
       <div class="px-[18px] pb-2 pt-1">
         <select
           class="status-select h-[28px] w-full rounded-[7px] text-[11.5px] font-medium capitalize {projects.statusFilter
@@ -253,7 +265,7 @@
           onchange={(e) => setStatusFilter(e.currentTarget.value)}
         >
           <option value="">All statuses</option>
-          {#each projects.statuses as status (status)}
+          {#each filterOptions as status (status)}
             <option value={status}>{status}</option>
           {/each}
         </select>

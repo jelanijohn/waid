@@ -4106,6 +4106,11 @@ pub async fn sync_mind_state(path: String) -> Result<Brief, String> {
     let mind = neuroskill::compute_mind_state(&dir, &slug, window, now)?;
     let rendered = neuroskill::render_mind_state(&mind, now);
 
+    // Same late re-read as `sync_brief`/`synthesize_brief`: the SQLite rollup
+    // can take a moment, and a status change or capture landing meanwhile
+    // must not be reverted by writing the pre-compute snapshot back.
+    let raw = fs::read_to_string(&p).map_err(|e| format!("could not read {path}: {e}"))?;
+
     // Edit only the body's managed region; re-attach the frontmatter verbatim.
     let (prefix, body) = split_for_body_edit(&raw);
     let new_body = upsert_marked_block(body, "waid:mind", &rendered)?;

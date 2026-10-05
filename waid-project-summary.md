@@ -149,10 +149,12 @@ Registered in `src-tauri/src/lib.rs`, implemented in `commands.rs`:
 
 | Command | Purpose |
 |---|---|
-| `list_briefs` | List/parse all `.md` briefs (recursive), sorted by `last_opened` desc, then name |
+| `list_briefs` | List/parse all `.md` briefs (recursive); manually ordered briefs by their saved position, any others first by `last_opened` desc, then name |
 | `read_brief` | Read + parse a single brief by absolute path |
 | `save_brief` | Overwrite a brief's raw contents (edit-mode save) |
 | `touch_brief` | Update/insert `last_opened`, preserving all other frontmatter keys |
+| `set_brief_status` | Set (or, with an empty string, remove) the `status` key, preserving all other frontmatter keys; malformed YAML is an error, never a rewrite |
+| `set_brief_order` | Persist the sidebar's manual order to `settings.json` as paths relative to the configured briefs directory (an empty list restores recency sorting) |
 | `append_capture` | Append a timestamped note under a `## Captures` heading (creates it if absent) |
 | `fire_webhook` | Async HTTP request (GET/POST/PUT/PATCH/DELETE), JSON body, custom headers (one value may interpolate a `{{secret}}` loaded internally from the keyring), returns status for toast |
 | `save_brief_webhook` / `delete_brief_webhook` | Add/update or remove a per-brief webhook (header shapes → frontmatter, secret → keyring keyed `whook:<brief-path>:<id>`); identity = stable slug `id` |
@@ -396,7 +398,8 @@ waid/
 │       │                         #   VaultInfo / BootstrapAnswers / Provider / Connection /
 │       │                         #   BriefIntegration / Integration*
 │       ├── status.ts             # status order + color/label palette (CSS vars)
-│       ├── markdown.ts           # marked + DOMPurify (+ wikilink rendering)
+│       ├── markdown.ts           # marked + DOMPurify (+ wikilink rendering, sectionize)
+│       ├── sections.ts           # per-brief collapsed-section state (localStorage)
 │       ├── bootstrap.ts          # paste-a-prompt template + stub-brief detection (frontend-only)
 │       ├── providers.ts          # PM-provider display metadata (brand/monogram/blurb/form needs + kind helpers)
 │       └── time.ts               # relative-time helper
@@ -908,9 +911,11 @@ The visual layer has a named theme and shares branding with What's Next.
 - **Brief layout (new setting).** Where a brief's live-state panel sits is
   user-selectable from the titlebar's View & appearance menu — `briefLayout` in
   `settings.svelte.ts` (`two-col` | `body` | `quiet`, default `two-col`):
-  a right-hand 320px `--rail-bg` rail, below the brief body under a hairline
-  divider, or a slim feed-strip across the top. Persisted to `localStorage`
-  alongside accent / sidebar style / density.
+  a right-hand `--rail-bg` rail (resizable — drag its grip or use the arrow
+  keys on the focused separator; 320px default, 280px floor, capped at half the
+  row, `railWidth`), below the brief body under a hairline divider, or a slim
+  feed-strip across the top. Persisted to `localStorage` alongside accent /
+  sidebar style / density / alternate row shading (`sidebarZebra`).
 - **Layout:** a **unified titlebar** (the app's own window chrome — breadcrumb,
   *Sync all*, briefing, View & appearance menu) over a still **two-pane** body —
   a sidebar (search/filter, project name, status
@@ -929,7 +934,14 @@ The visual layer has a named theme and shares branding with What's Next.
 
 - **Two-pane layout** — sidebar of projects + detail pane.
 - **Markdown rendering** of the brief body (with Obsidian `[[wikilinks]]` +
-  backlinks when in a vault).
+  backlinks when in a vault). `#`/`##` headings become collapsible
+  `<details>` sections (`sectionize` in `markdown.ts`, applied after
+  sanitizing); which ones are folded is remembered per brief in
+  `localStorage` (`sections.ts`), as is the header description's fold.
+- **Status editing** — the status pill in the detail header is a picker:
+  the four known statuses, any custom status already present in the vault,
+  or **No status** (removes the key). Splices only `status` via
+  `set_brief_status`.
 - **Edit mode** — toggle to a raw textarea and save back to the `.md`
   (round-trips the whole file; frontmatter preserved). `⌘/Ctrl+S` saves.
 - **Brief bootstrap** — a stub brief offers a **"Generate the initial brief"**
@@ -956,6 +968,14 @@ The visual layer has a named theme and shares branding with What's Next.
 - **Search & status filtering** — text filter (`⌘/Ctrl+F`) + status filter;
   archived briefs hidden by default, surfaced via the "archived" status (archive
   view).
+- **Manual project order** — drag rows in the sidebar (HTML5 drag-and-drop;
+  `tauri.conf.json` sets `dragDropEnabled: false` so the webview's native
+  file-drop interception doesn't swallow it) or press `Alt+↑/↓` on the
+  selected project. The full order is persisted via `set_brief_order` as
+  paths relative to the configured briefs directory (which may be a vault
+  subfolder);
+  the list updates optimistically and rolls back if the write fails.
+  *Reset to recent* in the appearance settings forgets it.
 - **Brief sync (deterministic)** — pull live state (open PRs/issues, last push,
   CI via the combined-status API, latest release) from a brief's GitHub link or
   explicit `sources` into the managed `## Activity` block. Frontmatter and prose
@@ -989,8 +1009,9 @@ The visual layer has a named theme and shares branding with What's Next.
   call time from its own on-disk `auth.token` and never stored by WAID, so like
   Gmail it has no `bconn:` token.)
 - **Appearance** — light/dark, accent, sidebar list style (Rows / Compact /
-  Rocks), density, and the **Brief layout** control (two-column rail / body-first
-  / quiet-top), all from the **View & appearance** menu in the titlebar.
+  Rocks), alternate row shading, density, project-order reset, and the
+  **Brief layout** control (two-column rail / body-first / quiet-top, with a
+  resizable rail), all from the **View & appearance** menu in the titlebar.
 
 ### Keyboard / shortcuts
 
@@ -1000,6 +1021,7 @@ The visual layer has a named theme and shares branding with What's Next.
 - **In-app** `⌘/Ctrl+K` — quick-capture modal.
 - **In-app** `⌘/Ctrl+F` — focus the sidebar search/filter.
 - **In-app** `⌘/Ctrl+S` — save in edit mode.
+- **In-app** `Alt+↑/↓` — move the selected project up/down in the sidebar.
 
 ---
 
@@ -1009,10 +1031,10 @@ Several earlier "planned" items have now **shipped** — Obsidian vault storage,
 encrypted/keyring secret storage, search + status filters + archive view,
 sanitized seed briefs, the dedicated Linear / Asana / Jira / **Notion** /
 **Gmail** / **Slack**
-connectors (plus a richer GitHub connector — Gmail via Google OAuth), **and brief
-bootstrap** (folder / GitHub / interview / paste). Remaining planned:
+connectors (plus a richer GitHub connector — Gmail via Google OAuth), **brief
+bootstrap** (folder / GitHub / interview / paste), **and drag-to-reorder** of the
+project list. Remaining planned:
 
-- **Drag-to-reorder** the project list.
 - A **richer markdown editor** (CodeMirror / Tiptap / Milkdown).
 - A dedicated borderless **"spotlight" window** for quick capture (today the
   global shortcut focuses the main window).

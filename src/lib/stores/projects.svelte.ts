@@ -7,6 +7,8 @@ import {
   getVaultInfo,
   isWsl as isWslCmd,
   touchBrief,
+  setBriefOrder,
+  setBriefStatus as setBriefStatusCmd,
   saveBrief as saveBriefCmd,
   syncBrief as syncBriefCmd,
   syncAll as syncAllCmd,
@@ -201,6 +203,13 @@ class ProjectStore {
     this.maybeAutoSync(path);
   }
 
+  /** Set a brief's status on disk and refresh that brief in place. */
+  async setStatus(path: string, status: string): Promise<Brief> {
+    const updated = await setBriefStatusCmd(path, status);
+    this.upsert(updated);
+    return updated;
+  }
+
   /** Save edited raw content back to disk and refresh that brief in place. */
   async save(path: string, content: string): Promise<Brief> {
     const updated = await saveBriefCmd(path, content);
@@ -285,6 +294,39 @@ class ProjectStore {
       if (this.selectedPath !== path) return; // moved on — skip
       this.sync(path).catch((e) => console.error("auto-sync failed:", e));
     }, 800);
+  }
+
+  /** Move the brief at `fromPath` next to the one at `toPath` (after it when
+   *  `after`, else before) and persist the full order. Optimistic: the list
+   *  updates immediately; a failed write rolls the list back to the previous
+   *  order and is rethrown for the caller to surface, so a move that never
+   *  reached disk cannot ride along in the next successful save.
+   *  Positions are relative to the whole list, so a move within a filtered or
+   *  status-grouped view lands correctly once the filter is lifted. */
+  async reorder(fromPath: string, toPath: string, after: boolean): Promise<void> {
+    if (fromPath === toPath) return;
+    const prev = this.briefs;
+    const next = prev.slice();
+    const from = next.findIndex((b) => b.path === fromPath);
+    if (from === -1) return;
+    const [moved] = next.splice(from, 1);
+    const to = next.findIndex((b) => b.path === toPath);
+    if (to === -1) return;
+    next.splice(after ? to + 1 : to, 0, moved);
+    this.briefs = next;
+    try {
+      await setBriefOrder(next.map((b) => b.path));
+    } catch (err) {
+      // Only roll back if nothing else has replaced the list meanwhile.
+      if (this.briefs === next) this.briefs = prev;
+      throw err;
+    }
+  }
+
+  /** Clear the manual order; the list returns to most-recently-opened. */
+  async resetOrder(): Promise<void> {
+    await setBriefOrder([]);
+    await this.load();
   }
 
   /** Replace (or insert) a brief by path, without reordering the list. */

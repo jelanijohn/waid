@@ -234,6 +234,15 @@ fn split_frontmatter(content: &str) -> (Option<String>, String) {
     (None, content.to_string())
 }
 
+/// Whether `content` starts with a frontmatter opener (`---` line) — used by
+/// write paths to tell "no frontmatter" apart from "frontmatter that never
+/// closed", which `split_frontmatter` deliberately reports the same way.
+fn has_unterminated_frontmatter(content: &str) -> bool {
+    let trimmed = content.strip_prefix('\u{feff}').unwrap_or(content);
+    (trimmed.starts_with("---\n") || trimmed.starts_with("---\r\n"))
+        && split_frontmatter(content).0.is_none()
+}
+
 /// Parse a file's raw contents into a `Brief`.
 fn parse_brief(path: &Path, raw: String) -> Brief {
     let (yaml, body) = split_frontmatter(&raw);
@@ -434,6 +443,11 @@ struct Settings {
     ollama_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     anthropic_model: Option<String>,
+    /// Manual sidebar order: brief paths relative to the briefs dir (POSIX
+    /// separators), first = top. Briefs not listed (new files) sort ahead by
+    /// recency; `None`/empty means pure most-recently-opened order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    brief_order: Option<Vec<String>>,
 }
 
 /// The subset of `Settings` the synthesis settings UI reads/writes (the LLM
@@ -544,22 +558,70 @@ fn resolve_vault(start: &Path) -> Option<(PathBuf, String)> {
 
 // --- Commands -------------------------------------------------------------
 
-/// List every `.md` brief under the configured directory, parsed and sorted by
-/// most-recently-opened (then name). Recurses into subfolders (Obsidian vaults
-/// nest notes) while skipping dot-entries like `.obsidian/`, `.trash/`, `.git/`.
+/// List every `.md` brief under the configured directory, parsed and sorted:
+/// briefs in the saved manual order (`set_brief_order`) by their position,
+/// after any not yet ordered, which sort most-recently-opened (then name) — so
+/// with no manual order this is the classic recency sort (see `sort_briefs`).
+/// Recurses into subfolders (Obsidian vaults nest notes) while skipping
+/// dot-entries like `.obsidian/`, `.trash/`, `.git/`.
 #[tauri::command]
 pub fn list_briefs(app: AppHandle) -> Result<Vec<Brief>, String> {
     let dir = briefs_dir(&app)?;
     let mut briefs: Vec<Brief> = Vec::new();
     collect_briefs(&dir, &mut briefs)?;
 
-    briefs.sort_by(|a, b| {
-        b.last_opened
-            .cmp(&a.last_opened)
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-    });
+    let order = load_settings(&app).brief_order.unwrap_or_default();
+    sort_briefs(&mut briefs, &dir, &order);
 
     Ok(briefs)
+}
+
+/// A brief's path relative to the briefs dir with `/` separators — the key the
+/// manual `brief_order` setting is written in (so it survives moving the vault).
+fn order_key(path: &Path, dir: &Path) -> String {
+    path.strip_prefix(dir)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+/// Sort briefs for the sidebar: manually ordered ones (by their position in
+/// `order`) after any not yet ordered, which keep the classic most-recently-
+/// opened-then-name order. With an empty `order` this is the recency sort.
+fn sort_briefs(briefs: &mut [Brief], dir: &Path, order: &[String]) {
+    let rank: std::collections::HashMap<&str, usize> = order
+        .iter()
+        .enumerate()
+        .map(|(i, k)| (k.as_str(), i))
+        .collect();
+    briefs.sort_by(|a, b| {
+        let ra = rank.get(order_key(Path::new(&a.path), dir).as_str()).copied();
+        let rb = rank.get(order_key(Path::new(&b.path), dir).as_str()).copied();
+        match (ra, rb) {
+            (Some(x), Some(y)) => x.cmp(&y),
+            (None, Some(_)) => std::cmp::Ordering::Less,
+            (Some(_), None) => std::cmp::Ordering::Greater,
+            (None, None) => b
+                .last_opened
+                .cmp(&a.last_opened)
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
+        }
+    });
+}
+
+/// Persist the sidebar's manual order: the full list of brief paths (absolute,
+/// as the frontend holds them) top to bottom. An empty list clears the manual
+/// order and restores most-recently-opened sorting on the next load.
+#[tauri::command]
+pub fn set_brief_order(app: AppHandle, paths: Vec<String>) -> Result<(), String> {
+    let dir = briefs_dir(&app)?;
+    let mut settings = load_settings(&app);
+    settings.brief_order = if paths.is_empty() {
+        None
+    } else {
+        Some(paths.iter().map(|p| order_key(Path::new(p), &dir)).collect())
+    };
+    save_settings(&app, &settings)
 }
 
 /// Recursively gather `.md` briefs under `dir`, skipping hidden entries (any
@@ -629,6 +691,157 @@ pub fn touch_brief(path: String) -> Result<Brief, String> {
 
     fs::write(&p, &new_raw).map_err(|e| format!("could not write {path}: {e}"))?;
     Ok(parse_brief(&p, new_raw))
+}
+
+/// Set a brief's `status` frontmatter key in place. Same discipline as
+/// `touch_brief`: the frontmatter is edited as a `serde_yaml::Mapping` so
+/// every other key (and the body) survives untouched. The status is a free
+/// string — the known set (active/paused/blocked/archived) is a UI convention,
+/// and custom statuses already present in a vault round-trip unchanged. An
+/// empty (or whitespace) status *removes* the key, restoring "no status" —
+/// status is optional everywhere else in the model, so assigning one must
+/// not be a one-way door.
+#[tauri::command]
+pub fn set_brief_status(path: String, status: String) -> Result<Brief, String> {
+    let status = status.trim().to_string();
+    let p = PathBuf::from(&path);
+    let raw = fs::read_to_string(&p).map_err(|e| format!("could not read {path}: {e}"))?;
+    let new_raw = splice_status(&raw, &status)?;
+    fs::write(&p, &new_raw).map_err(|e| format!("could not write {path}: {e}"))?;
+    Ok(parse_brief(&p, new_raw))
+}
+
+/// Pure core of `set_brief_status`: return `raw` with its `status` key set,
+/// or removed when `status` is empty.
+///
+/// This is a *textual* splice, not a reserialized mapping: only the one
+/// `status:` line changes (replaced, removed, or appended just above the
+/// closing `---`), so comments, key order, quoting, blank lines, CRLF and a
+/// BOM in hand-authored frontmatter all survive byte-for-byte. The YAML is
+/// still parsed first so malformed frontmatter is an error — never a rewrite.
+fn splice_status(raw: &str, status: &str) -> Result<String, String> {
+    let (yaml, _) = split_frontmatter(raw);
+    if yaml.is_none() && has_unterminated_frontmatter(raw) {
+        // `split_frontmatter` hands back an opener with no closing `---` as
+        // plain body; inserting a new block above it would leave two openers.
+        return Err("frontmatter opens with `---` but never closes, leaving the file untouched".into());
+    }
+    if let Some(y) = &yaml {
+        let v: serde_yaml::Value = serde_yaml::from_str(y)
+            .map_err(|e| format!("frontmatter is not valid YAML, leaving the file untouched: {e}"))?;
+        if !matches!(v, serde_yaml::Value::Null | serde_yaml::Value::Mapping(_)) {
+            return Err("frontmatter is not a key/value mapping, leaving the file untouched".into());
+        }
+    }
+
+    // Let serde_yaml quote the value so odd statuses (`yes`, `1.0`, `a: b`)
+    // stay strings; it yields a single `status: <value>` line.
+    let status_line: Option<String> = if status.is_empty() {
+        None
+    } else {
+        let mut m = serde_yaml::Mapping::new();
+        m.insert(serde_yaml::Value::from("status"), serde_yaml::Value::from(status));
+        Some(serde_yaml::to_string(&m).map_err(|e| e.to_string())?.trim_end().to_string())
+    };
+
+    let Some((start, end)) = frontmatter_span(raw) else {
+        // No frontmatter at all: nothing to remove, or add a minimal block.
+        return Ok(match status_line {
+            None => raw.to_string(),
+            Some(line) => format!("---\n{line}\n---\n\n{raw}"),
+        });
+    };
+
+    let yaml_text = &raw[start..end];
+    let nl = if raw[..start].contains("\r\n") || yaml_text.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut out = String::with_capacity(raw.len() + 32);
+    out.push_str(&raw[..start]);
+    let lines: Vec<&str> = yaml_text.split_inclusive('\n').collect();
+    let indented = |l: &str| l.starts_with(' ') || l.starts_with('\t');
+    let blank = |l: &str| l.trim().is_empty();
+    let mut replaced = false;
+    let mut i = 0;
+    while i < lines.len() {
+        let bare = lines[i].trim_end_matches(['\r', '\n']);
+        if !replaced && is_top_level_status_line(bare) {
+            replaced = true;
+            if let Some(l) = &status_line {
+                out.push_str(l);
+                out.push_str(nl);
+            }
+            // Drop the old value's continuation: indented lines after a
+            // block/folded `status: |`, including blank lines *inside* it
+            // (a blank followed by more indented text). A trailing blank
+            // before the next top-level entry is not part of the value and
+            // is kept.
+            i += 1;
+            while i < lines.len() {
+                let b = lines[i].trim_end_matches(['\r', '\n']);
+                if indented(b) {
+                    i += 1;
+                    continue;
+                }
+                if blank(b) {
+                    let mut j = i + 1;
+                    while j < lines.len() && blank(lines[j].trim_end_matches(['\r', '\n'])) {
+                        j += 1;
+                    }
+                    if j < lines.len() && indented(lines[j].trim_end_matches(['\r', '\n'])) {
+                        i = j;
+                        continue;
+                    }
+                }
+                break;
+            }
+            continue;
+        }
+        out.push_str(lines[i]);
+        i += 1;
+    }
+    if !replaced {
+        if let Some(l) = &status_line {
+            if !out.ends_with('\n') {
+                out.push_str(nl);
+            }
+            out.push_str(l);
+            out.push_str(nl);
+        }
+    }
+    out.push_str(&raw[end..]);
+    Ok(out)
+}
+
+/// Byte range `[start, end)` of the YAML text inside `raw`'s frontmatter —
+/// after the opening `---` line, up to the start of the closing `---` line —
+/// or `None` when there is no (closed) frontmatter. Mirrors
+/// `split_frontmatter`'s BOM/CRLF handling but keeps offsets into `raw`.
+fn frontmatter_span(raw: &str) -> Option<(usize, usize)> {
+    let bom = if raw.starts_with('\u{feff}') { '\u{feff}'.len_utf8() } else { 0 };
+    let after = &raw[bom..];
+    let open_len = if after.starts_with("---\n") {
+        4
+    } else if after.starts_with("---\r\n") {
+        5
+    } else {
+        return None;
+    };
+    let start = bom + open_len;
+    let mut idx = start;
+    for line in raw[start..].split_inclusive('\n') {
+        if line.trim_end_matches(['\r', '\n']) == "---" {
+            return Some((start, idx));
+        }
+        idx += line.len();
+    }
+    None
+}
+
+/// `status:` as a top-level key on this (newline-stripped) line: no leading
+/// indentation, and the key is followed by end-of-line or whitespace.
+fn is_top_level_status_line(bare: &str) -> bool {
+    bare.strip_prefix("status:")
+        .map(|rest| rest.is_empty() || rest.starts_with(' ') || rest.starts_with('\t'))
+        .unwrap_or(false)
 }
 
 /// Append a timestamped note under a `## Captures` heading in a brief's body.
@@ -1129,7 +1342,12 @@ pub async fn sync_brief(path: String) -> Result<Brief, String> {
     let synced_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let rendered = render_sync_summary(&results, &synced_at);
 
-    // Edit only the body's managed region; re-attach the original frontmatter
+    // The fetch above may have taken seconds, during which a status change,
+    // capture, or edit can have landed. Re-read now so the write below edits
+    // the current file rather than the pre-fetch snapshot.
+    let raw = fs::read_to_string(&p).map_err(|e| format!("could not read {path}: {e}"))?;
+
+    // Edit only the body's managed region; re-attach the current frontmatter
     // verbatim. upsert errors (malformed markers) abort before any write.
     let (prefix, body) = split_for_body_edit(&raw);
     let new_body = upsert_marked_block(body, "waid:sync", &rendered)?;
@@ -1904,6 +2122,10 @@ pub async fn synthesize_brief(app: AppHandle, path: String) -> Result<Brief, Str
     let user = build_synthesis_prompt(&brief, &evidence);
     let response = provider.complete(&system, &user).await?;
     let synthesis = parse_synthesis(&response)?;
+
+    // Evidence gathering and the model call can take a while; re-read so the
+    // write edits the current file, not the snapshot the prompt was built from.
+    let raw = fs::read_to_string(&p).map_err(|e| format!("could not read {path}: {e}"))?;
 
     // Apply both edits to the body, then re-attach frontmatter verbatim.
     let (prefix, body) = split_for_body_edit(&raw);
@@ -3161,9 +3383,32 @@ pub fn set_briefs_dir(app: AppHandle, dir: String) -> Result<String, String> {
         fs::create_dir_all(&path).map_err(|e| format!("could not create {dir}: {e}"))?;
     }
     let mut settings = load_settings(&app);
+    // The manual sidebar order is keyed by paths relative to the briefs dir,
+    // so an order from one folder would silently apply to any same-named
+    // files in another. Forget it when the folder actually changes.
+    // Resolve the current folder the same way `briefs_dir` does, so picking
+    // the default location while it is already in use (`briefs_dir` unset)
+    // counts as the same folder rather than a change.
+    let current = match settings.briefs_dir.as_deref().filter(|s| !s.trim().is_empty()) {
+        Some(s) => PathBuf::from(s),
+        None => default_briefs_dir(&app)?,
+    };
+    let same_dir = same_path(&current, &path);
+    if !same_dir {
+        settings.brief_order = None;
+    }
     settings.briefs_dir = Some(dir);
     save_settings(&app, &settings)?;
     Ok(path.to_string_lossy().to_string())
+}
+
+/// Whether two paths name the same directory (canonicalized when possible,
+/// so `a/` and `a` or a symlink alias compare equal).
+fn same_path(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a == b,
+    }
 }
 
 /// Create a new, empty-ish brief from a name and return it. The filename is a
@@ -3991,6 +4236,11 @@ pub async fn sync_mind_state(path: String) -> Result<Brief, String> {
     let mind = neuroskill::compute_mind_state(&dir, &slug, window, now)?;
     let rendered = neuroskill::render_mind_state(&mind, now);
 
+    // Same late re-read as `sync_brief`/`synthesize_brief`: the SQLite rollup
+    // can take a moment, and a status change or capture landing meanwhile
+    // must not be reverted by writing the pre-compute snapshot back.
+    let raw = fs::read_to_string(&p).map_err(|e| format!("could not read {path}: {e}"))?;
+
     // Edit only the body's managed region; re-attach the frontmatter verbatim.
     let (prefix, body) = split_for_body_edit(&raw);
     let new_body = upsert_marked_block(body, "waid:mind", &rendered)?;
@@ -4047,6 +4297,50 @@ mod tests {
         assert!(body.starts_with("# Body"));
     }
 
+    fn brief_at(dir: &Path, rel: &str, name: &str, opened: &str) -> Brief {
+        parse_brief(
+            &dir.join(rel),
+            format!("---\nname: {name}\nlast_opened: {opened}\n---\n\nbody\n"),
+        )
+    }
+
+    #[test]
+    fn sort_briefs_without_manual_order_is_recency_then_name() {
+        let dir = PathBuf::from("/vault");
+        let mut briefs = vec![
+            brief_at(&dir, "b.md", "Bravo", "2026-01-01T00:00:00Z"),
+            brief_at(&dir, "a.md", "alpha", "2026-01-01T00:00:00Z"),
+            brief_at(&dir, "c.md", "Charlie", "2026-02-01T00:00:00Z"),
+        ];
+        sort_briefs(&mut briefs, &dir, &[]);
+        let names: Vec<&str> = briefs.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(names, ["Charlie", "alpha", "Bravo"]);
+    }
+
+    #[test]
+    fn sort_briefs_honours_manual_order_with_new_files_first() {
+        let dir = PathBuf::from("/vault");
+        let mut briefs = vec![
+            brief_at(&dir, "a.md", "A", "2026-01-01T00:00:00Z"),
+            brief_at(&dir, "sub/b.md", "B", "2026-03-01T00:00:00Z"),
+            brief_at(&dir, "c.md", "C", "2026-02-01T00:00:00Z"),
+            // Not in the manual order (e.g. just created) — leads, by recency.
+            brief_at(&dir, "new.md", "New", "2025-01-01T00:00:00Z"),
+        ];
+        let order = ["c.md".to_string(), "sub/b.md".to_string(), "a.md".to_string()];
+        sort_briefs(&mut briefs, &dir, &order);
+        let names: Vec<&str> = briefs.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(names, ["New", "C", "B", "A"]);
+    }
+
+    #[test]
+    fn order_key_is_relative_with_forward_slashes() {
+        let dir = PathBuf::from("/vault");
+        assert_eq!(order_key(&dir.join("sub").join("x.md"), &dir), "sub/x.md");
+        // A path outside the dir falls back to itself rather than panicking.
+        assert_eq!(order_key(Path::new("/elsewhere/y.md"), &dir), "/elsewhere/y.md");
+    }
+
     #[test]
     fn notion_app_urls_route_to_token_fetch() {
         // Current domain (app.notion.com) — this is the shape that was silently
@@ -4071,6 +4365,139 @@ mod tests {
         let (yaml, body) = split_frontmatter(raw);
         assert!(yaml.is_none());
         assert_eq!(body, raw);
+    }
+
+    #[test]
+    fn splice_status_replaces_key_and_preserves_everything_else() {
+        let raw = "---\nname: Test\nstatus: active\ncustom_key: keep me\ntags: [a, b]\n---\n\n# Body\n\nhello\n";
+        let out = splice_status(raw, "paused").unwrap();
+        let brief = parse_brief(&PathBuf::from("/x/test.md"), out.clone());
+        assert_eq!(brief.status.as_deref(), Some("paused"));
+        assert_eq!(brief.tags, vec!["a", "b"]);
+        assert!(out.contains("custom_key: keep me"));
+        assert!(out.contains("# Body\n\nhello"));
+        assert!(!out.contains("status: active"));
+    }
+
+    #[test]
+    fn splice_status_adds_key_when_missing() {
+        let raw = "---\nname: Test\n---\nbody";
+        let out = splice_status(raw, "blocked").unwrap();
+        let brief = parse_brief(&PathBuf::from("/x/test.md"), out.clone());
+        assert_eq!(brief.status.as_deref(), Some("blocked"));
+        assert_eq!(brief.name, "Test");
+        assert_eq!(out, "---\nname: Test\nstatus: blocked\n---\nbody");
+    }
+
+    #[test]
+    fn splice_status_touches_only_the_status_line() {
+        // Comments, key order, quoting, blank lines and the body are preserved
+        // byte-for-byte; only the `status:` line changes.
+        let raw = "---\n# project meta\nname: \"Quoted: name\"\n\nstatus: active # was set by hand\ntags: [a, b]\n---\n\n# Body\n";
+        let out = splice_status(raw, "paused").unwrap();
+        assert_eq!(
+            out,
+            "---\n# project meta\nname: \"Quoted: name\"\n\nstatus: paused\ntags: [a, b]\n---\n\n# Body\n"
+        );
+        // Removing it drops exactly that line.
+        let cleared = splice_status(&out, "").unwrap();
+        assert_eq!(cleared, "---\n# project meta\nname: \"Quoted: name\"\n\ntags: [a, b]\n---\n\n# Body\n");
+        // Appending goes just above the closing delimiter.
+        let added = splice_status(&cleared, "blocked").unwrap();
+        assert_eq!(added, "---\n# project meta\nname: \"Quoted: name\"\n\ntags: [a, b]\nstatus: blocked\n---\n\n# Body\n");
+    }
+
+    #[test]
+    fn splice_status_preserves_bom_and_crlf() {
+        let raw = "\u{feff}---\r\nname: Test\r\nstatus: active\r\n---\r\nbody\r\n";
+        let out = splice_status(raw, "paused").unwrap();
+        assert_eq!(out, "\u{feff}---\r\nname: Test\r\nstatus: paused\r\n---\r\nbody\r\n");
+        let added = splice_status("---\r\nname: Test\r\n---\r\nbody", "active").unwrap();
+        assert_eq!(added, "---\r\nname: Test\r\nstatus: active\r\n---\r\nbody");
+    }
+
+    #[test]
+    fn splice_status_replaces_block_scalar_and_quotes_odd_values() {
+        let raw = "---\nstatus: |\n  multi\n  line\nname: Test\n---\nbody";
+        let out = splice_status(raw, "paused").unwrap();
+        assert_eq!(out, "---\nstatus: paused\nname: Test\n---\nbody");
+        // Blank lines inside a block scalar belong to it and go with it ...
+        let raw = "---\nstatus: |\n  first\n\n  second\nname: Test\n---\nbody";
+        let out = splice_status(raw, "paused").unwrap();
+        assert_eq!(out, "---\nstatus: paused\nname: Test\n---\nbody");
+        assert_eq!(parse_brief(&PathBuf::from("/x/t.md"), out).status.as_deref(), Some("paused"));
+        // ... while a trailing blank line before the next key is kept.
+        let raw = "---\nstatus: active\n\nname: Test\n---\nbody";
+        let out = splice_status(raw, "paused").unwrap();
+        assert_eq!(out, "---\nstatus: paused\n\nname: Test\n---\nbody");
+        // Removing a block scalar at the end of the frontmatter is clean too.
+        let raw = "---\nname: Test\nstatus: >\n  folded\n\n  text\n---\nbody";
+        assert_eq!(splice_status(raw, "").unwrap(), "---\nname: Test\n---\nbody");
+        // A value YAML would otherwise read as a bool/number stays a string.
+        let out = splice_status("---\nname: Test\n---\nbody", "yes").unwrap();
+        let brief = parse_brief(&PathBuf::from("/x/test.md"), out);
+        assert_eq!(brief.status.as_deref(), Some("yes"));
+        // Nested `status:` keys are not top-level and are left alone.
+        let raw = "---\nmeta:\n  status: inner\n---\nbody";
+        let out = splice_status(raw, "active").unwrap();
+        assert_eq!(out, "---\nmeta:\n  status: inner\nstatus: active\n---\nbody");
+    }
+
+    #[test]
+    fn splice_status_refuses_malformed_yaml() {
+        // A half-written key must surface as an error, never as a rewrite that
+        // drops every other frontmatter field.
+        let raw = "---\nname: Test\ntags: [unclosed\n---\nbody";
+        let err = splice_status(raw, "paused").unwrap_err();
+        assert!(err.contains("not valid YAML"), "{err}");
+    }
+
+    #[test]
+    fn splice_status_empty_removes_key_and_preserves_the_rest() {
+        let raw = "---\nname: Test\nstatus: active\ncustom_key: keep me\n---\nbody";
+        let out = splice_status(raw, "").unwrap();
+        let brief = parse_brief(&PathBuf::from("/x/test.md"), out.clone());
+        assert_eq!(brief.status, None);
+        assert_eq!(brief.name, "Test");
+        assert!(out.contains("custom_key: keep me"));
+        assert!(!out.contains("status"));
+        // Clearing an already-absent status is a no-op, not an error.
+        let again = splice_status(&out, "").unwrap();
+        assert_eq!(again, out);
+    }
+
+    #[test]
+    fn splice_status_refuses_unterminated_frontmatter() {
+        // An opener with no closing `---` must not get a second block above it.
+        let raw = "---\nname: Test\nstatus: active\n\n# Body without a closing delimiter\n";
+        let err = splice_status(raw, "paused").unwrap_err();
+        assert!(err.contains("never closes"), "{err}");
+        // A file with no frontmatter at all still gets one added.
+        let out = splice_status("# Just a body\n", "paused").unwrap();
+        assert!(out.starts_with("---\nstatus: paused\n---\n"));
+    }
+
+    #[test]
+    fn splice_status_handles_empty_frontmatter() {
+        // `---\n---` is valid, empty frontmatter: serde_yaml reads the empty
+        // document as an empty mapping, so a first status can be assigned.
+        let out = splice_status("---\n---\nbody", "active").unwrap();
+        let brief = parse_brief(&PathBuf::from("/x/test.md"), out.clone());
+        assert_eq!(brief.status.as_deref(), Some("active"));
+        assert_eq!(out, "---\nstatus: active\n---\nbody");
+        let out = splice_status("---\n\n---\nbody", "active").unwrap();
+        assert!(out.contains("status: active"));
+    }
+
+    #[test]
+    fn set_brief_status_clears_on_whitespace() {
+        let root = scratch_dir("status-empty");
+        let path = root.join("p.md");
+        fs::write(&path, "---\nname: P\nstatus: active\n---\nbody").unwrap();
+        let brief = set_brief_status(path.to_string_lossy().into_owned(), "   ".into()).unwrap();
+        assert_eq!(brief.status, None);
+        assert!(!fs::read_to_string(&path).unwrap().contains("status:"));
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

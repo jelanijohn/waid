@@ -2,12 +2,14 @@
   import { onDestroy } from "svelte";
   import type { Brief, Webhook } from "$lib/types";
   import { projects, isSyncableBrief } from "$lib/stores/projects.svelte";
-  import { settings } from "$lib/stores/settings.svelte";
+  import { getCurrentWindow, type CursorIcon } from "@tauri-apps/api/window";
+  import { settings, RAIL_WIDTH_DEFAULT, RAIL_WIDTH_MIN } from "$lib/stores/settings.svelte";
   import { toasts } from "$lib/stores/toasts.svelte";
   import { openExternal, fireWebhook } from "$lib/tauri";
   import { relativeTime } from "$lib/time";
-  import { statusColor } from "$lib/status";
+  import { statusColor, STATUS_ORDER, STATUS_LABEL } from "$lib/status";
   import { isStubBrief } from "$lib/bootstrap";
+  import { collapsedSections, setSectionCollapsed, DESCRIPTION_SECTION } from "$lib/sections";
   import MarkdownView from "./MarkdownView.svelte";
   import IntegrationPanel from "./IntegrationPanel.svelte";
   import IntegrationsModal from "./IntegrationsModal.svelte";
@@ -31,6 +33,133 @@
   const justCreated = projects.bootstrapPath === brief.path;
   if (justCreated) projects.bootstrapPath = null;
   let bootstrapOpen = $state(justCreated);
+
+  // Header description folds to a single truncated line; remembered per brief
+  // alongside the body's collapsed `##` sections.
+  // svelte-ignore state_referenced_locally -- intentional: read once per mount ({#key brief.path}).
+  let descCollapsed = $state(collapsedSections(brief.path).has(DESCRIPTION_SECTION));
+  function toggleDescription() {
+    descCollapsed = !descCollapsed;
+    setSectionCollapsed(brief.path, DESCRIPTION_SECTION, descCollapsed);
+  }
+
+  // Status menu: the header's status pill opens a small anchored popover
+  // listing the known statuses plus any custom ones already in the vault.
+  // Picking one splices only the `status` frontmatter key (set_brief_status).
+  let statusMenuOpen = $state(false);
+  let statusSaving = $state(false);
+  let statusMenuEl = $state<HTMLDivElement | null>(null);
+  let statusTriggerEl = $state<HTMLButtonElement | null>(null);
+  let statusListEl = $state<HTMLDivElement | null>(null);
+  let statusOptions = $derived.by(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const s of [...STATUS_ORDER, ...projects.statuses]) {
+      const k = s.toLowerCase();
+      if (!seen.has(k)) {
+        seen.add(k);
+        out.push(s);
+      }
+    }
+    return out;
+  });
+  function statusLabel(s: string): string {
+    return STATUS_LABEL[s.toLowerCase()] ?? s;
+  }
+  function isCurrentStatus(s: string): boolean {
+    return (brief.status ?? "").toLowerCase() === s.toLowerCase();
+  }
+  function toggleStatusMenu() {
+    statusMenuOpen = !statusMenuOpen;
+  }
+  /** Close the popover and hand focus back to the trigger (listbox pattern). */
+  function closeStatusMenu(refocus = true) {
+    statusMenuOpen = false;
+    if (refocus) statusTriggerEl?.focus();
+  }
+  // ArrowDown/ArrowUp on the trigger open the list, like a native select.
+  function onTriggerKeydown(e: KeyboardEvent) {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      statusMenuOpen = true;
+    }
+  }
+  function statusOptionEls(): HTMLElement[] {
+    return Array.from(statusListEl?.querySelectorAll<HTMLElement>('[role="option"]') ?? []);
+  }
+  // Listbox keyboard pattern: focus moves between options with the arrow
+  // keys (wrapping), Home/End jump to the ends, Escape closes and restores
+  // focus to the trigger. Enter/Space activate the focused option natively
+  // because each option is a real <button>.
+  function onListKeydown(e: KeyboardEvent) {
+    const els = statusOptionEls();
+    if (!els.length) return;
+    const i = els.indexOf(document.activeElement as HTMLElement);
+    let next: number | null = null;
+    switch (e.key) {
+      case "ArrowDown":
+        next = i < 0 ? 0 : (i + 1) % els.length;
+        break;
+      case "ArrowUp":
+        next = i < 0 ? els.length - 1 : (i - 1 + els.length) % els.length;
+        break;
+      case "Home":
+        next = 0;
+        break;
+      case "End":
+        next = els.length - 1;
+        break;
+      case "Tab":
+        // Leaving the list with Tab closes it so focus order stays sane.
+        closeStatusMenu(false);
+        return;
+      default:
+        return;
+    }
+    e.preventDefault();
+    els[next]?.focus();
+  }
+  // On open, move focus into the list — onto the current option, or the first.
+  $effect(() => {
+    if (!statusMenuOpen || !statusListEl) return;
+    const els = statusOptionEls();
+    const current = els.find((el) => el.getAttribute("aria-selected") === "true");
+    (current ?? els[0])?.focus();
+  });
+  /** Empty `status` clears the key ("No status"). */
+  async function pickStatus(status: string) {
+    closeStatusMenu();
+    if (isCurrentStatus(status)) return;
+    statusSaving = true;
+    try {
+      await projects.setStatus(brief.path, status);
+      toasts.success(status ? `Status → ${statusLabel(status)}` : "Status cleared");
+    } catch (e) {
+      toasts.error(`Could not set status: ${e}`);
+    } finally {
+      statusSaving = false;
+    }
+  }
+  // Close the status menu on outside click / Escape (listeners attached only
+  // while it's open; document-level so clicks anywhere in the pane count).
+  $effect(() => {
+    if (!statusMenuOpen) return;
+    const onPointer = (ev: PointerEvent) => {
+      if (statusMenuEl && !statusMenuEl.contains(ev.target as Node)) statusMenuOpen = false;
+    };
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") {
+        ev.stopPropagation();
+        closeStatusMenu();
+      }
+    };
+    document.addEventListener("pointerdown", onPointer, true);
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer, true);
+      document.removeEventListener("keydown", onKey, true);
+    };
+  });
 
   // A freshly-created brief still on its stub body → offer to generate one.
   let isStub = $derived(isStubBrief(brief));
@@ -203,6 +332,106 @@
   function manage() {
     integrationsOpen = true;
   }
+
+  // Two-column layout: drag the rail's left border to resize it, between
+  // RAIL_WIDTH_MIN and half of the row. Width persists via the settings store.
+  let railRow = $state<HTMLDivElement | null>(null);
+  let railDragging = $state(false);
+
+  // The rail's hard cap is half the row (the CSS `max-width: 50%`), tracked
+  // with a ResizeObserver so it follows the window. At narrow widths (the
+  // window allows 720px) that cap drops below RAIL_WIDTH_MIN, so the
+  // *achievable* bounds and the visible width are derived from it rather
+  // than from the saved preference: the separator reports what the user
+  // actually sees, and keyboard moves start from there.
+  let railCap = $state(RAIL_WIDTH_DEFAULT);
+  $effect(() => {
+    if (!railRow) return;
+    const ro = new ResizeObserver(([entry]) => {
+      railCap = Math.max(1, Math.floor(entry.contentRect.width * 0.5));
+    });
+    ro.observe(railRow);
+    return () => ro.disconnect();
+  });
+  const railMin = $derived(Math.min(RAIL_WIDTH_MIN, railCap));
+  const railNow = $derived(Math.min(settings.railWidth, railCap));
+
+  function clampRail(px: number): number {
+    return Math.min(railCap, Math.max(railMin, px));
+  }
+
+  // Keyboard resize for the separator (WAI-ARIA "window splitter"): arrows
+  // nudge by 16px (64px with Shift), Home/End jump to the bounds, Enter
+  // resets like a double-click. The rail sits on the right, so ArrowLeft
+  // moves the splitter left and widens it. A move that cannot change the
+  // visible width is dropped, so a cramped window never rewrites the saved
+  // preference.
+  const RAIL_KEY_STEP = 16;
+  function onRailKeydown(e: KeyboardEvent) {
+    const step = e.shiftKey ? RAIL_KEY_STEP * 4 : RAIL_KEY_STEP;
+    let next: number;
+    switch (e.key) {
+      case "ArrowLeft":
+      case "ArrowUp":
+        next = railNow + step;
+        break;
+      case "ArrowRight":
+      case "ArrowDown":
+        next = railNow - step;
+        break;
+      case "Home":
+        next = railMin;
+        break;
+      case "End":
+        next = railCap;
+        break;
+      case "Enter":
+        next = RAIL_WIDTH_DEFAULT;
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+    next = clampRail(next);
+    if (next === railNow) return;
+    settings.setRailWidth(next);
+  }
+
+  // WebKitGTK (Linux/WSL) often ignores the CSS `cursor` (see ResizeHandles),
+  // so drive the native cursor too. No-op outside Tauri (plain `vite dev`).
+  function setCursor(icon: CursorIcon) {
+    try {
+      getCurrentWindow().setCursorIcon(icon).catch(() => {});
+    } catch {
+      // Window APIs unavailable.
+    }
+  }
+
+  function startRailDrag(e: PointerEvent) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    railDragging = true;
+  }
+
+  function moveRailDrag(e: PointerEvent) {
+    if (!railDragging || !railRow) return;
+    const r = railRow.getBoundingClientRect();
+    const next = clampRail(r.right - e.clientX);
+    // Same guard as the keyboard path: when the visible width cannot change
+    // (cramped window), don't let the store's floor overwrite the preference.
+    if (next === railNow) return;
+    settings.setRailWidth(next, false);
+  }
+
+  function endRailDrag(e: PointerEvent) {
+    if (!railDragging) return;
+    const el = e.currentTarget as HTMLElement;
+    if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+    railDragging = false;
+    settings.setRailWidth(settings.railWidth);
+    setCursor("default");
+  }
 </script>
 
 <!-- A hairline section label with an optional right-aligned "Manage" link. -->
@@ -239,7 +468,7 @@
 
 <!-- The brief body plus its "Linked from" backlinks. -->
 {#snippet bodyAndBacklinks()}
-  <MarkdownView source={brief.body} />
+  <MarkdownView source={brief.body} collapseKey={brief.path} />
 
   {#if backlinks.length}
     <section class="mt-[30px] border-t pt-[18px]" style="border-color: var(--border);">
@@ -265,17 +494,89 @@
     <div class="flex items-start justify-between gap-4">
       <div class="min-w-0">
         <div class="flex items-center gap-[9px]">
-          {#if brief.status}
-            <span class="sdot h-2 w-2" style="--sc: {statusColor(brief.status)};"></span>
-          {/if}
           <h2 class="truncate font-bold tracking-[-0.02em] text-[var(--fg)]" style="font-size: var(--title-size);">
             {brief.name}
           </h2>
+          <!-- Status pill doubles as the status toggle. -->
+          <div class="status-menu relative shrink-0" bind:this={statusMenuEl}>
+            <button
+              type="button"
+              class="pill status-trigger"
+              class:open={statusMenuOpen}
+              style="--sc: {statusColor(brief.status)};"
+              title="Change status"
+              aria-haspopup="listbox"
+              aria-expanded={statusMenuOpen}
+              disabled={statusSaving || editing}
+              bind:this={statusTriggerEl}
+              onclick={toggleStatusMenu}
+              onkeydown={onTriggerKeydown}
+            >
+              <span class="dot"></span>
+              {brief.status ? statusLabel(brief.status) : "No status"}
+              <Icon name="expand_more" size={12} />
+            </button>
+            {#if statusMenuOpen}
+              <!-- tabindex -1: focus lives on the options (roving), not the list. -->
+              <div
+                class="status-popover"
+                role="listbox"
+                aria-label="Project status"
+                tabindex="-1"
+                bind:this={statusListEl}
+                onkeydown={onListKeydown}
+              >
+                {#each statusOptions as option (option.toLowerCase())}
+                  {@const current = isCurrentStatus(option)}
+                  <button
+                    type="button"
+                    class="status-option"
+                    class:current
+                    role="option"
+                    aria-selected={current}
+                    tabindex="-1"
+                    onclick={() => pickStatus(option)}
+                  >
+                    <span class="sdot h-[7px] w-[7px]" style="--sc: {statusColor(option)};"></span>
+                    <span class="flex-1 text-left">{statusLabel(option)}</span>
+                    {#if current}
+                      <Icon name="check" size={13} />
+                    {/if}
+                  </button>
+                {/each}
+                <!-- Clears the key so the brief returns to "No status". -->
+                <button
+                  type="button"
+                  class="status-option"
+                  class:current={!brief.status}
+                  role="option"
+                  aria-selected={!brief.status}
+                  tabindex="-1"
+                  onclick={() => pickStatus("")}
+                >
+                  <span class="sdot h-[7px] w-[7px]" style="--sc: transparent; box-shadow: inset 0 0 0 1px var(--fg3);"></span>
+                  <span class="flex-1 text-left text-[var(--fg2)]">No status</span>
+                  {#if !brief.status}
+                    <Icon name="check" size={13} />
+                  {/if}
+                </button>
+              </div>
+            {/if}
+          </div>
         </div>
         {#if brief.description}
-          <p class="mt-[7px] max-w-[60ch] text-[13.5px] leading-[1.5] text-[var(--fg2)]">
-            {brief.description}
-          </p>
+          <button
+            type="button"
+            class="desc-toggle mt-[7px] flex max-w-[60ch] items-start gap-[7px] text-left"
+            class:open={!descCollapsed}
+            aria-expanded={!descCollapsed}
+            title={descCollapsed ? "Expand description" : "Collapse description"}
+            onclick={toggleDescription}
+          >
+            <p class="min-w-0 text-[13.5px] leading-[1.5] text-[var(--fg2)]" class:truncate={descCollapsed}>
+              {brief.description}
+            </p>
+          </button>
         {/if}
       </div>
 
@@ -406,21 +707,52 @@
       </p>
     </div>
   {:else if settings.briefLayout === "two-col"}
-    <!-- Two-column: brief body left, live-state rail right. Scrolls as one. -->
-    <div class="scroll-thin min-h-0 flex-1 overflow-y-auto">
-      <div class="flex min-h-full items-stretch">
-        <div class="min-w-0 flex-1" style="padding: var(--pane-py) var(--pane-px);">
-          {#if isStub}{@render generateCTA()}{/if}
-          {@render bodyAndBacklinks()}
-        </div>
-        <aside
-          class="shrink-0 border-l"
-          style="width: 320px; border-color: var(--border); background: var(--rail-bg); padding: var(--pane-py) 22px;"
-        >
+    <!-- Two-column: brief body left, live-state rail right. Each column is
+         its own scroll container, so a long brief and a long feed scroll
+         independently. -->
+    <div
+      bind:this={railRow}
+      class="flex min-h-0 flex-1 items-stretch"
+      class:select-none={railDragging}
+    >
+      <div class="scroll-thin min-w-0 flex-1 overflow-y-auto" style="padding: var(--pane-py) var(--pane-px);">
+        {#if isStub}{@render generateCTA()}{/if}
+        {@render bodyAndBacklinks()}
+      </div>
+      <!-- max-width keeps the 50% cap true when the window shrinks, without
+           rewriting the saved width. The grip sits on the non-scrolling
+           aside so it spans the full height; the content scrolls inside. -->
+      <aside
+        class="relative flex min-h-0 shrink-0 flex-col border-l"
+        style="width: {settings.railWidth}px; max-width: 50%; border-color: var(--border); background: var(--rail-bg);"
+      >
+        <!-- A focusable separator: pointer drag, or arrow/Home/End/Enter keys. -->
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_tabindex -->
+        <div
+          class="rail-grip"
+          class:dragging={railDragging}
+          role="separator"
+          tabindex="0"
+          aria-orientation="vertical"
+          aria-label="Resize live state panel"
+          aria-valuemin={railMin}
+          aria-valuenow={railNow}
+          aria-valuemax={railCap}
+          title="Drag to resize · double-click to reset · arrow keys to adjust"
+          onkeydown={onRailKeydown}
+          onpointerdown={startRailDrag}
+          onpointermove={moveRailDrag}
+          onpointerup={endRailDrag}
+          onpointercancel={endRailDrag}
+          ondblclick={() => settings.setRailWidth(RAIL_WIDTH_DEFAULT)}
+          onmouseenter={() => setCursor("ewResize")}
+          onmouseleave={() => !railDragging && setCursor("default")}
+        ></div>
+        <div class="scroll-thin min-h-0 flex-1 overflow-y-auto" style="padding: var(--pane-py) 22px;">
           {@render sectionLabel("Live state", true)}
           <IntegrationPanel {brief} narrow onManage={manage} />
-        </aside>
-      </div>
+        </div>
+      </aside>
     </div>
   {:else if settings.briefLayout === "body"}
     <!-- Body first, then the live-state block below a hairline divider. -->
@@ -459,3 +791,86 @@
 {#if bootstrapOpen}
   <BootstrapModal {brief} onclose={() => (bootstrapOpen = false)} onDraft={acceptDraft} />
 {/if}
+
+<style>
+  /* Grab strip straddling the rail's left border; the visible hairline is the
+     ::after so the hit area stays generous. */
+  .rail-grip {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -4px;
+    width: 8px;
+    z-index: 5;
+    cursor: col-resize;
+    touch-action: none;
+  }
+  .rail-grip::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 3px;
+    width: 2px;
+    background: transparent;
+    transition: background 120ms ease;
+  }
+  .rail-grip:hover::after {
+    background: var(--accent-line);
+  }
+  .rail-grip.dragging::after,
+  .rail-grip:focus-visible::after {
+    background: var(--accent);
+  }
+  .rail-grip:focus-visible {
+    outline: none;
+  }
+
+  /* Status pill as a toggle: same look as the read-only pill, plus a hover
+     ring and a tiny chevron so it reads as interactive. */
+  .status-trigger {
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: border-color 120ms ease, filter 120ms ease;
+  }
+  .status-trigger:hover,
+  .status-trigger.open {
+    border-color: color-mix(in srgb, var(--sc) 45%, transparent);
+  }
+  .status-trigger:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
+  .status-popover {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 20;
+    min-width: 150px;
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg);
+    box-shadow: var(--shadow-pop);
+  }
+  .status-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 8px;
+    border-radius: 6px;
+    font-size: 12.5px;
+    color: var(--fg);
+    cursor: pointer;
+    text-transform: capitalize;
+  }
+  .status-option:hover,
+  .status-option:focus-visible {
+    background: var(--hover);
+    outline: none;
+  }
+  .status-option.current {
+    color: var(--fg2);
+  }
+</style>

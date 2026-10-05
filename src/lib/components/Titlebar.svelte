@@ -7,7 +7,6 @@
   import { onMount } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { projects } from "$lib/stores/projects.svelte";
-  import { settings } from "$lib/stores/settings.svelte";
   import { toasts } from "$lib/stores/toasts.svelte";
   import { statusColor } from "$lib/status";
   import Icon from "./Icon.svelte";
@@ -105,21 +104,20 @@
 
   <div class="actions">
     {#if projects.llmProvider}
-      <button class="btn-icon" title="Morning briefing across all projects" aria-label="Morning briefing" onclick={() => (briefingOpen = true)}>
-        <Icon name="wb_sunny" size={16} />
+      <button class="btn-icon briefing" title="Morning briefing across all projects" aria-label="Morning briefing" onclick={() => (briefingOpen = true)}>
+        <Icon name="wb_sunny" size={18} />
       </button>
     {/if}
     <button class="btn-icon" title="Sync all projects" aria-label="Sync all projects" onclick={syncAll} disabled={syncing}>
-      <Icon name="sync" size={16} class={syncing ? "spin" : ""} />
+      <Icon name="sync" size={18} class={syncing ? "spin" : ""} />
     </button>
     <AppMenu />
-    <button class="btn-icon" title="Toggle theme" aria-label="Toggle theme" onclick={() => settings.toggleDark()}>
-      <Icon name={settings.dark ? "light_mode" : "dark_mode"} size={16} />
-    </button>
   </div>
 
-  <!-- Windows / Linux: custom caption buttons, flush right. -->
+  <!-- Windows / Linux: custom caption buttons, flush right, set off from the
+       app's own actions by a thin rule so the two groups don't read as one. -->
   {#if !isMac}
+    <span class="vdiv trail"></span>
     <div class="caption">
       <button class="cap" title="Minimize" onclick={() => win.minimize()} aria-label="Minimize">
         <svg viewBox="0 0 10 10"><line x1="0" y1="5.5" x2="10" y2="5.5" /></svg>
@@ -165,6 +163,10 @@
     height: 18px;
     background: var(--border);
     margin-right: 14px;
+    flex-shrink: 0;
+  }
+  .vdiv.trail {
+    margin: 0 6px 0 10px;
   }
 
   .brandchip {
@@ -216,10 +218,22 @@
     padding-right: 10px; /* breathing room at the corner */
   }
 
+  /* Morning briefing: a soft sun-coloured glow so the one "start here"
+     action reads as such without becoming a filled button. */
+  .briefing {
+    color: var(--hook-fg);
+    box-shadow: 0 0 8px 1px color-mix(in srgb, var(--hook-fg) 32%, transparent);
+    transition: background 0.14s, color 0.14s, box-shadow 0.14s;
+  }
+  .briefing:hover {
+    color: var(--hook-fg);
+    background: var(--hook-bg);
+    box-shadow: 0 0 12px 2px color-mix(in srgb, var(--hook-fg) 48%, transparent);
+  }
+
   .caption {
     display: flex;
     height: 46px;
-    margin-left: 4px;
   }
   .cap {
     width: 46px;

@@ -38,6 +38,11 @@
   type Section = "appearance" | "sync" | "gmail" | "ai";
   let section = $state<Section>("appearance");
 
+  const THEMES: { value: boolean; label: string; icon: string }[] = [
+    { value: false, label: "Light", icon: "light_mode" },
+    { value: true, label: "Dark", icon: "dark_mode" },
+  ];
+
   const SECTIONS: { value: Section; label: string; icon: string }[] = [
     { value: "appearance", label: "Appearance", icon: "palette" },
     { value: "sync", label: "Sync & GitHub", icon: "sync" },
@@ -84,6 +89,15 @@
     }
     wasOpen = open;
   });
+
+  async function resetOrder() {
+    try {
+      await projects.resetOrder();
+      toasts.success("Project order reset");
+    } catch (e) {
+      toasts.error(`Could not reset order: ${e}`);
+    }
+  }
 
   function onKeydown(e: KeyboardEvent) {
     if (e.key === "Escape") onclose();
@@ -340,6 +354,25 @@
         <div class="scroll-thin min-w-0 flex-1 overflow-y-auto px-5 py-4">
           {#if section === "appearance"}
             <div class="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--fg3)]">
+              Theme
+            </div>
+            <div class="mb-4 flex max-w-[340px] rounded-lg border p-[2px]" style="border-color: var(--border);">
+              {#each THEMES as opt (opt.value)}
+                <button
+                  class="flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1 text-[12px] font-medium transition-colors {settings.dark ===
+                  opt.value
+                    ? 'bg-[var(--accent)] text-white'
+                    : 'text-[var(--fg2)] hover:text-[var(--fg)]'}"
+                  aria-pressed={settings.dark === opt.value}
+                  onclick={() => settings.setDark(opt.value)}
+                >
+                  <Icon name={opt.icon} size={14} />
+                  {opt.label}
+                </button>
+              {/each}
+            </div>
+
+            <div class="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--fg3)]">
               Project cards
             </div>
             <div class="mb-4 flex max-w-[340px] rounded-lg border p-[2px]" style="border-color: var(--border);">
@@ -354,6 +387,41 @@
                   {opt.label}
                 </button>
               {/each}
+            </div>
+
+            <button
+              class="mb-4 flex w-full max-w-[340px] items-center justify-between gap-2 text-left"
+              onclick={() => settings.setSidebarZebra(!settings.sidebarZebra)}
+              aria-pressed={settings.sidebarZebra}
+            >
+              <span class="text-[12px] text-[var(--fg2)]">
+                Alternate row shading
+                <span class="block text-[10.5px] text-[var(--fg3)]">Rows and Compact lists only</span>
+              </span>
+              <span
+                class="relative h-[18px] w-[30px] shrink-0 rounded-full transition-colors"
+                style="background: {settings.sidebarZebra ? 'var(--accent)' : 'var(--border)'};"
+              >
+                <span
+                  class="absolute top-[2px] h-[14px] w-[14px] rounded-full bg-white transition-[left]"
+                  style="left: {settings.sidebarZebra ? '14px' : '2px'};"
+                ></span>
+              </span>
+            </button>
+
+            <div class="mb-4 flex w-full max-w-[340px] items-center justify-between gap-2">
+              <span class="text-[12px] text-[var(--fg2)]">
+                Project order
+                <span class="block text-[10.5px] text-[var(--fg3)]">Drag to reorder, or Alt+↑/↓ on the selected project</span>
+              </span>
+              <button
+                class="shrink-0 rounded-[7px] border px-[9px] py-[4px] text-[11px] font-medium text-[var(--fg2)] transition-colors hover:text-[var(--fg)]"
+                style="border-color: var(--border);"
+                title="Forget the manual order and sort by most recently opened"
+                onclick={resetOrder}
+              >
+                Reset to recent
+              </button>
             </div>
 
             <div class="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--fg3)]">

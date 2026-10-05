@@ -45,6 +45,8 @@
   --border-soft: #f2f2f5;
   --hover: #f6f7f9;
   --sel: #f4f5f7;
+  --row-alt: #f2f3f6;
+  --row-alt-hover: #ebedf1;
   --sel-ring: #e7e8ec;
   --input-bg: #ffffff;
   --chip-bg: #f3f4f6;
@@ -74,6 +76,8 @@
   --border-soft: #181b21;
   --hover: rgba(255, 255, 255, 0.038);
   --sel: rgba(255, 255, 255, 0.055);
+  --row-alt: rgba(255, 255, 255, 0.03);
+  --row-alt-hover: rgba(255, 255, 255, 0.065);
   --sel-ring: rgba(255, 255, 255, 0.08);
   --input-bg: #12161c;
   --chip-bg: rgba(255, 255, 255, 0.055);
@@ -289,6 +293,79 @@ body {
   color: var(--fg3);
 }
 
+/* Sidebar status-filter dropdown. A native <select> ignores CSS variables for
+   its arrow and popup list, so each theme sets color-scheme + its own chevron. */
+.status-select {
+  appearance: none;
+  -webkit-appearance: none;
+  color-scheme: light;
+  background-color: var(--input-bg);
+  border: 1px solid var(--border);
+  color: var(--fg2);
+  padding: 0 26px 0 10px;
+  outline: none;
+  cursor: pointer;
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  background-size: 12px 12px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236a6f7a' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  transition: border-color 0.14s, box-shadow 0.14s, color 0.14s;
+}
+.status-select:hover {
+  color: var(--fg);
+  border-color: color-mix(in srgb, var(--fg3) 55%, var(--border));
+}
+.status-select:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+.status-select.is-active {
+  color: var(--fg);
+  border-color: var(--accent-line);
+}
+.status-select option {
+  background: var(--input-bg);
+  color: var(--fg);
+  text-transform: capitalize;
+}
+.dark .status-select {
+  color-scheme: dark;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23868c97' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+.dark .status-select:hover {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+/* Sidebar drag-and-drop reordering: the dragged row dims; the drop target
+   shows an accent line on the edge the row will land on. */
+.drag-row {
+  position: relative;
+}
+.drag-row.is-dragging {
+  opacity: 0.4;
+}
+.drag-row.drop-before::before,
+.drag-row.drop-after::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 1;
+}
+.drag-row.drop-before::before {
+  top: -1px;
+}
+.drag-row.drop-after::after {
+  bottom: -1px;
+}
+.drag-row.drop-after.is-card::after {
+  bottom: 2px;
+}
+
 /* =========================================================================
  * Custom scrollbars (sidebar list + detail body).
  * ========================================================================= */
@@ -350,6 +427,96 @@ body {
 .markdown h1 {
   font-size: 12px;
   color: var(--fg2);
+}
+/* Collapsible sections: MarkdownView wraps each h1/h2 + its content in a
+ * native <details>. The summary keeps the heading's small-caps look and adds a
+ * hairline chevron that turns from "right" (closed) to "down" (open). */
+.markdown details.md-section > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 28px 0 11px;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  border-radius: 4px;
+}
+.markdown details.md-section > summary::-webkit-details-marker {
+  display: none;
+}
+.markdown details.md-section:first-child > summary {
+  margin-top: 0;
+}
+.markdown details.md-section:not([open]) > summary {
+  margin-bottom: 0;
+}
+.markdown details.md-section > summary > h1,
+.markdown details.md-section > summary > h2 {
+  margin: 0;
+  transition: color 120ms ease;
+}
+.markdown details.md-section > summary:hover > h2 {
+  color: var(--fg2);
+}
+.markdown details.md-section > summary:hover > h1 {
+  color: var(--fg);
+}
+.markdown details.md-section > summary::before {
+  content: "";
+  flex: none;
+  width: 5px;
+  height: 5px;
+  margin: 0 2px 1px 1px;
+  border-right: 1.5px solid var(--fg3);
+  border-bottom: 1.5px solid var(--fg3);
+  transform: rotate(-45deg);
+  transition: transform 150ms ease, border-color 120ms ease;
+}
+.markdown details.md-section[open] > summary::before {
+  transform: rotate(45deg);
+  margin-bottom: 3px;
+}
+.markdown details.md-section > summary:hover::before {
+  border-color: var(--fg2);
+}
+.markdown details.md-section > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+/* Header description toggle: same hairline chevron as the body sections.
+ * Collapsed, the paragraph truncates to one line; open, it wraps in full. */
+.desc-toggle {
+  cursor: pointer;
+  user-select: none;
+  border-radius: 4px;
+}
+.desc-toggle::before {
+  content: "";
+  flex: none;
+  width: 5px;
+  height: 5px;
+  margin: 8px 2px 0 1px;
+  border-right: 1.5px solid var(--fg3);
+  border-bottom: 1.5px solid var(--fg3);
+  transform: rotate(-45deg);
+  transition: transform 150ms ease, border-color 120ms ease;
+}
+.desc-toggle.open::before {
+  transform: rotate(45deg);
+  margin-top: 6px;
+}
+.desc-toggle:hover::before {
+  border-color: var(--fg2);
+}
+.desc-toggle:hover > p {
+  color: var(--fg);
+}
+.desc-toggle > p {
+  transition: color 120ms ease;
+}
+.desc-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
 }
 .markdown ul,
 .markdown ol {
@@ -557,4 +724,13 @@ body {
   .pulse {
     animation: none;
   }
+}
+
+/* Sidebar zebra striping (settings.sidebarZebra): every other project row in
+   the rows/compact lists. Hover goes a step darker so it still reads. */
+.row-alt {
+  background: var(--row-alt);
+}
+.row-alt:hover {
+  background: var(--row-alt-hover);
 }

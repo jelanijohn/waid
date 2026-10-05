@@ -434,6 +434,11 @@ struct Settings {
     ollama_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     anthropic_model: Option<String>,
+    /// Manual sidebar order: brief paths relative to the briefs dir (POSIX
+    /// separators), first = top. Briefs not listed (new files) sort ahead by
+    /// recency; `None`/empty means pure most-recently-opened order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    brief_order: Option<Vec<String>>,
 }
 
 /// The subset of `Settings` the synthesis settings UI reads/writes (the LLM
@@ -553,13 +558,58 @@ pub fn list_briefs(app: AppHandle) -> Result<Vec<Brief>, String> {
     let mut briefs: Vec<Brief> = Vec::new();
     collect_briefs(&dir, &mut briefs)?;
 
-    briefs.sort_by(|a, b| {
-        b.last_opened
-            .cmp(&a.last_opened)
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-    });
+    let order = load_settings(&app).brief_order.unwrap_or_default();
+    sort_briefs(&mut briefs, &dir, &order);
 
     Ok(briefs)
+}
+
+/// A brief's path relative to the briefs dir with `/` separators — the key the
+/// manual `brief_order` setting is written in (so it survives moving the vault).
+fn order_key(path: &Path, dir: &Path) -> String {
+    path.strip_prefix(dir)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+/// Sort briefs for the sidebar: manually ordered ones (by their position in
+/// `order`) after any not yet ordered, which keep the classic most-recently-
+/// opened-then-name order. With an empty `order` this is the recency sort.
+fn sort_briefs(briefs: &mut [Brief], dir: &Path, order: &[String]) {
+    let rank: std::collections::HashMap<&str, usize> = order
+        .iter()
+        .enumerate()
+        .map(|(i, k)| (k.as_str(), i))
+        .collect();
+    briefs.sort_by(|a, b| {
+        let ra = rank.get(order_key(Path::new(&a.path), dir).as_str()).copied();
+        let rb = rank.get(order_key(Path::new(&b.path), dir).as_str()).copied();
+        match (ra, rb) {
+            (Some(x), Some(y)) => x.cmp(&y),
+            (None, Some(_)) => std::cmp::Ordering::Less,
+            (Some(_), None) => std::cmp::Ordering::Greater,
+            (None, None) => b
+                .last_opened
+                .cmp(&a.last_opened)
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
+        }
+    });
+}
+
+/// Persist the sidebar's manual order: the full list of brief paths (absolute,
+/// as the frontend holds them) top to bottom. An empty list clears the manual
+/// order and restores most-recently-opened sorting on the next load.
+#[tauri::command]
+pub fn set_brief_order(app: AppHandle, paths: Vec<String>) -> Result<(), String> {
+    let dir = briefs_dir(&app)?;
+    let mut settings = load_settings(&app);
+    settings.brief_order = if paths.is_empty() {
+        None
+    } else {
+        Some(paths.iter().map(|p| order_key(Path::new(p), &dir)).collect())
+    };
+    save_settings(&app, &settings)
 }
 
 /// Recursively gather `.md` briefs under `dir`, skipping hidden entries (any
@@ -4078,6 +4128,50 @@ mod tests {
         let (yaml, body) = split_frontmatter(raw);
         assert!(yaml.unwrap().contains("name: Test"));
         assert!(body.starts_with("# Body"));
+    }
+
+    fn brief_at(dir: &Path, rel: &str, name: &str, opened: &str) -> Brief {
+        parse_brief(
+            &dir.join(rel),
+            format!("---\nname: {name}\nlast_opened: {opened}\n---\n\nbody\n"),
+        )
+    }
+
+    #[test]
+    fn sort_briefs_without_manual_order_is_recency_then_name() {
+        let dir = PathBuf::from("/vault");
+        let mut briefs = vec![
+            brief_at(&dir, "b.md", "Bravo", "2026-01-01T00:00:00Z"),
+            brief_at(&dir, "a.md", "alpha", "2026-01-01T00:00:00Z"),
+            brief_at(&dir, "c.md", "Charlie", "2026-02-01T00:00:00Z"),
+        ];
+        sort_briefs(&mut briefs, &dir, &[]);
+        let names: Vec<&str> = briefs.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(names, ["Charlie", "alpha", "Bravo"]);
+    }
+
+    #[test]
+    fn sort_briefs_honours_manual_order_with_new_files_first() {
+        let dir = PathBuf::from("/vault");
+        let mut briefs = vec![
+            brief_at(&dir, "a.md", "A", "2026-01-01T00:00:00Z"),
+            brief_at(&dir, "sub/b.md", "B", "2026-03-01T00:00:00Z"),
+            brief_at(&dir, "c.md", "C", "2026-02-01T00:00:00Z"),
+            // Not in the manual order (e.g. just created) — leads, by recency.
+            brief_at(&dir, "new.md", "New", "2025-01-01T00:00:00Z"),
+        ];
+        let order = ["c.md".to_string(), "sub/b.md".to_string(), "a.md".to_string()];
+        sort_briefs(&mut briefs, &dir, &order);
+        let names: Vec<&str> = briefs.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(names, ["New", "C", "B", "A"]);
+    }
+
+    #[test]
+    fn order_key_is_relative_with_forward_slashes() {
+        let dir = PathBuf::from("/vault");
+        assert_eq!(order_key(&dir.join("sub").join("x.md"), &dir), "sub/x.md");
+        // A path outside the dir falls back to itself rather than panicking.
+        assert_eq!(order_key(Path::new("/elsewhere/y.md"), &dir), "/elsewhere/y.md");
     }
 
     #[test]

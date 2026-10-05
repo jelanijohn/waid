@@ -81,6 +81,7 @@ pub fn run() {
             commands::set_llm_settings,
             commands::get_briefs_dir,
             commands::set_briefs_dir,
+            commands::set_brief_order,
             commands::get_vault_info,
             commands::is_wsl,
             commands::create_brief,

@@ -85,6 +85,10 @@ export const getBriefsDir = () => invoke<string>("get_briefs_dir");
 
 export const setBriefsDir = (dir: string) => invoke<string>("set_briefs_dir", { dir });
 
+/** Persist the sidebar's manual order (all brief paths, top to bottom). An
+ *  empty list clears it and restores most-recently-opened sorting. */
+export const setBriefOrder = (paths: string[]) => invoke<void>("set_brief_order", { paths });
+
 export const getVaultInfo = () => invoke<VaultInfo>("get_vault_info");
 
 export const isWsl = () => invoke<boolean>("is_wsl");

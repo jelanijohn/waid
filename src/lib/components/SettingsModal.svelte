@@ -90,6 +90,15 @@
     wasOpen = open;
   });
 
+  async function resetOrder() {
+    try {
+      await projects.resetOrder();
+      toasts.success("Project order reset");
+    } catch (e) {
+      toasts.error(`Could not reset order: ${e}`);
+    }
+  }
+
   function onKeydown(e: KeyboardEvent) {
     if (e.key === "Escape") onclose();
   }
@@ -399,6 +408,21 @@
                 ></span>
               </span>
             </button>
+
+            <div class="mb-4 flex w-full max-w-[340px] items-center justify-between gap-2">
+              <span class="text-[12px] text-[var(--fg2)]">
+                Project order
+                <span class="block text-[10.5px] text-[var(--fg3)]">Drag to reorder, or Alt+↑/↓ on the selected project</span>
+              </span>
+              <button
+                class="shrink-0 rounded-[7px] border px-[9px] py-[4px] text-[11px] font-medium text-[var(--fg2)] transition-colors hover:text-[var(--fg)]"
+                style="border-color: var(--border);"
+                title="Forget the manual order and sort by most recently opened"
+                onclick={resetOrder}
+              >
+                Reset to recent
+              </button>
+            </div>
 
             <div class="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--fg3)]">
               Brief layout

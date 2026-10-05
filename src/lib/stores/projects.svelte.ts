@@ -7,6 +7,7 @@ import {
   getVaultInfo,
   isWsl as isWslCmd,
   touchBrief,
+  setBriefOrder,
   setBriefStatus as setBriefStatusCmd,
   saveBrief as saveBriefCmd,
   syncBrief as syncBriefCmd,
@@ -293,6 +294,30 @@ class ProjectStore {
       if (this.selectedPath !== path) return; // moved on — skip
       this.sync(path).catch((e) => console.error("auto-sync failed:", e));
     }, 800);
+  }
+
+  /** Move the brief at `fromPath` next to the one at `toPath` (after it when
+   *  `after`, else before) and persist the full order. Optimistic: the list
+   *  updates immediately; a failed write is rethrown for the caller to surface.
+   *  Positions are relative to the whole list, so a move within a filtered or
+   *  status-grouped view lands correctly once the filter is lifted. */
+  async reorder(fromPath: string, toPath: string, after: boolean): Promise<void> {
+    if (fromPath === toPath) return;
+    const next = this.briefs.slice();
+    const from = next.findIndex((b) => b.path === fromPath);
+    if (from === -1) return;
+    const [moved] = next.splice(from, 1);
+    const to = next.findIndex((b) => b.path === toPath);
+    if (to === -1) return;
+    next.splice(after ? to + 1 : to, 0, moved);
+    this.briefs = next;
+    await setBriefOrder(next.map((b) => b.path));
+  }
+
+  /** Clear the manual order; the list returns to most-recently-opened. */
+  async resetOrder(): Promise<void> {
+    await setBriefOrder([]);
+    await this.load();
   }
 
   /** Replace (or insert) a brief by path, without reordering the list. */

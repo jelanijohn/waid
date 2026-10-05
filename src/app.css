@@ -293,6 +293,79 @@ body {
   color: var(--fg3);
 }
 
+/* Sidebar status-filter dropdown. A native <select> ignores CSS variables for
+   its arrow and popup list, so each theme sets color-scheme + its own chevron. */
+.status-select {
+  appearance: none;
+  -webkit-appearance: none;
+  color-scheme: light;
+  background-color: var(--input-bg);
+  border: 1px solid var(--border);
+  color: var(--fg2);
+  padding: 0 26px 0 10px;
+  outline: none;
+  cursor: pointer;
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  background-size: 12px 12px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236a6f7a' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  transition: border-color 0.14s, box-shadow 0.14s, color 0.14s;
+}
+.status-select:hover {
+  color: var(--fg);
+  border-color: color-mix(in srgb, var(--fg3) 55%, var(--border));
+}
+.status-select:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+.status-select.is-active {
+  color: var(--fg);
+  border-color: var(--accent-line);
+}
+.status-select option {
+  background: var(--input-bg);
+  color: var(--fg);
+  text-transform: capitalize;
+}
+.dark .status-select {
+  color-scheme: dark;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23868c97' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+.dark .status-select:hover {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+/* Sidebar drag-and-drop reordering: the dragged row dims; the drop target
+   shows an accent line on the edge the row will land on. */
+.drag-row {
+  position: relative;
+}
+.drag-row.is-dragging {
+  opacity: 0.4;
+}
+.drag-row.drop-before::before,
+.drag-row.drop-after::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 1;
+}
+.drag-row.drop-before::before {
+  top: -1px;
+}
+.drag-row.drop-after::after {
+  bottom: -1px;
+}
+.drag-row.drop-after.is-card::after {
+  bottom: 2px;
+}
+
 /* =========================================================================
  * Custom scrollbars (sidebar list + detail body).
  * ========================================================================= */

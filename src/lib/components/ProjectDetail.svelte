@@ -281,27 +281,34 @@
   let railRow = $state<HTMLDivElement | null>(null);
   let railDragging = $state(false);
 
-  // Upper bound for the rail (half the row), tracked so the separator can
-  // report it as aria-valuemax and clamp keyboard resizes. Follows the row
-  // as the window resizes.
-  let railMax = $state(RAIL_WIDTH_MIN);
+  // The rail's hard cap is half the row (the CSS `max-width: 50%`), tracked
+  // with a ResizeObserver so it follows the window. At narrow widths (the
+  // window allows 720px) that cap drops below RAIL_WIDTH_MIN, so the
+  // *achievable* bounds and the visible width are derived from it rather
+  // than from the saved preference: the separator reports what the user
+  // actually sees, and keyboard moves start from there.
+  let railCap = $state(RAIL_WIDTH_DEFAULT);
   $effect(() => {
     if (!railRow) return;
     const ro = new ResizeObserver(([entry]) => {
-      railMax = Math.max(RAIL_WIDTH_MIN, Math.floor(entry.contentRect.width * 0.5));
+      railCap = Math.max(1, Math.floor(entry.contentRect.width * 0.5));
     });
     ro.observe(railRow);
     return () => ro.disconnect();
   });
+  const railMin = $derived(Math.min(RAIL_WIDTH_MIN, railCap));
+  const railNow = $derived(Math.min(settings.railWidth, railCap));
 
   function clampRail(px: number): number {
-    return Math.min(railMax, Math.max(RAIL_WIDTH_MIN, px));
+    return Math.min(railCap, Math.max(railMin, px));
   }
 
   // Keyboard resize for the separator (WAI-ARIA "window splitter"): arrows
   // nudge by 16px (64px with Shift), Home/End jump to the bounds, Enter
   // resets like a double-click. The rail sits on the right, so ArrowLeft
-  // moves the splitter left and widens it.
+  // moves the splitter left and widens it. A move that cannot change the
+  // visible width is dropped, so a cramped window never rewrites the saved
+  // preference.
   const RAIL_KEY_STEP = 16;
   function onRailKeydown(e: KeyboardEvent) {
     const step = e.shiftKey ? RAIL_KEY_STEP * 4 : RAIL_KEY_STEP;
@@ -309,17 +316,17 @@
     switch (e.key) {
       case "ArrowLeft":
       case "ArrowUp":
-        next = settings.railWidth + step;
+        next = railNow + step;
         break;
       case "ArrowRight":
       case "ArrowDown":
-        next = settings.railWidth - step;
+        next = railNow - step;
         break;
       case "Home":
-        next = RAIL_WIDTH_MIN;
+        next = railMin;
         break;
       case "End":
-        next = railMax;
+        next = railCap;
         break;
       case "Enter":
         next = RAIL_WIDTH_DEFAULT;
@@ -328,7 +335,9 @@
         return;
     }
     e.preventDefault();
-    settings.setRailWidth(clampRail(next));
+    next = clampRail(next);
+    if (next === railNow) return;
+    settings.setRailWidth(next);
   }
 
   // WebKitGTK (Linux/WSL) often ignores the CSS `cursor` (see ResizeHandles),
@@ -638,9 +647,9 @@
           tabindex="0"
           aria-orientation="vertical"
           aria-label="Resize live state panel"
-          aria-valuemin={RAIL_WIDTH_MIN}
-          aria-valuenow={settings.railWidth}
-          aria-valuemax={railMax}
+          aria-valuemin={railMin}
+          aria-valuenow={railNow}
+          aria-valuemax={railCap}
           title="Drag to resize · double-click to reset · arrow keys to adjust"
           onkeydown={onRailKeydown}
           onpointerdown={startRailDrag}

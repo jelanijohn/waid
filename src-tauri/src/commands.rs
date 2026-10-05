@@ -1215,7 +1215,12 @@ pub async fn sync_brief(path: String) -> Result<Brief, String> {
     let synced_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let rendered = render_sync_summary(&results, &synced_at);
 
-    // Edit only the body's managed region; re-attach the original frontmatter
+    // The fetch above may have taken seconds, during which a status change,
+    // capture, or edit can have landed. Re-read now so the write below edits
+    // the current file rather than the pre-fetch snapshot.
+    let raw = fs::read_to_string(&p).map_err(|e| format!("could not read {path}: {e}"))?;
+
+    // Edit only the body's managed region; re-attach the current frontmatter
     // verbatim. upsert errors (malformed markers) abort before any write.
     let (prefix, body) = split_for_body_edit(&raw);
     let new_body = upsert_marked_block(body, "waid:sync", &rendered)?;
@@ -1990,6 +1995,10 @@ pub async fn synthesize_brief(app: AppHandle, path: String) -> Result<Brief, Str
     let user = build_synthesis_prompt(&brief, &evidence);
     let response = provider.complete(&system, &user).await?;
     let synthesis = parse_synthesis(&response)?;
+
+    // Evidence gathering and the model call can take a while; re-read so the
+    // write edits the current file, not the snapshot the prompt was built from.
+    let raw = fs::read_to_string(&p).map_err(|e| format!("could not read {path}: {e}"))?;
 
     // Apply both edits to the body, then re-attach frontmatter verbatim.
     let (prefix, body) = split_for_body_edit(&raw);

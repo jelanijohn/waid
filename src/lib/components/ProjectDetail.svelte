@@ -49,6 +49,8 @@
   let statusMenuOpen = $state(false);
   let statusSaving = $state(false);
   let statusMenuEl = $state<HTMLDivElement | null>(null);
+  let statusTriggerEl = $state<HTMLButtonElement | null>(null);
+  let statusListEl = $state<HTMLDivElement | null>(null);
   let statusOptions = $derived.by(() => {
     const seen = new Set<string>();
     const out: string[] = [];
@@ -70,9 +72,63 @@
   function toggleStatusMenu() {
     statusMenuOpen = !statusMenuOpen;
   }
+  /** Close the popover and hand focus back to the trigger (listbox pattern). */
+  function closeStatusMenu(refocus = true) {
+    statusMenuOpen = false;
+    if (refocus) statusTriggerEl?.focus();
+  }
+  // ArrowDown/ArrowUp on the trigger open the list, like a native select.
+  function onTriggerKeydown(e: KeyboardEvent) {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      statusMenuOpen = true;
+    }
+  }
+  function statusOptionEls(): HTMLElement[] {
+    return Array.from(statusListEl?.querySelectorAll<HTMLElement>('[role="option"]') ?? []);
+  }
+  // Listbox keyboard pattern: focus moves between options with the arrow
+  // keys (wrapping), Home/End jump to the ends, Escape closes and restores
+  // focus to the trigger. Enter/Space activate the focused option natively
+  // because each option is a real <button>.
+  function onListKeydown(e: KeyboardEvent) {
+    const els = statusOptionEls();
+    if (!els.length) return;
+    const i = els.indexOf(document.activeElement as HTMLElement);
+    let next: number | null = null;
+    switch (e.key) {
+      case "ArrowDown":
+        next = i < 0 ? 0 : (i + 1) % els.length;
+        break;
+      case "ArrowUp":
+        next = i < 0 ? els.length - 1 : (i - 1 + els.length) % els.length;
+        break;
+      case "Home":
+        next = 0;
+        break;
+      case "End":
+        next = els.length - 1;
+        break;
+      case "Tab":
+        // Leaving the list with Tab closes it so focus order stays sane.
+        closeStatusMenu(false);
+        return;
+      default:
+        return;
+    }
+    e.preventDefault();
+    els[next]?.focus();
+  }
+  // On open, move focus into the list — onto the current option, or the first.
+  $effect(() => {
+    if (!statusMenuOpen || !statusListEl) return;
+    const els = statusOptionEls();
+    const current = els.find((el) => el.getAttribute("aria-selected") === "true");
+    (current ?? els[0])?.focus();
+  });
   /** Empty `status` clears the key ("No status"). */
   async function pickStatus(status: string) {
-    statusMenuOpen = false;
+    closeStatusMenu();
     if (isCurrentStatus(status)) return;
     statusSaving = true;
     try {
@@ -94,7 +150,7 @@
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key === "Escape") {
         ev.stopPropagation();
-        statusMenuOpen = false;
+        closeStatusMenu();
       }
     };
     document.addEventListener("pointerdown", onPointer, true);
@@ -452,14 +508,24 @@
               aria-haspopup="listbox"
               aria-expanded={statusMenuOpen}
               disabled={statusSaving || editing}
+              bind:this={statusTriggerEl}
               onclick={toggleStatusMenu}
+              onkeydown={onTriggerKeydown}
             >
               <span class="dot"></span>
               {brief.status ? statusLabel(brief.status) : "No status"}
               <Icon name="expand_more" size={12} />
             </button>
             {#if statusMenuOpen}
-              <div class="status-popover" role="listbox" aria-label="Project status">
+              <!-- tabindex -1: focus lives on the options (roving), not the list. -->
+              <div
+                class="status-popover"
+                role="listbox"
+                aria-label="Project status"
+                tabindex="-1"
+                bind:this={statusListEl}
+                onkeydown={onListKeydown}
+              >
                 {#each statusOptions as option (option.toLowerCase())}
                   {@const current = isCurrentStatus(option)}
                   <button
@@ -468,6 +534,7 @@
                     class:current
                     role="option"
                     aria-selected={current}
+                    tabindex="-1"
                     onclick={() => pickStatus(option)}
                   >
                     <span class="sdot h-[7px] w-[7px]" style="--sc: {statusColor(option)};"></span>
@@ -484,6 +551,7 @@
                   class:current={!brief.status}
                   role="option"
                   aria-selected={!brief.status}
+                  tabindex="-1"
                   onclick={() => pickStatus("")}
                 >
                   <span class="sdot h-[7px] w-[7px]" style="--sc: transparent; box-shadow: inset 0 0 0 1px var(--fg3);"></span>
@@ -797,8 +865,10 @@
     cursor: pointer;
     text-transform: capitalize;
   }
-  .status-option:hover {
+  .status-option:hover,
+  .status-option:focus-visible {
     background: var(--hover);
+    outline: none;
   }
   .status-option.current {
     color: var(--fg2);

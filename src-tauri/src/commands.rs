@@ -3366,11 +3366,14 @@ pub fn set_briefs_dir(app: AppHandle, dir: String) -> Result<String, String> {
     // The manual sidebar order is keyed by paths relative to the briefs dir,
     // so an order from one folder would silently apply to any same-named
     // files in another. Forget it when the folder actually changes.
-    let same_dir = settings
-        .briefs_dir
-        .as_deref()
-        .map(|old| same_path(Path::new(old), &path))
-        .unwrap_or(false);
+    // Resolve the current folder the same way `briefs_dir` does, so picking
+    // the default location while it is already in use (`briefs_dir` unset)
+    // counts as the same folder rather than a change.
+    let current = match settings.briefs_dir.as_deref().filter(|s| !s.trim().is_empty()) {
+        Some(s) => PathBuf::from(s),
+        None => default_briefs_dir(&app)?,
+    };
+    let same_dir = same_path(&current, &path);
     if !same_dir {
         settings.brief_order = None;
     }

@@ -29,7 +29,11 @@
       } else if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
         // Keyboard counterpart to drag-reordering: nudge the selected project.
         const t = e.target as HTMLElement | null;
-        if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+        if (
+          t &&
+          (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)
+        )
+          return;
         if (!projects.selectedPath) return;
         e.preventDefault();
         nudge(projects.selectedPath, e.key === "ArrowUp" ? -1 : 1);

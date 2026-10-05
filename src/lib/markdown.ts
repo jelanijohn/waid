@@ -97,6 +97,8 @@ export function renderMarkdown(
  * `data-section` is a key derived from the heading text (lower-cased; a `#n`
  * suffix disambiguates repeated headings) that callers use to persist which
  * sections are collapsed. `isCollapsed(key)` decides the initial open state.
+ * Keys are checked against every key already emitted, so a literal heading
+ * such as `Foo#2` cannot collide with the suffix given to a repeated `Foo`.
  */
 export function sectionize(html: string, isCollapsed: (key: string) => boolean): string {
   const tpl = document.createElement("template");
@@ -104,7 +106,7 @@ export function sectionize(html: string, isCollapsed: (key: string) => boolean):
   if (!tpl.content.querySelector("h1, h2")) return html;
 
   const out = document.createElement("div");
-  const seen = new Map<string, number>();
+  const used = new Set<string>();
   let body: HTMLElement | null = null;
 
   for (const node of Array.from(tpl.content.childNodes)) {
@@ -114,9 +116,9 @@ export function sectionize(html: string, isCollapsed: (key: string) => boolean):
       continue;
     }
     const base = (node.textContent ?? "").trim().toLowerCase();
-    const n = (seen.get(base) ?? 0) + 1;
-    seen.set(base, n);
-    const key = n === 1 ? base : `${base}#${n}`;
+    let key = base;
+    for (let n = 2; used.has(key); n++) key = `${base}#${n}`;
+    used.add(key);
 
     const details = document.createElement("details");
     details.className = "md-section";

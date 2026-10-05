@@ -67,8 +67,8 @@
           <Icon name="bolt" size={16} fill={1} /> Quick capture
         </h3>
         <select
-          class="rounded-lg border px-2 py-1 text-[12px] text-[var(--fg)] outline-none"
-          style="background: var(--input-bg); border-color: var(--border);"
+          class="themed-select rounded-lg py-1 text-[12px]"
+          aria-label="Capture into brief"
           bind:value={targetPath}
         >
           {#each projects.briefs as b (b.path)}

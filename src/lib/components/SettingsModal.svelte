@@ -10,7 +10,7 @@
     hasSecret,
     SECRET_GITHUB_TOKEN,
     SECRET_ANTHROPIC_API_KEY,
-    SECRET_OPENAI_API_KEY,
+    openaiKeySecret,
     SECRET_GMAIL_CLIENT_ID,
     SECRET_GMAIL_CLIENT_SECRET,
     getLlmSettings,
@@ -173,12 +173,7 @@
     } catch {
       anthropicStored = false;
     }
-    openaiKey = "";
-    try {
-      openaiStored = await hasSecret(SECRET_OPENAI_API_KEY);
-    } catch {
-      openaiStored = false;
-    }
+    await refreshOpenaiKeyStatus();
     if (llmProvider === "ollama") fetchOllamaModels();
   }
 
@@ -253,12 +248,27 @@
     }
   }
 
+  /** The key is scoped to the endpoint's origin, so re-check whenever the URL
+   *  changes (a host switch shows "No key saved" for the new host). */
+  async function refreshOpenaiKeyStatus() {
+    openaiKey = "";
+    if (!openaiUrl.trim()) {
+      openaiStored = false;
+      return;
+    }
+    try {
+      openaiStored = await hasSecret(openaiKeySecret(openaiUrl));
+    } catch {
+      openaiStored = false;
+    }
+  }
+
   async function saveOpenaiKey() {
     const value = openaiKey.trim();
-    if (!value || llmBusy) return;
+    if (!value || !openaiUrl.trim() || llmBusy) return;
     llmBusy = true;
     try {
-      await setSecret(SECRET_OPENAI_API_KEY, value);
+      await setSecret(openaiKeySecret(openaiUrl), value);
       openaiKey = "";
       openaiStored = true;
       toasts.success("Endpoint API key saved to keychain");
@@ -273,7 +283,7 @@
     if (llmBusy) return;
     llmBusy = true;
     try {
-      await deleteSecret(SECRET_OPENAI_API_KEY);
+      await deleteSecret(openaiKeySecret(openaiUrl));
       openaiStored = false;
       toasts.success("Endpoint API key removed");
     } catch (e) {
@@ -759,7 +769,10 @@
                 autocomplete="off"
                 placeholder="https://openrouter.ai/api/v1 · http://localhost:1234/v1"
                 bind:value={openaiUrl}
-                onblur={saveLlmSettings}
+                onblur={() => {
+                  saveLlmSettings();
+                  refreshOpenaiKeyStatus();
+                }}
               />
               <p class="mb-2 max-w-[400px] text-[11px] leading-snug text-[var(--fg3)]">
                 Any server speaking OpenAI's chat-completions API. Include the <code>/v1</code> if
@@ -780,8 +793,12 @@
               </p>
               <p class="mb-2 max-w-[400px] text-[11px] leading-snug text-[var(--fg3)]">
                 API key: optional — cloud providers need one; local servers usually don't. Stored in
-                your OS keychain.
-                {openaiStored ? "A key is saved." : "No key saved."}
+                your OS keychain for this endpoint's host only.
+                {openaiUrl.trim()
+                  ? openaiStored
+                    ? "A key is saved for this host."
+                    : "No key saved for this host."
+                  : "Enter the endpoint URL first."}
               </p>
               <div class="flex max-w-[400px] gap-1.5">
                 <input
@@ -791,14 +808,14 @@
                   autocomplete="off"
                   placeholder={openaiStored ? "Replace key…" : "API key (optional)"}
                   bind:value={openaiKey}
-                  disabled={llmBusy}
+                  disabled={llmBusy || !openaiUrl.trim()}
                   onkeydown={(e) => {
                     if (e.key === "Enter") saveOpenaiKey();
                   }}
                 />
                 <button
                   class="shrink-0 rounded-md bg-[var(--accent)] px-2.5 py-1 text-[12px] font-semibold text-white transition-[filter] hover:brightness-[1.06] disabled:opacity-50"
-                  disabled={llmBusy || !openaiKey.trim()}
+                  disabled={llmBusy || !openaiKey.trim() || !openaiUrl.trim()}
                   onclick={saveOpenaiKey}
                 >
                   Save

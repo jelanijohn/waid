@@ -141,7 +141,7 @@ export const credentialHelp: Record<string, CredentialHelp> = {
       "Enter the model id exactly as your provider documents it.",
       "Cloud providers: create an API key in your provider's dashboard and paste it here. Local servers: skip this — no key is needed.",
     ],
-    note: "Local endpoint (localhost) — prompts never leave your machine. Remote endpoint — brief text and fetched evidence are sent to that server, and retention/logging is governed by that operator's data policy, not by WAID.",
+    note: "Local endpoint (localhost) — prompts never leave your machine. Remote endpoint — brief text and fetched evidence are sent to that server, and retention/logging is governed by that operator's data policy, not by WAID. The key is saved for that URL's host only, so changing hosts never sends it elsewhere.",
   },
   neuroskill: {
     title: "NeuroSkill (local)",

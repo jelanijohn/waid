@@ -2055,7 +2055,8 @@ fn make_provider(app: &AppHandle) -> Result<Box<dyn LlmProvider>, String> {
                 .filter(|m| !m.trim().is_empty())
                 .ok_or("No model name set — add one in Settings.")?;
             // Optional: local servers need no key, so absence is not an error.
-            let api_key = openai_api_key();
+            // Scoped to this URL's origin — see `openai_key_secret_name`.
+            let api_key = openai_api_key(&base);
             // Generous total timeout: the endpoint may be a slow local CPU
             // server. Deliberately the Ollama arm's (5, 300), not Anthropic's
             // (5, 120) — we can't tell local from cloud by URL, so take the
@@ -3591,9 +3592,12 @@ const KEYRING_SERVICE: &str = "com.jelanijohn.waid";
 /// Anthropic API key when the Anthropic provider is selected.
 const SECRET_GITHUB_TOKEN: &str = "github.token";
 const SECRET_ANTHROPIC_API_KEY: &str = "anthropic.api_key";
-/// API key for the OpenAI-compatible endpoint ("openai" = the protocol, not
-/// the company). OPTIONAL — local servers (LM Studio, llama.cpp, vLLM,
-/// Ollama's /v1) typically need none.
+/// Prefix of the keyring key for the OpenAI-compatible endpoint's API key
+/// ("openai" = the protocol, not the company). OPTIONAL — local servers (LM
+/// Studio, llama.cpp, vLLM, Ollama's /v1) typically need none. Unlike the
+/// Anthropic key, the host is user-editable, so the full key is scoped to the
+/// endpoint's origin (`openai.api_key:<origin>`, see `openai_key_secret_name`)
+/// — a saved cloud key is never sent to a different host after the URL changes.
 const SECRET_OPENAI_API_KEY: &str = "openai.api_key";
 // The user's bring-your-own Google OAuth *Desktop* client (see `connect_gmail`).
 // The client_id isn't sensitive, but both live in the keyring for one storage
@@ -3659,10 +3663,25 @@ fn anthropic_api_key() -> Option<String> {
     get_secret_value(SECRET_ANTHROPIC_API_KEY).ok().flatten()
 }
 
-/// Read the stored API key for the OpenAI-compatible endpoint, if any. Absence
-/// is not an error — local servers need no key.
-fn openai_api_key() -> Option<String> {
-    get_secret_value(SECRET_OPENAI_API_KEY).ok().flatten()
+/// Keyring key for the API key of the OpenAI-compatible endpoint at `base`:
+/// `openai.api_key:<origin>` (scheme + host + non-default port, lowercase), so
+/// path/trailing-slash edits keep the key while a host change drops it. Falls
+/// back to the trimmed text when `base` isn't a URL with an origin. Mirrored
+/// by `openaiKeySecret` in `src/lib/tauri.ts` — keep the two in sync.
+fn openai_key_secret_name(base: &str) -> String {
+    let base = base.trim();
+    let scope = reqwest::Url::parse(base)
+        .ok()
+        .map(|u| u.origin().ascii_serialization())
+        .filter(|o| o != "null")
+        .unwrap_or_else(|| base.to_string());
+    format!("{SECRET_OPENAI_API_KEY}:{scope}")
+}
+
+/// Read the stored API key for the OpenAI-compatible endpoint at `base`, if
+/// any. Absence is not an error — local servers need no key.
+fn openai_api_key(base: &str) -> Option<String> {
+    get_secret_value(&openai_key_secret_name(base)).ok().flatten()
 }
 
 /// Store (or replace) a secret in the OS keyring.
@@ -5001,6 +5020,27 @@ mod tests {
             openai_chat_url("http://localhost:8080"),
             "http://localhost:8080/chat/completions"
         );
+    }
+
+    #[test]
+    fn openai_key_secret_name_scopes_to_origin() {
+        // Path, trailing slash, case, and default port don't change the scope…
+        let a = openai_key_secret_name("https://openrouter.ai/api/v1");
+        assert_eq!(a, "openai.api_key:https://openrouter.ai");
+        assert_eq!(openai_key_secret_name(" HTTPS://OpenRouter.ai:443/api/v1/ "), a);
+        assert_eq!(openai_key_secret_name("https://openrouter.ai/api/v1/chat/completions"), a);
+        // …but a different host, port, or scheme does.
+        assert_ne!(openai_key_secret_name("https://api.groq.com/openai/v1"), a);
+        assert_eq!(
+            openai_key_secret_name("http://localhost:1234/v1"),
+            "openai.api_key:http://localhost:1234"
+        );
+        assert_ne!(
+            openai_key_secret_name("http://localhost:8080/v1"),
+            openai_key_secret_name("http://localhost:1234/v1")
+        );
+        // Not a URL with an origin: fall back to the trimmed text.
+        assert_eq!(openai_key_secret_name(" not a url "), "openai.api_key:not a url");
     }
 
     #[test]

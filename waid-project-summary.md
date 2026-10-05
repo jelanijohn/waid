@@ -375,7 +375,8 @@ The full markdown brief lives here.
   (`llm_provider: "openai"` names the *protocol*, not the company — OpenRouter,
   Groq, Mistral, LM Studio, llama.cpp server, vLLM, Ollama's `/v1`, …; the
   user-entered base URL must include any `/v1`, WAID appends
-  `/chat/completions`; API key optional, local servers need none; no
+  `/chat/completions`; API key optional and keyring-scoped to the URL's
+  origin, local servers need none; no
   `response_format` is sent since many compat servers reject unknown params;
   16k-char context budget). Used for brief synthesis, the PM integration digest
   / morning briefing, *and* the AI body in brief bootstrap. No in-process
@@ -1010,7 +1011,9 @@ The visual layer has a named theme and shares branding with What's Next.
   (synthesis/digests), per-brief PM connection tokens,
   per-brief webhook secrets, and Gmail's OAuth client + account grants live in the
   platform keychain, never in settings or env. Keys: `github.token`,
-  `anthropic.api_key`, `openai.api_key`, `bconn:<brief-path>:<id>`,
+  `anthropic.api_key`, `openai.api_key:<origin>` (scoped to the endpoint's
+  scheme+host+port so an edited URL never receives another host's key),
+  `bconn:<brief-path>:<id>`,
   `whook:<brief-path>:<id>`,
   `gmail.client_id` / `gmail.client_secret` (bring-your-own Google Desktop
   client), and `gmail.oauth:<account-email>` (the account-scoped grant, shared

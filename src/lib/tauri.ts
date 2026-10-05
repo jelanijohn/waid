@@ -127,9 +127,26 @@ export const SECRET_GITHUB_TOKEN = "github.token";
 
 /** Keyring key for the Anthropic API key used by the synthesis agent. */
 export const SECRET_ANTHROPIC_API_KEY = "anthropic.api_key";
-/** Keyring key for the OpenAI-compatible endpoint's API key (optional —
- *  local servers need none). */
+/** Prefix of the keyring key for the OpenAI-compatible endpoint's API key
+ *  (optional — local servers need none). The full key is scoped to the
+ *  endpoint's origin; use `openaiKeySecret(url)`. */
 export const SECRET_OPENAI_API_KEY = "openai.api_key";
+
+/** Keyring key for the API key of the OpenAI-compatible endpoint at `url`:
+ *  `openai.api_key:<origin>`, so editing the path keeps the key but switching
+ *  hosts never sends a saved cloud key elsewhere. Mirrors the Rust
+ *  `openai_key_secret_name` in commands.rs — keep the two in sync. */
+export function openaiKeySecret(url: string): string {
+  const base = url.trim();
+  let scope = base;
+  try {
+    const origin = new URL(base).origin;
+    if (origin !== "null") scope = origin;
+  } catch {
+    // not a URL — fall back to the raw text, like the backend
+  }
+  return `${SECRET_OPENAI_API_KEY}:${scope}`;
+}
 
 /** Keyring keys for the user's bring-your-own Google OAuth *Desktop* client,
  *  used by the Gmail provider's connect flow (see connectGmail). */

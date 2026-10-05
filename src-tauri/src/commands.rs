@@ -700,10 +700,13 @@ pub fn set_brief_status(path: String, status: String) -> Result<Brief, String> {
 }
 
 /// Pure core of `set_brief_status`: return `raw` with its `status` key set.
+/// Frontmatter that fails to parse is an error, not an empty mapping — the
+/// alternative would silently rewrite the file with every other key gone.
 fn splice_status(raw: &str, status: &str) -> Result<String, String> {
     let (yaml, body) = split_frontmatter(raw);
     let mut map: serde_yaml::Mapping = match &yaml {
-        Some(y) => serde_yaml::from_str(y).unwrap_or_default(),
+        Some(y) => serde_yaml::from_str(y)
+            .map_err(|e| format!("frontmatter is not valid YAML, leaving the file untouched: {e}"))?,
         None => serde_yaml::Mapping::new(),
     };
     map.insert(
@@ -4220,6 +4223,15 @@ mod tests {
         assert_eq!(brief.status.as_deref(), Some("blocked"));
         assert_eq!(brief.name, "Test");
         assert!(out.ends_with("---\n\nbody"));
+    }
+
+    #[test]
+    fn splice_status_refuses_malformed_yaml() {
+        // A half-written key must surface as an error, never as a rewrite that
+        // drops every other frontmatter field.
+        let raw = "---\nname: Test\ntags: [unclosed\n---\nbody";
+        let err = splice_status(raw, "paused").unwrap_err();
+        assert!(err.contains("not valid YAML"), "{err}");
     }
 
     #[test]

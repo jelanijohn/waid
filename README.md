@@ -108,7 +108,8 @@ Full frontmatter reference (webhook headers, `{{secret}}`, app-owned regions):
   deterministic `## Mind State` region aggregating focus / engagement / mood
   over your labeled work sessions. [docs/mind-state.md](docs/mind-state.md).
 - **AI synthesis, digests & morning briefing** _(optional)_ — with Ollama
-  (local) or Anthropic configured, Refresh writes a `## Current State` +
+  (local), Anthropic, or any OpenAI-compatible endpoint (OpenRouter, Groq,
+  LM Studio, llama.cpp, vLLM, …) configured, Refresh writes a `## Current State` +
   `## Open Questions` summary into app-owned regions, and you can digest one
   brief's PM items or brief across all projects. All fetched content is data,
   never instructions. [docs/synthesis.md](docs/synthesis.md).

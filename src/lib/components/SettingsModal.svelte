@@ -10,6 +10,7 @@
     hasSecret,
     SECRET_GITHUB_TOKEN,
     SECRET_ANTHROPIC_API_KEY,
+    SECRET_OPENAI_API_KEY,
     SECRET_GMAIL_CLIENT_ID,
     SECRET_GMAIL_CLIENT_SECRET,
     getLlmSettings,
@@ -63,7 +64,7 @@
   let gmailBusy = $state(false);
 
   // LLM synthesis settings. Provider "" means disabled.
-  let llmProvider = $state<"" | "ollama" | "anthropic">("");
+  let llmProvider = $state<"" | "ollama" | "anthropic" | "openai">("");
   let ollamaUrl = $state("");
   let ollamaModel = $state("");
   let ollamaModels = $state<string[]>([]);
@@ -71,6 +72,10 @@
   let anthropicModel = $state("");
   let anthropicKey = $state("");
   let anthropicStored = $state(false);
+  let openaiUrl = $state("");
+  let openaiModel = $state("");
+  let openaiKey = $state("");
+  let openaiStored = $state(false);
   let llmBusy = $state(false);
 
   const OLLAMA_DEFAULT_URL = "http://localhost:11434";
@@ -152,10 +157,12 @@
   async function loadLlmSettings() {
     try {
       const s = await getLlmSettings();
-      llmProvider = (s.llmProvider as "" | "ollama" | "anthropic") ?? "";
+      llmProvider = (s.llmProvider as "" | "ollama" | "anthropic" | "openai") ?? "";
       ollamaUrl = s.ollamaUrl ?? OLLAMA_DEFAULT_URL;
       ollamaModel = s.ollamaModel ?? "";
       anthropicModel = s.anthropicModel ?? "";
+      openaiUrl = s.openaiUrl ?? "";
+      openaiModel = s.openaiModel ?? "";
     } catch {
       // Settings unreadable — fall back to disabled.
       llmProvider = "";
@@ -165,6 +172,12 @@
       anthropicStored = await hasSecret(SECRET_ANTHROPIC_API_KEY);
     } catch {
       anthropicStored = false;
+    }
+    openaiKey = "";
+    try {
+      openaiStored = await hasSecret(SECRET_OPENAI_API_KEY);
+    } catch {
+      openaiStored = false;
     }
     if (llmProvider === "ollama") fetchOllamaModels();
   }
@@ -178,6 +191,8 @@
         ollamaUrl: ollamaUrl.trim() || null,
         ollamaModel: ollamaModel.trim() || null,
         anthropicModel: anthropicModel.trim() || null,
+        openaiUrl: openaiUrl.trim() || null,
+        openaiModel: openaiModel.trim() || null,
       });
       await projects.refreshLlmProvider();
     } catch (e) {
@@ -186,7 +201,7 @@
   }
 
   async function onProviderChange(value: string) {
-    llmProvider = value as "" | "ollama" | "anthropic";
+    llmProvider = value as "" | "ollama" | "anthropic" | "openai";
     await saveLlmSettings();
     if (llmProvider === "ollama") fetchOllamaModels();
   }
@@ -231,6 +246,36 @@
       await deleteSecret(SECRET_ANTHROPIC_API_KEY);
       anthropicStored = false;
       toasts.success("Anthropic API key removed");
+    } catch (e) {
+      toasts.error(`Could not remove key: ${e}`);
+    } finally {
+      llmBusy = false;
+    }
+  }
+
+  async function saveOpenaiKey() {
+    const value = openaiKey.trim();
+    if (!value || llmBusy) return;
+    llmBusy = true;
+    try {
+      await setSecret(SECRET_OPENAI_API_KEY, value);
+      openaiKey = "";
+      openaiStored = true;
+      toasts.success("Endpoint API key saved to keychain");
+    } catch (e) {
+      toasts.error(`Could not save key: ${e}`);
+    } finally {
+      llmBusy = false;
+    }
+  }
+
+  async function clearOpenaiKey() {
+    if (llmBusy) return;
+    llmBusy = true;
+    try {
+      await deleteSecret(SECRET_OPENAI_API_KEY);
+      openaiStored = false;
+      toasts.success("Endpoint API key removed");
     } catch (e) {
       toasts.error(`Could not remove key: ${e}`);
     } finally {
@@ -612,6 +657,7 @@
               <option value="">Off</option>
               <option value="ollama">Ollama (local)</option>
               <option value="anthropic">Anthropic (cloud)</option>
+              <option value="openai">OpenAI-compatible (custom)</option>
             </select>
 
             {#if llmProvider === "ollama"}
@@ -695,6 +741,74 @@
                   class="mt-1.5 text-[11px] text-[var(--fg3)] transition-colors hover:text-[var(--fg)] hover:underline disabled:opacity-50"
                   disabled={llmBusy}
                   onclick={clearAnthropicKey}
+                >
+                  Remove saved key
+                </button>
+              {/if}
+            {:else if llmProvider === "openai"}
+              <div
+                class="mb-1.5 flex max-w-[400px] items-center justify-between text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--fg3)]"
+              >
+                OpenAI-compatible
+                <CredentialHelp topic="openai-compat" />
+              </div>
+              <input
+                class="mb-1.5 w-full max-w-[400px] rounded-md border px-2 py-1 text-[12px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
+                style="background: var(--input-bg); border-color: var(--border);"
+                type="text"
+                autocomplete="off"
+                placeholder="https://openrouter.ai/api/v1 · http://localhost:1234/v1"
+                bind:value={openaiUrl}
+                onblur={saveLlmSettings}
+              />
+              <p class="mb-2 max-w-[400px] text-[11px] leading-snug text-[var(--fg3)]">
+                Any server speaking OpenAI's chat-completions API. Include the <code>/v1</code> if
+                your server uses one; WAID appends <code>/chat/completions</code>. localhost = fully
+                private; a remote URL sends brief content to that provider.
+              </p>
+              <input
+                class="mb-1.5 w-full max-w-[400px] rounded-md border px-2 py-1 text-[12px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
+                style="background: var(--input-bg); border-color: var(--border);"
+                type="text"
+                autocomplete="off"
+                placeholder="e.g. mistralai/mistral-small · llama-3.1-8b"
+                bind:value={openaiModel}
+                onblur={saveLlmSettings}
+              />
+              <p class="mb-2 max-w-[400px] text-[11px] leading-snug text-[var(--fg3)]">
+                Model id as your provider documents it — pick one; synthesis won't run without it.
+              </p>
+              <p class="mb-2 max-w-[400px] text-[11px] leading-snug text-[var(--fg3)]">
+                API key: optional — cloud providers need one; local servers usually don't. Stored in
+                your OS keychain.
+                {openaiStored ? "A key is saved." : "No key saved."}
+              </p>
+              <div class="flex max-w-[400px] gap-1.5">
+                <input
+                  class="min-w-0 flex-1 rounded-md border px-2 py-1 text-[12px] text-[var(--fg)] outline-none transition-colors focus:border-[var(--accent)]"
+                  style="background: var(--input-bg); border-color: var(--border);"
+                  type="password"
+                  autocomplete="off"
+                  placeholder={openaiStored ? "Replace key…" : "API key (optional)"}
+                  bind:value={openaiKey}
+                  disabled={llmBusy}
+                  onkeydown={(e) => {
+                    if (e.key === "Enter") saveOpenaiKey();
+                  }}
+                />
+                <button
+                  class="shrink-0 rounded-md bg-[var(--accent)] px-2.5 py-1 text-[12px] font-semibold text-white transition-[filter] hover:brightness-[1.06] disabled:opacity-50"
+                  disabled={llmBusy || !openaiKey.trim()}
+                  onclick={saveOpenaiKey}
+                >
+                  Save
+                </button>
+              </div>
+              {#if openaiStored}
+                <button
+                  class="mt-1.5 text-[11px] text-[var(--fg3)] transition-colors hover:text-[var(--fg)] hover:underline disabled:opacity-50"
+                  disabled={llmBusy}
+                  onclick={clearOpenaiKey}
                 >
                   Remove saved key
                 </button>

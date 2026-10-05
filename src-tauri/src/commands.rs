@@ -433,8 +433,10 @@ struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     briefs_dir: Option<String>,
     /// LLM synthesis config (the brief-synthesis agent). `llm_provider` of
-    /// `"ollama" | "anthropic"` selects a provider; `None` disables synthesis.
-    /// Secrets (the Anthropic API key) never live here — they're in the keyring.
+    /// `"ollama" | "anthropic" | "openai"` selects a provider; `None` disables
+    /// synthesis. (`"openai"` names the OpenAI-compatible wire protocol, not the
+    /// company — any `…/chat/completions` server.) Secrets (API keys) never
+    /// live here — they're in the keyring.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     llm_provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -443,6 +445,12 @@ struct Settings {
     ollama_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     anthropic_model: Option<String>,
+    /// Base URL of the OpenAI-compatible endpoint, including any `/v1` the
+    /// server wants (WAID appends `/chat/completions`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    openai_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    openai_model: Option<String>,
     /// Manual sidebar order: brief paths relative to the briefs dir (POSIX
     /// separators), first = top. Briefs not listed (new files) sort ahead by
     /// recency; `None`/empty means pure most-recently-opened order.
@@ -460,6 +468,8 @@ pub struct LlmSettings {
     pub ollama_url: Option<String>,
     pub ollama_model: Option<String>,
     pub anthropic_model: Option<String>,
+    pub openai_url: Option<String>,
+    pub openai_model: Option<String>,
 }
 
 fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -1782,8 +1792,9 @@ async fn gather_evidence(
 // --- LLM provider abstraction ---------------------------------------------
 
 /// A pluggable text-completion backend. Implementations talk to an external
-/// process over HTTP (Ollama on localhost, or the Anthropic API) — there is no
-/// in-process ML runtime.
+/// process over HTTP (Ollama on localhost, the Anthropic API, or any
+/// OpenAI-compatible chat-completions endpoint) — there is no in-process ML
+/// runtime.
 #[async_trait]
 trait LlmProvider: Send + Sync {
     /// Return the model's raw text (expected to be JSON). The caller parses it.
@@ -1906,6 +1917,90 @@ impl LlmProvider for AnthropicProvider {
     }
 }
 
+/// Resolve the chat-completions URL from a user-entered base. Tolerates a
+/// trailing slash and a pasted full endpoint (the Brave-BYOM-style habit of
+/// entering ".../v1/chat/completions" directly). The base is expected to
+/// already include any `/v1` the server wants — servers disagree about it, so
+/// WAID never guesses one in.
+fn openai_chat_url(base: &str) -> String {
+    let base = base.trim().trim_end_matches('/');
+    if base.ends_with("/chat/completions") {
+        base.to_string()
+    } else {
+        format!("{base}/chat/completions")
+    }
+}
+
+/// Remote (or local) inference via any OpenAI-compatible chat-completions
+/// endpoint — OpenRouter, Groq, Mistral, LM Studio, llama.cpp server, vLLM, …
+/// "openai" names the wire protocol, not the company. The API key is read from
+/// the OS keyring (`openai.api_key`) and is OPTIONAL (local servers need none).
+/// Modelled on `AnthropicProvider`: no `response_format` enforcement — many
+/// compat servers 400 on unknown params, and the closed-schema prompts don't
+/// need it.
+struct OpenAiCompatProvider {
+    client: reqwest::Client,
+    /// Full chat-completions URL, pre-resolved via `openai_chat_url`.
+    url: String,
+    model: String,
+    api_key: Option<String>,
+}
+
+#[async_trait]
+impl LlmProvider for OpenAiCompatProvider {
+    async fn complete(&self, system: &str, user: &str) -> Result<String, String> {
+        let payload = serde_json::json!({
+            "model": self.model,
+            "messages": [
+                { "role": "system", "content": system },
+                { "role": "user", "content": user },
+            ],
+            // Same output bound as the Anthropic path; the legacy param name is
+            // the one every compat server accepts.
+            "max_tokens": 1024,
+            "stream": false,
+        });
+        let mut req = self
+            .client
+            .post(&self.url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .json(&payload);
+        if let Some(key) = &self.api_key {
+            req = req.bearer_auth(key);
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| format!("LLM endpoint request failed: {e}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!(
+                "LLM endpoint returned {status}: {}",
+                truncate_chars(body.trim(), 300)
+            ));
+        }
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("invalid JSON from LLM endpoint: {e}"))?;
+        json.get("choices")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.to_string())
+            .ok_or_else(|| "LLM endpoint response had no message content".to_string())
+    }
+
+    /// Middle-ground: could be a huge cloud model or a small local one, and
+    /// there's no way to know from the URL. 16k chars ≈ 4k tokens of evidence.
+    fn context_budget(&self) -> usize {
+        16_000
+    }
+}
+
 /// Default endpoints/models when a field is unset.
 const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
 const DEFAULT_ANTHROPIC_MODEL: &str = "claude-haiku-4-5-20251001";
@@ -1949,7 +2044,33 @@ fn make_provider(app: &AppHandle) -> Result<Box<dyn LlmProvider>, String> {
             let client = http_client(5, 120)?;
             Ok(Box::new(AnthropicProvider { client, model, api_key }))
         }
-        _ => Err("No LLM provider configured — choose Ollama or Anthropic in Settings.".to_string()),
+        Some("openai") => {
+            let base = s
+                .openai_url
+                .filter(|u| !u.trim().is_empty())
+                .ok_or("No endpoint URL set — add one in Settings.")?;
+            let model = s
+                .openai_model
+                .filter(|m| !m.trim().is_empty())
+                .ok_or("No model name set — add one in Settings.")?;
+            // Optional: local servers need no key, so absence is not an error.
+            let api_key = openai_api_key();
+            // Generous total timeout: the endpoint may be a slow local CPU
+            // server. Deliberately the Ollama arm's (5, 300), not Anthropic's
+            // (5, 120) — we can't tell local from cloud by URL, so take the
+            // slower bound.
+            let client = http_client(5, 300)?;
+            Ok(Box::new(OpenAiCompatProvider {
+                client,
+                url: openai_chat_url(&base),
+                model,
+                api_key,
+            }))
+        }
+        _ => Err(
+            "No LLM provider configured — choose Ollama, Anthropic, or a custom endpoint in Settings."
+                .to_string(),
+        ),
     }
 }
 
@@ -2361,7 +2482,8 @@ messages, emails) pulled across ALL their projects.",
 }
 
 /// Turn a natural-language description into a Gmail search query using the
-/// configured synthesis LLM (Ollama or Anthropic). Returns a single query line,
+/// configured synthesis LLM (Ollama, Anthropic, or an OpenAI-compatible
+/// endpoint). Returns a single query line,
 /// e.g. "unread from my manager this week" -> "is:unread from:manager newer_than:7d".
 /// Display-only: the caller drops the result into the feed's query field — nothing
 /// is fetched or written here.
@@ -3322,6 +3444,8 @@ pub fn get_llm_settings(app: AppHandle) -> LlmSettings {
         ollama_url: s.ollama_url,
         ollama_model: s.ollama_model,
         anthropic_model: s.anthropic_model,
+        openai_url: s.openai_url,
+        openai_model: s.openai_model,
     }
 }
 
@@ -3335,6 +3459,8 @@ pub fn set_llm_settings(app: AppHandle, settings: LlmSettings) -> Result<(), Str
     current.ollama_url = norm(settings.ollama_url);
     current.ollama_model = norm(settings.ollama_model);
     current.anthropic_model = norm(settings.anthropic_model);
+    current.openai_url = norm(settings.openai_url);
+    current.openai_model = norm(settings.openai_model);
     save_settings(&app, &current)
 }
 
@@ -3464,6 +3590,10 @@ const KEYRING_SERVICE: &str = "com.jelanijohn.waid";
 /// Anthropic API key when the Anthropic provider is selected.
 const SECRET_GITHUB_TOKEN: &str = "github.token";
 const SECRET_ANTHROPIC_API_KEY: &str = "anthropic.api_key";
+/// API key for the OpenAI-compatible endpoint ("openai" = the protocol, not
+/// the company). OPTIONAL — local servers (LM Studio, llama.cpp, vLLM,
+/// Ollama's /v1) typically need none.
+const SECRET_OPENAI_API_KEY: &str = "openai.api_key";
 // The user's bring-your-own Google OAuth *Desktop* client (see `connect_gmail`).
 // The client_id isn't sensitive, but both live in the keyring for one storage
 // path. WAID ships no shared Google credentials.
@@ -3526,6 +3656,12 @@ pub(crate) fn github_token() -> Option<String> {
 /// `LlmProvider` when the synthesis provider is set to `"anthropic"`.
 fn anthropic_api_key() -> Option<String> {
     get_secret_value(SECRET_ANTHROPIC_API_KEY).ok().flatten()
+}
+
+/// Read the stored API key for the OpenAI-compatible endpoint, if any. Absence
+/// is not an error — local servers need no key.
+fn openai_api_key() -> Option<String> {
+    get_secret_value(SECRET_OPENAI_API_KEY).ok().flatten()
 }
 
 /// Store (or replace) a secret in the OS keyring.
@@ -4608,6 +4744,32 @@ mod tests {
         delete_secret_value(key).unwrap(); // idempotent
     }
 
+    /// Live smoke test for the OpenAI-compatible provider against Ollama's own
+    /// `/v1` facade — validates the whole wire path (no `response_format`,
+    /// `max_tokens`, bearer-less local server) with zero extra infrastructure.
+    /// Needs Ollama on localhost:11434 with the model below pulled; run with
+    /// `cargo test openai_compat_live -- --ignored`.
+    #[tokio::test]
+    #[ignore = "requires a running Ollama server with llama3.2 pulled"]
+    async fn openai_compat_live_against_ollama_v1_facade() {
+        let provider = OpenAiCompatProvider {
+            client: http_client(5, 300).unwrap(),
+            url: openai_chat_url("http://localhost:11434/v1"),
+            model: "llama3.2".into(),
+            api_key: None,
+        };
+        let raw = provider
+            .complete(
+                "Reply with exactly one JSON object and nothing else.",
+                "Return {\"current_state\": \"ok\", \"open_questions\": []}.",
+            )
+            .await
+            .expect("completion succeeded");
+        // The same parser the synthesis path uses must accept the output.
+        let parsed = parse_synthesis(&raw).expect("model output parsed as Synthesis");
+        assert!(!parsed.current_state.trim().is_empty());
+    }
+
     /// Live end-to-end diagnostic for the Notion synthesis-evidence path. Ignored
     /// by default (needs the OS keyring + network + a shared page). Run with:
     ///   WAID_NOTION_BRIEF=/mnt/c/Users/jelan/WAID/briefs/gluefi.md \
@@ -4664,6 +4826,61 @@ mod tests {
                 None => eprintln!("notion_page_id: None (no 32-hex id in URL)"),
             }
         }
+    }
+
+    #[test]
+    fn openai_chat_url_appends_chat_completions_to_base() {
+        assert_eq!(
+            openai_chat_url("https://openrouter.ai/api/v1"),
+            "https://openrouter.ai/api/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn openai_chat_url_tolerates_trailing_slash_and_whitespace() {
+        assert_eq!(
+            openai_chat_url("  http://localhost:1234/v1/ "),
+            "http://localhost:1234/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn openai_chat_url_keeps_a_pasted_full_endpoint() {
+        assert_eq!(
+            openai_chat_url("http://localhost:11434/v1/chat/completions"),
+            "http://localhost:11434/v1/chat/completions"
+        );
+        // …and never auto-appends a `/v1` the user didn't type.
+        assert_eq!(
+            openai_chat_url("http://localhost:8080"),
+            "http://localhost:8080/chat/completions"
+        );
+    }
+
+    #[test]
+    fn settings_round_trip_openai_fields_and_tolerate_their_absence() {
+        // Old settings.json files (no openai_* keys) still parse.
+        let old: Settings = serde_json::from_str(
+            r#"{"llm_provider":"ollama","ollama_url":"http://localhost:11434"}"#,
+        )
+        .unwrap();
+        assert_eq!(old.llm_provider.as_deref(), Some("ollama"));
+        assert!(old.openai_url.is_none());
+        assert!(old.openai_model.is_none());
+
+        // New fields survive a serialize → deserialize cycle…
+        let s = Settings {
+            llm_provider: Some("openai".into()),
+            openai_url: Some("https://openrouter.ai/api/v1".into()),
+            openai_model: Some("mistralai/mistral-small".into()),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.openai_url.as_deref(), Some("https://openrouter.ai/api/v1"));
+        assert_eq!(back.openai_model.as_deref(), Some("mistralai/mistral-small"));
+        // …and unset ones are skipped rather than written as null.
+        assert!(!json.contains("anthropic_model"));
     }
 
     #[test]

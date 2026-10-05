@@ -59,8 +59,9 @@ class ProjectStore {
   vault = $state<VaultInfo>({ isVault: false });
   /** True under WSL — used to add a handler hint when opening URLs fails. */
   isWsl = $state(false);
-  /** Configured LLM synthesis provider ("ollama" | "anthropic"), or null when
-   *  synthesis is disabled. Drives whether Refresh also runs synthesis. */
+  /** Configured LLM synthesis provider ("ollama" | "anthropic" | "openai"),
+   *  or null when synthesis is disabled. Drives whether Refresh also runs
+   *  synthesis. */
   llmProvider = $state<string | null>(null);
   loading = $state(false);
   error = $state<string | null>(null);

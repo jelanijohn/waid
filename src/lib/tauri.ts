@@ -127,6 +127,9 @@ export const SECRET_GITHUB_TOKEN = "github.token";
 
 /** Keyring key for the Anthropic API key used by the synthesis agent. */
 export const SECRET_ANTHROPIC_API_KEY = "anthropic.api_key";
+/** Keyring key for the OpenAI-compatible endpoint's API key (optional —
+ *  local servers need none). */
+export const SECRET_OPENAI_API_KEY = "openai.api_key";
 
 /** Keyring keys for the user's bring-your-own Google OAuth *Desktop* client,
  *  used by the Gmail provider's connect flow (see connectGmail). */

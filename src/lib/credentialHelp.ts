@@ -4,7 +4,7 @@
 //
 // Keys match the provider ids used in IntegrationsModal (linear/jira/asana/
 // github/notion/slack/gmail) plus the standalone Settings credentials
-// (gmail-client, anthropic) and the webhook secret sentinel. Scopes are kept in
+// (gmail-client, anthropic, openai-compat) and the webhook secret sentinel. Scopes are kept in
 // sync with what the Rust backend actually requires (see src-tauri/src/provider/
 // and commands.rs).
 
@@ -133,6 +133,15 @@ export const credentialHelp: Record<string, CredentialHelp> = {
     ],
     note: "Used only for the optional AI synthesis of Current State & Open Questions.",
     docsUrl: "https://console.anthropic.com/settings/keys",
+  },
+  "openai-compat": {
+    title: "OpenAI-compatible endpoint",
+    steps: [
+      "Enter the base URL of any server speaking OpenAI's chat-completions API (OpenRouter, Groq, Mistral, LM Studio, llama.cpp, vLLM, Ollama's /v1, …). Include the /v1 if your server uses one.",
+      "Enter the model id exactly as your provider documents it.",
+      "Cloud providers: create an API key in your provider's dashboard and paste it here. Local servers: skip this — no key is needed.",
+    ],
+    note: "Local endpoint (localhost) — prompts never leave your machine. Remote endpoint — brief text and fetched evidence are sent to that server, and retention/logging is governed by that operator's data policy, not by WAID.",
   },
   neuroskill: {
     title: "NeuroSkill (local)",

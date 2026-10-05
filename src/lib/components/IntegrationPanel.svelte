@@ -24,7 +24,7 @@
   const NARROW_PROVIDERS = ["linear", "github", "notion", "gmail"] as const;
 
   // The AI digest layers over the local rollup; only offered when a synthesis
-  // provider (Ollama / Anthropic) is configured.
+  // provider (Ollama / Anthropic / OpenAI-compatible) is configured.
   let canDigest = $derived(projects.llmProvider !== null);
   let digest = $derived(integrations.digestFor(brief.path));
 

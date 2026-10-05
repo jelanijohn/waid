@@ -234,6 +234,15 @@ fn split_frontmatter(content: &str) -> (Option<String>, String) {
     (None, content.to_string())
 }
 
+/// Whether `content` starts with a frontmatter opener (`---` line) — used by
+/// write paths to tell "no frontmatter" apart from "frontmatter that never
+/// closed", which `split_frontmatter` deliberately reports the same way.
+fn has_unterminated_frontmatter(content: &str) -> bool {
+    let trimmed = content.strip_prefix('\u{feff}').unwrap_or(content);
+    (trimmed.starts_with("---\n") || trimmed.starts_with("---\r\n"))
+        && split_frontmatter(content).0.is_none()
+}
+
 /// Parse a file's raw contents into a `Brief`.
 fn parse_brief(path: &Path, raw: String) -> Brief {
     let (yaml, body) = split_frontmatter(&raw);
@@ -708,6 +717,11 @@ pub fn set_brief_status(path: String, status: String) -> Result<Brief, String> {
 /// alternative would silently rewrite the file with every other key gone.
 fn splice_status(raw: &str, status: &str) -> Result<String, String> {
     let (yaml, body) = split_frontmatter(raw);
+    if yaml.is_none() && has_unterminated_frontmatter(raw) {
+        // `split_frontmatter` hands back an opener with no closing `---` as
+        // plain body; inserting a new block above it would leave two openers.
+        return Err("frontmatter opens with `---` but never closes, leaving the file untouched".into());
+    }
     let mut map: serde_yaml::Mapping = match &yaml {
         Some(y) => serde_yaml::from_str(y)
             .map_err(|e| format!("frontmatter is not valid YAML, leaving the file untouched: {e}"))?,
@@ -4261,6 +4275,17 @@ mod tests {
         // Clearing an already-absent status is a no-op, not an error.
         let again = splice_status(&out, "").unwrap();
         assert_eq!(again, out);
+    }
+
+    #[test]
+    fn splice_status_refuses_unterminated_frontmatter() {
+        // An opener with no closing `---` must not get a second block above it.
+        let raw = "---\nname: Test\nstatus: active\n\n# Body without a closing delimiter\n";
+        let err = splice_status(raw, "paused").unwrap_err();
+        assert!(err.contains("never closes"), "{err}");
+        // A file with no frontmatter at all still gets one added.
+        let out = splice_status("# Just a body\n", "paused").unwrap();
+        assert!(out.starts_with("---\nstatus: paused\n---\n"));
     }
 
     #[test]

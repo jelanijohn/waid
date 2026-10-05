@@ -76,6 +76,25 @@
   let openaiModel = $state("");
   let openaiKey = $state("");
   let openaiStored = $state(false);
+  /** Plain `http://` to a host that isn't loopback: brief evidence (and any
+   *  saved key) would travel unencrypted. Informational only — never blocks,
+   *  since LAN / WSL2-host servers are a legitimate plain-HTTP case. */
+  let openaiInsecureRemote = $derived.by(() => {
+    try {
+      const u = new URL(openaiUrl.trim());
+      if (u.protocol !== "http:") return false;
+      const host = u.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+      return !(
+        host === "localhost" ||
+        host.endsWith(".localhost") ||
+        host === "::1" ||
+        host === "0.0.0.0" ||
+        host.startsWith("127.")
+      );
+    } catch {
+      return false;
+    }
+  });
   let llmBusy = $state(false);
 
   const OLLAMA_DEFAULT_URL = "http://localhost:11434";
@@ -659,8 +678,8 @@
               Summarize each brief's Current State &amp; Open Questions from its links and Captures.
             </p>
             <select
-              class="mb-3 w-full max-w-[400px] rounded-md border px-2 py-1 text-[12px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
-              style="background: var(--input-bg); border-color: var(--border);"
+              class="themed-select mb-3 w-full max-w-[400px] rounded-md py-1 text-[12px]"
+              aria-label="AI synthesis provider"
               value={llmProvider}
               onchange={(e) => onProviderChange(e.currentTarget.value)}
             >
@@ -687,8 +706,8 @@
                 }}
               />
               <select
-                class="w-full max-w-[400px] rounded-md border px-2 py-1 text-[12px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
-                style="background: var(--input-bg); border-color: var(--border);"
+                class="themed-select w-full max-w-[400px] rounded-md py-1 text-[12px]"
+                aria-label="Ollama model"
                 bind:value={ollamaModel}
                 onchange={saveLlmSettings}
               >
@@ -780,6 +799,16 @@
                 your server uses one; WAID appends <code>/chat/completions</code>. localhost = fully
                 private; a remote URL sends brief content to that provider.
               </p>
+              {#if openaiInsecureRemote}
+                <p
+                  class="mb-2 max-w-[400px] text-[11px] leading-snug text-[var(--status-paused)]"
+                  role="status"
+                >
+                  Plain <code>http://</code> to a non-local host: brief content and any saved API key
+                  are sent unencrypted. Prefer <code>https://</code> unless this server is on a
+                  network you trust.
+                </p>
+              {/if}
               <input
                 class="mb-1.5 w-full max-w-[400px] rounded-md border px-2 py-1 text-[12px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
                 style="background: var(--input-bg); border-color: var(--border);"

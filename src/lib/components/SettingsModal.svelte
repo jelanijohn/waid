@@ -89,7 +89,8 @@
         host.endsWith(".localhost") ||
         host === "::1" ||
         host === "0.0.0.0" ||
-        host.startsWith("127.")
+        // Numeric 127/8 only — a DNS name like 127.example.com is remote.
+        /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
       );
     } catch {
       return false;

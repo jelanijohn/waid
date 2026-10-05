@@ -276,7 +276,6 @@
   <!-- Project list -->
   <nav
     class="scroll-thin flex-1 overflow-y-auto px-[10px] pb-[10px] pt-1"
-    role="list"
     ondragleave={onListDragLeave}
   >
     {#if projects.loading && projects.briefs.length === 0}
@@ -290,6 +289,7 @@
 
     {:else if settings.sidebarStyle === "rows"}
       <!-- a) ROWS — flat, detailed -->
+      <div role="list" aria-label="Projects">
       {#each projects.filtered as brief, i (brief.path)}
         {@const sel = brief.path === projects.selectedPath}
         <div
@@ -321,6 +321,7 @@
           </button>
         </div>
       {/each}
+      </div>
 
     {:else if settings.sidebarStyle === "compact"}
       <!-- b) COMPACT — grouped, dense single-line rows -->
@@ -331,6 +332,7 @@
           {groupLabel(group.status)}
           <span class="ml-auto tabular-nums">{group.items.length}</span>
         </div>
+          <div role="list" aria-label={groupLabel(group.status)}>
         {#each group.items as brief, i (brief.path)}
           {@const sel = brief.path === projects.selectedPath}
           <div
@@ -357,6 +359,7 @@
             </button>
           </div>
         {/each}
+          </div>
       {/each}
 
     {:else}
@@ -369,6 +372,7 @@
           {groupLabel(group.status)}
           <span class="ml-auto tabular-nums">{group.items.length}</span>
         </div>
+          <div role="list" aria-label={groupLabel(group.status)}>
         {#each group.items as brief (brief.path)}
           {@const pc = statusColor(brief.status)}
           {@const sel = brief.path === projects.selectedPath}
@@ -411,6 +415,7 @@
             </button>
           </div>
         {/each}
+          </div>
       {/each}
     {/if}
   </nav>

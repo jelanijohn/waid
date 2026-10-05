@@ -10,6 +10,7 @@
     hasSecret,
     SECRET_GITHUB_TOKEN,
     SECRET_ANTHROPIC_API_KEY,
+    openaiKeySecret,
     SECRET_GMAIL_CLIENT_ID,
     SECRET_GMAIL_CLIENT_SECRET,
     getLlmSettings,
@@ -63,7 +64,7 @@
   let gmailBusy = $state(false);
 
   // LLM synthesis settings. Provider "" means disabled.
-  let llmProvider = $state<"" | "ollama" | "anthropic">("");
+  let llmProvider = $state<"" | "ollama" | "anthropic" | "openai">("");
   let ollamaUrl = $state("");
   let ollamaModel = $state("");
   let ollamaModels = $state<string[]>([]);
@@ -71,6 +72,37 @@
   let anthropicModel = $state("");
   let anthropicKey = $state("");
   let anthropicStored = $state(false);
+  let openaiUrl = $state("");
+  let openaiModel = $state("");
+  let openaiKey = $state("");
+  /** Keyring name of the key for the *current* URL's origin. */
+  let openaiSecretName = $derived(openaiUrl.trim() ? openaiKeySecret(openaiUrl) : "");
+  /** The secret name a keyring lookup last confirmed a key exists under, or
+   *  null. "Stored" is derived by comparing it against `openaiSecretName`, so
+   *  editing the URL invalidates the status instantly instead of showing (or
+   *  letting Remove clear) the previous origin's key. */
+  let openaiStoredFor = $state<string | null>(null);
+  let openaiStored = $derived(openaiSecretName !== "" && openaiStoredFor === openaiSecretName);
+  /** Plain `http://` to a host that isn't loopback: brief evidence (and any
+   *  saved key) would travel unencrypted. Informational only — never blocks,
+   *  since LAN / WSL2-host servers are a legitimate plain-HTTP case. */
+  let openaiInsecureRemote = $derived.by(() => {
+    try {
+      const u = new URL(openaiUrl.trim());
+      if (u.protocol !== "http:") return false;
+      const host = u.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+      return !(
+        host === "localhost" ||
+        host.endsWith(".localhost") ||
+        host === "::1" ||
+        host === "0.0.0.0" ||
+        // Numeric 127/8 only — a DNS name like 127.example.com is remote.
+        /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
+      );
+    } catch {
+      return false;
+    }
+  });
   let llmBusy = $state(false);
 
   const OLLAMA_DEFAULT_URL = "http://localhost:11434";
@@ -152,10 +184,12 @@
   async function loadLlmSettings() {
     try {
       const s = await getLlmSettings();
-      llmProvider = (s.llmProvider as "" | "ollama" | "anthropic") ?? "";
+      llmProvider = (s.llmProvider as "" | "ollama" | "anthropic" | "openai") ?? "";
       ollamaUrl = s.ollamaUrl ?? OLLAMA_DEFAULT_URL;
       ollamaModel = s.ollamaModel ?? "";
       anthropicModel = s.anthropicModel ?? "";
+      openaiUrl = s.openaiUrl ?? "";
+      openaiModel = s.openaiModel ?? "";
     } catch {
       // Settings unreadable — fall back to disabled.
       llmProvider = "";
@@ -166,6 +200,7 @@
     } catch {
       anthropicStored = false;
     }
+    await refreshOpenaiKeyStatus();
     if (llmProvider === "ollama") fetchOllamaModels();
   }
 
@@ -178,6 +213,8 @@
         ollamaUrl: ollamaUrl.trim() || null,
         ollamaModel: ollamaModel.trim() || null,
         anthropicModel: anthropicModel.trim() || null,
+        openaiUrl: openaiUrl.trim() || null,
+        openaiModel: openaiModel.trim() || null,
       });
       await projects.refreshLlmProvider();
     } catch (e) {
@@ -186,7 +223,7 @@
   }
 
   async function onProviderChange(value: string) {
-    llmProvider = value as "" | "ollama" | "anthropic";
+    llmProvider = value as "" | "ollama" | "anthropic" | "openai";
     await saveLlmSettings();
     if (llmProvider === "ollama") fetchOllamaModels();
   }
@@ -231,6 +268,56 @@
       await deleteSecret(SECRET_ANTHROPIC_API_KEY);
       anthropicStored = false;
       toasts.success("Anthropic API key removed");
+    } catch (e) {
+      toasts.error(`Could not remove key: ${e}`);
+    } finally {
+      llmBusy = false;
+    }
+  }
+
+  /** The key is scoped to the endpoint's origin, so re-check whenever the URL
+   *  changes (a host switch shows "No key saved" for the new host). */
+  async function refreshOpenaiKeyStatus() {
+    openaiKey = "";
+    const name = openaiSecretName;
+    if (!name) return;
+    let stored = false;
+    try {
+      stored = await hasSecret(name);
+    } catch {
+      stored = false;
+    }
+    // Ignore a lookup that resolved after the URL moved on (out-of-order edits).
+    if (name !== openaiSecretName) return;
+    openaiStoredFor = stored ? name : null;
+  }
+
+  async function saveOpenaiKey() {
+    const value = openaiKey.trim();
+    const name = openaiSecretName;
+    if (!value || !name || llmBusy) return;
+    llmBusy = true;
+    try {
+      await setSecret(name, value);
+      openaiKey = "";
+      openaiStoredFor = name;
+      toasts.success("Endpoint API key saved to keychain");
+    } catch (e) {
+      toasts.error(`Could not save key: ${e}`);
+    } finally {
+      llmBusy = false;
+    }
+  }
+
+  async function clearOpenaiKey() {
+    // Only ever removes the key the status was confirmed for.
+    const name = openaiStoredFor;
+    if (llmBusy || !name || name !== openaiSecretName) return;
+    llmBusy = true;
+    try {
+      await deleteSecret(name);
+      openaiStoredFor = null;
+      toasts.success("Endpoint API key removed");
     } catch (e) {
       toasts.error(`Could not remove key: ${e}`);
     } finally {
@@ -604,14 +691,15 @@
               Summarize each brief's Current State &amp; Open Questions from its links and Captures.
             </p>
             <select
-              class="mb-3 w-full max-w-[400px] rounded-md border px-2 py-1 text-[12px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
-              style="background: var(--input-bg); border-color: var(--border);"
+              class="themed-select mb-3 w-full max-w-[400px] rounded-md py-1 text-[12px]"
+              aria-label="AI synthesis provider"
               value={llmProvider}
               onchange={(e) => onProviderChange(e.currentTarget.value)}
             >
               <option value="">Off</option>
               <option value="ollama">Ollama (local)</option>
               <option value="anthropic">Anthropic (cloud)</option>
+              <option value="openai">OpenAI-compatible (custom)</option>
             </select>
 
             {#if llmProvider === "ollama"}
@@ -631,8 +719,8 @@
                 }}
               />
               <select
-                class="w-full max-w-[400px] rounded-md border px-2 py-1 text-[12px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
-                style="background: var(--input-bg); border-color: var(--border);"
+                class="themed-select w-full max-w-[400px] rounded-md py-1 text-[12px]"
+                aria-label="Ollama model"
                 bind:value={ollamaModel}
                 onchange={saveLlmSettings}
               >
@@ -695,6 +783,94 @@
                   class="mt-1.5 text-[11px] text-[var(--fg3)] transition-colors hover:text-[var(--fg)] hover:underline disabled:opacity-50"
                   disabled={llmBusy}
                   onclick={clearAnthropicKey}
+                >
+                  Remove saved key
+                </button>
+              {/if}
+            {:else if llmProvider === "openai"}
+              <div
+                class="mb-1.5 flex max-w-[400px] items-center justify-between text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--fg3)]"
+              >
+                OpenAI-compatible
+                <CredentialHelp topic="openai-compat" />
+              </div>
+              <input
+                class="mb-1.5 w-full max-w-[400px] rounded-md border px-2 py-1 text-[12px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
+                style="background: var(--input-bg); border-color: var(--border);"
+                type="text"
+                autocomplete="off"
+                placeholder="https://openrouter.ai/api/v1 · http://localhost:1234/v1"
+                aria-label="Endpoint URL"
+                bind:value={openaiUrl}
+                onblur={() => {
+                  saveLlmSettings();
+                  refreshOpenaiKeyStatus();
+                }}
+              />
+              <p class="mb-2 max-w-[400px] text-[11px] leading-snug text-[var(--fg3)]">
+                Any server speaking OpenAI's chat-completions API. Include the <code>/v1</code> if
+                your server uses one; WAID appends <code>/chat/completions</code>. localhost = fully
+                private; a remote URL sends brief content to that provider.
+              </p>
+              {#if openaiInsecureRemote}
+                <p
+                  class="mb-2 max-w-[400px] text-[11px] leading-snug text-[var(--status-paused)]"
+                  role="status"
+                >
+                  Plain <code>http://</code> to a non-local host: brief content and any saved API key
+                  are sent unencrypted. Prefer <code>https://</code> unless this server is on a
+                  network you trust.
+                </p>
+              {/if}
+              <input
+                class="mb-1.5 w-full max-w-[400px] rounded-md border px-2 py-1 text-[12px] text-[var(--fg)] outline-none focus:border-[var(--accent)]"
+                style="background: var(--input-bg); border-color: var(--border);"
+                type="text"
+                autocomplete="off"
+                placeholder="e.g. mistralai/mistral-small · llama-3.1-8b"
+                aria-label="Model id"
+                bind:value={openaiModel}
+                onblur={saveLlmSettings}
+              />
+              <p class="mb-2 max-w-[400px] text-[11px] leading-snug text-[var(--fg3)]">
+                Model id as your provider documents it — pick one; synthesis won't run without it.
+              </p>
+              <p class="mb-2 max-w-[400px] text-[11px] leading-snug text-[var(--fg3)]">
+                API key: optional — cloud providers need one; local servers usually don't. Stored in
+                your OS keychain for this endpoint's host only.
+                {openaiUrl.trim()
+                  ? openaiStored
+                    ? "A key is saved for this host."
+                    : "No key saved for this host."
+                  : "Enter the endpoint URL first."}
+              </p>
+              <div class="flex max-w-[400px] gap-1.5">
+                <input
+                  class="min-w-0 flex-1 rounded-md border px-2 py-1 text-[12px] text-[var(--fg)] outline-none transition-colors focus:border-[var(--accent)]"
+                  style="background: var(--input-bg); border-color: var(--border);"
+                  type="password"
+                  autocomplete="off"
+                  placeholder={openaiStored ? "Replace key…" : "API key (optional)"}
+                  aria-label="API key"
+                  bind:value={openaiKey}
+                  disabled={llmBusy || !openaiUrl.trim()}
+                  onkeydown={(e) => {
+                    if (e.key === "Enter") saveOpenaiKey();
+                  }}
+                />
+                <button
+                  class="shrink-0 rounded-md bg-[var(--accent)] px-2.5 py-1 text-[12px] font-semibold text-white transition-[filter] hover:brightness-[1.06] disabled:opacity-50"
+                  disabled={llmBusy || !openaiKey.trim() || !openaiUrl.trim()}
+                  onclick={saveOpenaiKey}
+                >
+                  Save
+                </button>
+              </div>
+              {#if openaiStored}
+                <button
+                  class="mt-1.5 text-[11px] text-[var(--fg3)] transition-colors hover:text-[var(--fg)] hover:underline disabled:opacity-50"
+                  disabled={llmBusy}
+                  onclick={clearOpenaiKey}
                 >
                   Remove saved key
                 </button>

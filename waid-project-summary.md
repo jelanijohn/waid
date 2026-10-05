@@ -223,10 +223,12 @@ interface SyncSource {           // non-GitHub sync source
 interface SyncOutcome { path: string; name: string; ok: boolean; error?: string | null; }
 interface WebhookResult { status: number; ok: boolean; body: string; }
 interface LlmSettings {          // provider + model config; secrets live in keyring
-  llmProvider?: string | null;   // "ollama" | "anthropic" | null (null = disabled)
+  llmProvider?: string | null;   // "ollama" | "anthropic" | "openai" | null (null = disabled)
   ollamaUrl?: string | null;
   ollamaModel?: string | null;
   anthropicModel?: string | null;
+  openaiUrl?: string | null;     // OpenAI-compatible base URL incl. any /v1
+  openaiModel?: string | null;
 }
 interface VaultInfo { isVault: boolean; name?: string | null; root?: string | null; }
 interface BootstrapAnswers {     // guided-interview answers for brief bootstrap
@@ -368,10 +370,17 @@ The full markdown brief lives here.
   `rusqlite` (**bundled** — read-only NeuroSkill SQLite; compiles SQLite in-tree,
   so a C compiler is needed at build time); Tauri plugins: `opener`, `dialog`,
   `global-shortcut`
-- **LLM providers (optional):** local **Ollama** (HTTP) and **Anthropic**
-  (cloud). Used for brief synthesis, the PM integration digest / morning
-  briefing, *and* the AI body in brief bootstrap. No in-process inference.
-  Defaults: Ollama `http://localhost:11434`; Anthropic model
+- **LLM providers (optional):** local **Ollama** (HTTP), **Anthropic**
+  (cloud), and a generic **OpenAI-compatible** chat-completions endpoint
+  (`llm_provider: "openai"` names the *protocol*, not the company — OpenRouter,
+  Groq, Mistral, LM Studio, llama.cpp server, vLLM, Ollama's `/v1`, …; the
+  user-entered base URL must include any `/v1`, WAID appends
+  `/chat/completions`; API key optional and keyring-scoped to the URL's
+  origin, local servers need none; no
+  `response_format` is sent since many compat servers reject unknown params;
+  16k-char context budget). Used for brief synthesis, the PM integration digest
+  / morning briefing, *and* the AI body in brief bootstrap. No in-process
+  inference. Defaults: Ollama `http://localhost:11434`; Anthropic model
   `claude-haiku-4-5-20251001`.
 - **PM integrations:** plain JSON over the shared `reqwest` client — **no
   provider SDKs, no GraphQL client**. One submodule per provider.
@@ -849,7 +858,7 @@ blank).
   `tune` button (moved out of the sidebar's old brand header). Besides the
   appearance controls (light/dark, accent, sidebar list style, density, and the
   **Brief layout** segmented control) and the GitHub token / Anthropic key /
-  LLM-provider config, it manages the **bring-your-own Google OAuth client**
+  OpenAI-compatible endpoint (URL, model, optional key) / LLM-provider config, it manages the **bring-your-own Google OAuth client**
   (`gmail.client_id` / `gmail.client_secret` in the keyring): save / clear, gated
   so Connect only works once a client is stored. Token fields here carry the same
   **`CredentialHelp`** icons as the integrations modal.
@@ -987,8 +996,8 @@ The visual layer has a named theme and shares branding with What's Next.
   rollup. One connection can host several feeds. Tokens live in the OS keyring;
   Gmail instead signs in via **Google OAuth** (read-only, metadata-only) with an
   account-scoped grant in the keyring. *(See §5.)*
-- **AI synthesis (optional)** — with a provider configured (local **Ollama** or
-  **Anthropic**), Refresh also writes a `## Current State` summary and an
+- **AI synthesis (optional)** — with a provider configured (local **Ollama**,
+  **Anthropic**, or any **OpenAI-compatible** endpoint), Refresh also writes a `## Current State` summary and an
   `## Open Questions` inner block from the brief's links + Notion page text +
   `## Captures`. The model writes **only** those two app-owned regions and returns
   a closed `{ current_state, open_questions }` schema; all fetched content is
@@ -998,10 +1007,14 @@ The visual layer has a named theme and shares branding with What's Next.
   "morning briefing" across all briefs. Display-only; same data-not-instructions
   guard. *(See §5.)*
 - **Secret storage in the OS keyring** — a GitHub token (private-repo sync), an
-  Anthropic API key (synthesis/digests), per-brief PM connection tokens,
+  Anthropic API key and an optional OpenAI-compatible endpoint key
+  (synthesis/digests), per-brief PM connection tokens,
   per-brief webhook secrets, and Gmail's OAuth client + account grants live in the
   platform keychain, never in settings or env. Keys: `github.token`,
-  `anthropic.api_key`, `bconn:<brief-path>:<id>`, `whook:<brief-path>:<id>`,
+  `anthropic.api_key`, `openai.api_key:<origin>` (scoped to the endpoint's
+  scheme+host+port so an edited URL never receives another host's key),
+  `bconn:<brief-path>:<id>`,
+  `whook:<brief-path>:<id>`,
   `gmail.client_id` / `gmail.client_secret` (bring-your-own Google Desktop
   client), and `gmail.oauth:<account-email>` (the account-scoped grant, shared
   across briefs — not `bconn:`-keyed) — service `com.jelanijohn.waid`.

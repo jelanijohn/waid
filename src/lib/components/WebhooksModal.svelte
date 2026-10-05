@@ -267,8 +267,7 @@
           <label class="flex flex-col gap-[5px]">
             <span class="text-[11px] text-[var(--fg3)]">Method</span>
             <select
-              class="h-[34px] rounded-[9px] border px-[8px] text-[12.5px] text-[var(--fg)] outline-none transition-[border-color,box-shadow] focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)]"
-              style="background: var(--input-bg); border-color: var(--border);"
+              class="themed-select h-[34px] rounded-[9px] text-[12.5px]"
               bind:value={method}
             >
               {#each METHODS as m (m)}

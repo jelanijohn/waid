@@ -433,8 +433,10 @@ struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     briefs_dir: Option<String>,
     /// LLM synthesis config (the brief-synthesis agent). `llm_provider` of
-    /// `"ollama" | "anthropic"` selects a provider; `None` disables synthesis.
-    /// Secrets (the Anthropic API key) never live here — they're in the keyring.
+    /// `"ollama" | "anthropic" | "openai"` selects a provider; `None` disables
+    /// synthesis. (`"openai"` names the OpenAI-compatible wire protocol, not the
+    /// company — any `…/chat/completions` server.) Secrets (API keys) never
+    /// live here — they're in the keyring.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     llm_provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -443,6 +445,12 @@ struct Settings {
     ollama_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     anthropic_model: Option<String>,
+    /// Base URL of the OpenAI-compatible endpoint, including any `/v1` the
+    /// server wants (WAID appends `/chat/completions`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    openai_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    openai_model: Option<String>,
     /// Manual sidebar order: brief paths relative to the briefs dir (POSIX
     /// separators), first = top. Briefs not listed (new files) sort ahead by
     /// recency; `None`/empty means pure most-recently-opened order.
@@ -460,6 +468,8 @@ pub struct LlmSettings {
     pub ollama_url: Option<String>,
     pub ollama_model: Option<String>,
     pub anthropic_model: Option<String>,
+    pub openai_url: Option<String>,
+    pub openai_model: Option<String>,
 }
 
 fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -1782,8 +1792,9 @@ async fn gather_evidence(
 // --- LLM provider abstraction ---------------------------------------------
 
 /// A pluggable text-completion backend. Implementations talk to an external
-/// process over HTTP (Ollama on localhost, or the Anthropic API) — there is no
-/// in-process ML runtime.
+/// process over HTTP (Ollama on localhost, the Anthropic API, or any
+/// OpenAI-compatible chat-completions endpoint) — there is no in-process ML
+/// runtime.
 #[async_trait]
 trait LlmProvider: Send + Sync {
     /// Return the model's raw text (expected to be JSON). The caller parses it.
@@ -1906,6 +1917,109 @@ impl LlmProvider for AnthropicProvider {
     }
 }
 
+/// Resolve the chat-completions URL from a user-entered base. Tolerates a
+/// trailing slash and a pasted full endpoint (the Brave-BYOM-style habit of
+/// entering ".../v1/chat/completions" directly). The base is expected to
+/// already include any `/v1` the server wants — servers disagree about it, so
+/// WAID never guesses one in. The suffix is appended to the URL *path*, so a
+/// query string (Azure-style `?api-version=…`) survives in place; input that
+/// doesn't parse as a URL falls back to plain string handling (and then fails
+/// at request time with the server's/reqwest's own error).
+fn openai_chat_url(base: &str) -> String {
+    const SUFFIX: &str = "/chat/completions";
+    let base = base.trim();
+    match reqwest::Url::parse(base) {
+        Ok(mut url) if !url.cannot_be_a_base() => {
+            let path = url.path().trim_end_matches('/').to_string();
+            if !path.ends_with(SUFFIX) {
+                url.set_path(&format!("{path}{SUFFIX}"));
+            } else if path != url.path() {
+                url.set_path(&path);
+            }
+            url.to_string()
+        }
+        _ => {
+            let base = base.trim_end_matches('/');
+            if base.ends_with(SUFFIX) {
+                base.to_string()
+            } else {
+                format!("{base}{SUFFIX}")
+            }
+        }
+    }
+}
+
+/// Remote (or local) inference via any OpenAI-compatible chat-completions
+/// endpoint — OpenRouter, Groq, Mistral, LM Studio, llama.cpp server, vLLM, …
+/// "openai" names the wire protocol, not the company. The API key is read from
+/// the OS keyring (`openai.api_key`) and is OPTIONAL (local servers need none).
+/// Modelled on `AnthropicProvider`: no `response_format` enforcement — many
+/// compat servers 400 on unknown params, and the closed-schema prompts don't
+/// need it. Likewise no output-token limit: the field is optional on this
+/// protocol and servers disagree about its *name* (`max_tokens` vs the newer
+/// `max_completion_tokens`, each rejected with a 400 by some endpoints), so
+/// like the native Ollama path we rely on the server default — the prompts ask
+/// for a small closed JSON object anyway.
+struct OpenAiCompatProvider {
+    client: reqwest::Client,
+    /// Full chat-completions URL, pre-resolved via `openai_chat_url`.
+    url: String,
+    model: String,
+    api_key: Option<String>,
+}
+
+#[async_trait]
+impl LlmProvider for OpenAiCompatProvider {
+    async fn complete(&self, system: &str, user: &str) -> Result<String, String> {
+        let payload = serde_json::json!({
+            "model": self.model,
+            "messages": [
+                { "role": "system", "content": system },
+                { "role": "user", "content": user },
+            ],
+            "stream": false,
+        });
+        let mut req = self
+            .client
+            .post(&self.url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .json(&payload);
+        if let Some(key) = &self.api_key {
+            req = req.bearer_auth(key);
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| format!("LLM endpoint request failed: {e}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!(
+                "LLM endpoint returned {status}: {}",
+                truncate_chars(body.trim(), 300)
+            ));
+        }
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("invalid JSON from LLM endpoint: {e}"))?;
+        json.get("choices")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.to_string())
+            .ok_or_else(|| "LLM endpoint response had no message content".to_string())
+    }
+
+    /// Middle-ground: could be a huge cloud model or a small local one, and
+    /// there's no way to know from the URL. 16k chars ≈ 4k tokens of evidence.
+    fn context_budget(&self) -> usize {
+        16_000
+    }
+}
+
 /// Default endpoints/models when a field is unset.
 const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
 const DEFAULT_ANTHROPIC_MODEL: &str = "claude-haiku-4-5-20251001";
@@ -1949,7 +2063,34 @@ fn make_provider(app: &AppHandle) -> Result<Box<dyn LlmProvider>, String> {
             let client = http_client(5, 120)?;
             Ok(Box::new(AnthropicProvider { client, model, api_key }))
         }
-        _ => Err("No LLM provider configured — choose Ollama or Anthropic in Settings.".to_string()),
+        Some("openai") => {
+            let base = s
+                .openai_url
+                .filter(|u| !u.trim().is_empty())
+                .ok_or("No endpoint URL set — add one in Settings.")?;
+            let model = s
+                .openai_model
+                .filter(|m| !m.trim().is_empty())
+                .ok_or("No model name set — add one in Settings.")?;
+            // Optional: local servers need no key, so absence is not an error.
+            // Scoped to this URL's origin — see `openai_key_secret_name`.
+            let api_key = openai_api_key(&base);
+            // Generous total timeout: the endpoint may be a slow local CPU
+            // server. Deliberately the Ollama arm's (5, 300), not Anthropic's
+            // (5, 120) — we can't tell local from cloud by URL, so take the
+            // slower bound.
+            let client = http_client(5, 300)?;
+            Ok(Box::new(OpenAiCompatProvider {
+                client,
+                url: openai_chat_url(&base),
+                model,
+                api_key,
+            }))
+        }
+        _ => Err(
+            "No LLM provider configured — choose Ollama, Anthropic, or a custom endpoint in Settings."
+                .to_string(),
+        ),
     }
 }
 
@@ -2361,7 +2502,8 @@ messages, emails) pulled across ALL their projects.",
 }
 
 /// Turn a natural-language description into a Gmail search query using the
-/// configured synthesis LLM (Ollama or Anthropic). Returns a single query line,
+/// configured synthesis LLM (Ollama, Anthropic, or an OpenAI-compatible
+/// endpoint). Returns a single query line,
 /// e.g. "unread from my manager this week" -> "is:unread from:manager newer_than:7d".
 /// Display-only: the caller drops the result into the feed's query field — nothing
 /// is fetched or written here.
@@ -3322,6 +3464,8 @@ pub fn get_llm_settings(app: AppHandle) -> LlmSettings {
         ollama_url: s.ollama_url,
         ollama_model: s.ollama_model,
         anthropic_model: s.anthropic_model,
+        openai_url: s.openai_url,
+        openai_model: s.openai_model,
     }
 }
 
@@ -3335,6 +3479,8 @@ pub fn set_llm_settings(app: AppHandle, settings: LlmSettings) -> Result<(), Str
     current.ollama_url = norm(settings.ollama_url);
     current.ollama_model = norm(settings.ollama_model);
     current.anthropic_model = norm(settings.anthropic_model);
+    current.openai_url = norm(settings.openai_url);
+    current.openai_model = norm(settings.openai_model);
     save_settings(&app, &current)
 }
 
@@ -3464,6 +3610,13 @@ const KEYRING_SERVICE: &str = "com.jelanijohn.waid";
 /// Anthropic API key when the Anthropic provider is selected.
 const SECRET_GITHUB_TOKEN: &str = "github.token";
 const SECRET_ANTHROPIC_API_KEY: &str = "anthropic.api_key";
+/// Prefix of the keyring key for the OpenAI-compatible endpoint's API key
+/// ("openai" = the protocol, not the company). OPTIONAL — local servers (LM
+/// Studio, llama.cpp, vLLM, Ollama's /v1) typically need none. Unlike the
+/// Anthropic key, the host is user-editable, so the full key is scoped to the
+/// endpoint's origin (`openai.api_key:<origin>`, see `openai_key_secret_name`)
+/// — a saved cloud key is never sent to a different host after the URL changes.
+const SECRET_OPENAI_API_KEY: &str = "openai.api_key";
 // The user's bring-your-own Google OAuth *Desktop* client (see `connect_gmail`).
 // The client_id isn't sensitive, but both live in the keyring for one storage
 // path. WAID ships no shared Google credentials.
@@ -3526,6 +3679,27 @@ pub(crate) fn github_token() -> Option<String> {
 /// `LlmProvider` when the synthesis provider is set to `"anthropic"`.
 fn anthropic_api_key() -> Option<String> {
     get_secret_value(SECRET_ANTHROPIC_API_KEY).ok().flatten()
+}
+
+/// Keyring key for the API key of the OpenAI-compatible endpoint at `base`:
+/// `openai.api_key:<origin>` (scheme + host + non-default port, lowercase), so
+/// path/trailing-slash edits keep the key while a host change drops it. Falls
+/// back to the trimmed text when `base` isn't a URL with an origin. Mirrored
+/// by `openaiKeySecret` in `src/lib/tauri.ts` — keep the two in sync.
+fn openai_key_secret_name(base: &str) -> String {
+    let base = base.trim();
+    let scope = reqwest::Url::parse(base)
+        .ok()
+        .map(|u| u.origin().ascii_serialization())
+        .filter(|o| o != "null")
+        .unwrap_or_else(|| base.to_string());
+    format!("{SECRET_OPENAI_API_KEY}:{scope}")
+}
+
+/// Read the stored API key for the OpenAI-compatible endpoint at `base`, if
+/// any. Absence is not an error — local servers need no key.
+fn openai_api_key(base: &str) -> Option<String> {
+    get_secret_value(&openai_key_secret_name(base)).ok().flatten()
 }
 
 /// Store (or replace) a secret in the OS keyring.
@@ -4608,6 +4782,177 @@ mod tests {
         delete_secret_value(key).unwrap(); // idempotent
     }
 
+    // --- OpenAI-compatible provider (hermetic, mock server) -----------------
+
+    /// Spawn a one-shot HTTP/1.1 server on a random loopback port that answers
+    /// the first request with `status`/`body` and returns the raw request it
+    /// received (start line + headers + body) for assertions.
+    async fn mock_http_once(
+        status: u16,
+        body: &str,
+    ) -> (String, tokio::task::JoinHandle<String>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1", listener.local_addr().unwrap());
+        let body = body.to_string();
+        let handle = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = Vec::new();
+            let mut tmp = [0u8; 4096];
+            // Read until the headers are complete, then until Content-Length
+            // bytes of body have arrived.
+            loop {
+                let n = sock.read(&mut tmp).await.unwrap();
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&tmp[..n]);
+                if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&buf[..pos]).to_string();
+                    let len = head
+                        .lines()
+                        .find_map(|l| {
+                            let (k, v) = l.split_once(':')?;
+                            k.eq_ignore_ascii_case("content-length")
+                                .then(|| v.trim().parse::<usize>().ok())
+                                .flatten()
+                        })
+                        .unwrap_or(0);
+                    if buf.len() >= pos + 4 + len {
+                        break;
+                    }
+                }
+            }
+            let resp = format!(
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            sock.write_all(resp.as_bytes()).await.unwrap();
+            sock.shutdown().await.ok();
+            String::from_utf8_lossy(&buf).to_string()
+        });
+        (url, handle)
+    }
+
+    fn mock_provider(base: &str, api_key: Option<&str>) -> OpenAiCompatProvider {
+        OpenAiCompatProvider {
+            client: http_client(5, 10).unwrap(),
+            url: openai_chat_url(base),
+            model: "test-model".into(),
+            api_key: api_key.map(str::to_string),
+        }
+    }
+
+    /// Split a captured raw request into (start line + headers, JSON body).
+    fn split_request(raw: &str) -> (String, serde_json::Value) {
+        let (head, body) = raw.split_once("\r\n\r\n").expect("request has a body");
+        (head.to_lowercase(), serde_json::from_str(body).expect("body is JSON"))
+    }
+
+    #[tokio::test]
+    async fn openai_compat_sends_bearer_and_minimal_chat_payload() {
+        let (base, server) = mock_http_once(
+            200,
+            r#"{"choices":[{"message":{"role":"assistant","content":"{\"current_state\":\"ok\"}"}}]}"#,
+        )
+        .await;
+        let out = mock_provider(&base, Some("sk-test"))
+            .complete("SYS", "USER")
+            .await
+            .unwrap();
+        assert_eq!(out, r#"{"current_state":"ok"}"#);
+
+        let (head, body) = split_request(&server.await.unwrap());
+        assert!(head.starts_with("post /v1/chat/completions http/1.1"), "{head}");
+        assert!(head.contains("authorization: bearer sk-test"), "{head}");
+        assert!(head.contains("content-type: application/json"), "{head}");
+        assert_eq!(body["model"], "test-model");
+        assert_eq!(body["stream"], false);
+        assert_eq!(body["messages"][0]["role"], "system");
+        assert_eq!(body["messages"][0]["content"], "SYS");
+        assert_eq!(body["messages"][1]["role"], "user");
+        assert_eq!(body["messages"][1]["content"], "USER");
+        // Deliberately absent: fields some compat servers reject with a 400.
+        for forbidden in ["response_format", "max_tokens", "max_completion_tokens"] {
+            assert!(body.get(forbidden).is_none(), "payload must not send {forbidden}");
+        }
+    }
+
+    #[tokio::test]
+    async fn openai_compat_omits_authorization_without_a_key() {
+        let (base, server) = mock_http_once(
+            200,
+            r#"{"choices":[{"message":{"content":"hi"}}]}"#,
+        )
+        .await;
+        assert_eq!(mock_provider(&base, None).complete("s", "u").await.unwrap(), "hi");
+        let (head, _) = split_request(&server.await.unwrap());
+        assert!(!head.contains("authorization"), "{head}");
+    }
+
+    #[tokio::test]
+    async fn openai_compat_surfaces_http_errors_with_status_and_body() {
+        let (base, server) = mock_http_once(
+            401,
+            r#"{"error":{"message":"Invalid API key"}}"#,
+        )
+        .await;
+        let err = mock_provider(&base, Some("bad")).complete("s", "u").await.unwrap_err();
+        assert!(err.contains("401"), "{err}");
+        assert!(err.contains("Invalid API key"), "{err}");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn openai_compat_rejects_empty_or_missing_content() {
+        for body in [
+            r#"{"choices":[]}"#,
+            r#"{"choices":[{"message":{"content":"   "}}]}"#,
+            r#"{"id":"x"}"#,
+        ] {
+            let (base, server) = mock_http_once(200, body).await;
+            let err = mock_provider(&base, None).complete("s", "u").await.unwrap_err();
+            assert!(err.contains("no message content"), "{body} -> {err}");
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn openai_compat_rejects_non_json_success_body() {
+        let (base, server) = mock_http_once(200, "<html>not json</html>").await;
+        let err = mock_provider(&base, None).complete("s", "u").await.unwrap_err();
+        assert!(err.contains("invalid JSON"), "{err}");
+        server.await.unwrap();
+    }
+
+    /// Live smoke test for the OpenAI-compatible provider against Ollama's own
+    /// `/v1` facade — validates the whole wire path against a real server (the
+    /// hermetic `openai_compat_*` tests above cover the request/response
+    /// contract; this one proves a real model accepts it) with zero extra
+    /// infrastructure.
+    /// Needs Ollama on localhost:11434 with the model below pulled; run with
+    /// `cargo test openai_compat_live -- --ignored`.
+    #[tokio::test]
+    #[ignore = "requires a running Ollama server with llama3.2 pulled"]
+    async fn openai_compat_live_against_ollama_v1_facade() {
+        let provider = OpenAiCompatProvider {
+            client: http_client(5, 300).unwrap(),
+            url: openai_chat_url("http://localhost:11434/v1"),
+            model: "llama3.2".into(),
+            api_key: None,
+        };
+        let raw = provider
+            .complete(
+                "Reply with exactly one JSON object and nothing else.",
+                "Return {\"current_state\": \"ok\", \"open_questions\": []}.",
+            )
+            .await
+            .expect("completion succeeded");
+        // The same parser the synthesis path uses must accept the output.
+        let parsed = parse_synthesis(&raw).expect("model output parsed as Synthesis");
+        assert!(!parsed.current_state.trim().is_empty());
+    }
+
     /// Live end-to-end diagnostic for the Notion synthesis-evidence path. Ignored
     /// by default (needs the OS keyring + network + a shared page). Run with:
     ///   WAID_NOTION_BRIEF=/mnt/c/Users/jelan/WAID/briefs/gluefi.md \
@@ -4664,6 +5009,102 @@ mod tests {
                 None => eprintln!("notion_page_id: None (no 32-hex id in URL)"),
             }
         }
+    }
+
+    #[test]
+    fn openai_chat_url_appends_chat_completions_to_base() {
+        assert_eq!(
+            openai_chat_url("https://openrouter.ai/api/v1"),
+            "https://openrouter.ai/api/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn openai_chat_url_tolerates_trailing_slash_and_whitespace() {
+        assert_eq!(
+            openai_chat_url("  http://localhost:1234/v1/ "),
+            "http://localhost:1234/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn openai_chat_url_keeps_a_pasted_full_endpoint() {
+        assert_eq!(
+            openai_chat_url("http://localhost:11434/v1/chat/completions"),
+            "http://localhost:11434/v1/chat/completions"
+        );
+        // …and never auto-appends a `/v1` the user didn't type.
+        assert_eq!(
+            openai_chat_url("http://localhost:8080"),
+            "http://localhost:8080/chat/completions"
+        );
+    }
+
+    #[test]
+    fn openai_chat_url_preserves_query_strings() {
+        // Azure-style versioned endpoint pasted in full…
+        assert_eq!(
+            openai_chat_url(
+                "https://x.openai.azure.com/openai/deployments/d/chat/completions?api-version=2026-01-01"
+            ),
+            "https://x.openai.azure.com/openai/deployments/d/chat/completions?api-version=2026-01-01"
+        );
+        // …or given as a base with a query: the suffix goes on the path, not after the query.
+        assert_eq!(
+            openai_chat_url("https://x.openai.azure.com/openai/deployments/d/?api-version=2026-01-01"),
+            "https://x.openai.azure.com/openai/deployments/d/chat/completions?api-version=2026-01-01"
+        );
+        // A bare origin gets a path.
+        assert_eq!(openai_chat_url("http://localhost:8080"), "http://localhost:8080/chat/completions");
+        // Non-URL input keeps the plain string behaviour.
+        assert_eq!(openai_chat_url("not a url/"), "not a url/chat/completions");
+    }
+
+    #[test]
+    fn openai_key_secret_name_scopes_to_origin() {
+        // Path, trailing slash, case, and default port don't change the scope…
+        let a = openai_key_secret_name("https://openrouter.ai/api/v1");
+        assert_eq!(a, "openai.api_key:https://openrouter.ai");
+        assert_eq!(openai_key_secret_name(" HTTPS://OpenRouter.ai:443/api/v1/ "), a);
+        assert_eq!(openai_key_secret_name("https://openrouter.ai/api/v1/chat/completions"), a);
+        // …but a different host, port, or scheme does.
+        assert_ne!(openai_key_secret_name("https://api.groq.com/openai/v1"), a);
+        assert_eq!(
+            openai_key_secret_name("http://localhost:1234/v1"),
+            "openai.api_key:http://localhost:1234"
+        );
+        assert_ne!(
+            openai_key_secret_name("http://localhost:8080/v1"),
+            openai_key_secret_name("http://localhost:1234/v1")
+        );
+        // Not a URL with an origin: fall back to the trimmed text.
+        assert_eq!(openai_key_secret_name(" not a url "), "openai.api_key:not a url");
+    }
+
+    #[test]
+    fn settings_round_trip_openai_fields_and_tolerate_their_absence() {
+        // Old settings.json files (no openai_* keys) still parse.
+        let old: Settings = serde_json::from_str(
+            r#"{"llm_provider":"ollama","ollama_url":"http://localhost:11434"}"#,
+        )
+        .unwrap();
+        assert_eq!(old.llm_provider.as_deref(), Some("ollama"));
+        assert!(old.openai_url.is_none());
+        assert!(old.openai_model.is_none());
+
+        // New fields survive a serialize → deserialize cycle…
+        let s = Settings {
+            llm_provider: Some("openai".into()),
+            openai_url: Some("https://openrouter.ai/api/v1".into()),
+            openai_model: Some("mistralai/mistral-small".into()),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.openai_url.as_deref(), Some("https://openrouter.ai/api/v1"));
+        assert_eq!(back.openai_model.as_deref(), Some("mistralai/mistral-small"));
+        // …and unset ones are skipped rather than written as null.
+        assert!(!json.contains("anthropic_model"));
     }
 
     #[test]

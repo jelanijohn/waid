@@ -22,6 +22,16 @@ In the settings popover (the ⚙/tune button) under *AI synthesis*:
   model. Nothing leaves your machine.
 - **Anthropic (cloud)** — set a model and save an API key (stored in the OS
   keyring). Sends evidence to the Anthropic API.
+- **OpenAI-compatible (custom)** — any server speaking OpenAI's
+  `chat/completions` API: OpenRouter, Groq, Mistral, LM Studio, llama.cpp
+  server, vLLM, Ollama's own `/v1` facade, … Set the base URL **including any
+  `/v1` your server uses** (WAID appends `/chat/completions`; pasting the full
+  endpoint also works), the model id as your provider documents it, and
+  optionally an API key (OS keyring, saved per endpoint host so a cloud key is
+  never sent to a different server after you change the URL; local servers
+  need none). A `localhost`
+  URL keeps everything on your machine; a remote URL sends brief text and
+  fetched evidence to that server, under that operator's data policy.
 
 Then hit **Refresh** on a brief (or *Sync all* in the titlebar). Synthesis is
 manual — there's no auto-sync on open or timer.

@@ -149,13 +149,18 @@ export interface WebhookResult {
 }
 
 /** LLM synthesis settings (see get_llm_settings / set_llm_settings).
- *  `llmProvider` of "ollama" | "anthropic" enables the synthesis agent; null
- *  disables it. Secrets (the Anthropic API key) live in the OS keyring, not here. */
+ *  `llmProvider` of "ollama" | "anthropic" | "openai" enables the synthesis
+ *  agent; null disables it. "openai" is the OpenAI-compatible wire protocol
+ *  (OpenRouter, Groq, LM Studio, llama.cpp, vLLM, …), not the company. Secrets
+ *  (API keys) live in the OS keyring, not here. */
 export interface LlmSettings {
   llmProvider?: string | null;
   ollamaUrl?: string | null;
   ollamaModel?: string | null;
   anthropicModel?: string | null;
+  /** Base URL incl. any `/v1`; the backend appends `/chat/completions`. */
+  openaiUrl?: string | null;
+  openaiModel?: string | null;
 }
 
 /** Guided-interview answers for the brief-bootstrap chooser (see

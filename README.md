@@ -77,10 +77,17 @@ Full frontmatter reference (webhook headers, `{{secret}}`, app-owned regions):
 ## Features
 
 - **Two-pane layout** — project sidebar (status pills, search **⌘/Ctrl+F**,
-  status filters) + detail pane, under a custom titlebar with *Sync all* and
-  the appearance menu (theme, accent, density, brief layout).
-- **Markdown rendering + edit mode** — ⌘/Ctrl+S saves; edits round-trip the
-  whole file, so frontmatter is never mangled.
+  status filters, drag-to-reorder or **Alt+↑/↓**, optional alternate row
+  shading) + detail pane, under a custom titlebar with *Sync all* and the
+  appearance menu (theme, accent, density, brief layout, resizable live-state
+  rail).
+- **Markdown rendering + edit mode** — `#`/`##` sections fold and remember
+  their state per brief; ⌘/Ctrl+S saves; edits round-trip the whole file, so
+  frontmatter is never mangled.
+- **Status from the pill** — click the status pill in the detail header to
+  set active / paused / blocked / archived (or any custom status already in
+  your vault), or clear it back to no status. Only the `status` key is
+  touched.
 - **Brief bootstrap** — generate a new brief from a local folder, a GitHub
   URL, a 3-question interview, or a pasted AI handoff prompt; always lands as
   a proposal in edit mode, nothing saved until you say so.
@@ -120,6 +127,6 @@ provider SDKs) · OS keyring · `.md` files on disk. Architecture deep-dive:
 ## Out of scope
 
 Mobile/web versions, auth, multi-user, and sync are **not** planned — WAID is
-single-user, local, desktop-only by design. Still on the v1 list:
-drag-to-reorder, a richer markdown editor, a dedicated quick-capture window,
-in-process inference, and a due-date signal in the integration rollup.
+single-user, local, desktop-only by design. Still on the v1 list: a richer
+markdown editor, a dedicated quick-capture window, in-process inference, and
+a due-date signal in the integration rollup.

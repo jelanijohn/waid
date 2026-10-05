@@ -75,7 +75,14 @@
   let openaiUrl = $state("");
   let openaiModel = $state("");
   let openaiKey = $state("");
-  let openaiStored = $state(false);
+  /** Keyring name of the key for the *current* URL's origin. */
+  let openaiSecretName = $derived(openaiUrl.trim() ? openaiKeySecret(openaiUrl) : "");
+  /** The secret name a keyring lookup last confirmed a key exists under, or
+   *  null. "Stored" is derived by comparing it against `openaiSecretName`, so
+   *  editing the URL invalidates the status instantly instead of showing (or
+   *  letting Remove clear) the previous origin's key. */
+  let openaiStoredFor = $state<string | null>(null);
+  let openaiStored = $derived(openaiSecretName !== "" && openaiStoredFor === openaiSecretName);
   /** Plain `http://` to a host that isn't loopback: brief evidence (and any
    *  saved key) would travel unencrypted. Informational only — never blocks,
    *  since LAN / WSL2-host servers are a legitimate plain-HTTP case. */
@@ -272,25 +279,28 @@
    *  changes (a host switch shows "No key saved" for the new host). */
   async function refreshOpenaiKeyStatus() {
     openaiKey = "";
-    if (!openaiUrl.trim()) {
-      openaiStored = false;
-      return;
-    }
+    const name = openaiSecretName;
+    if (!name) return;
+    let stored = false;
     try {
-      openaiStored = await hasSecret(openaiKeySecret(openaiUrl));
+      stored = await hasSecret(name);
     } catch {
-      openaiStored = false;
+      stored = false;
     }
+    // Ignore a lookup that resolved after the URL moved on (out-of-order edits).
+    if (name !== openaiSecretName) return;
+    openaiStoredFor = stored ? name : null;
   }
 
   async function saveOpenaiKey() {
     const value = openaiKey.trim();
-    if (!value || !openaiUrl.trim() || llmBusy) return;
+    const name = openaiSecretName;
+    if (!value || !name || llmBusy) return;
     llmBusy = true;
     try {
-      await setSecret(openaiKeySecret(openaiUrl), value);
+      await setSecret(name, value);
       openaiKey = "";
-      openaiStored = true;
+      openaiStoredFor = name;
       toasts.success("Endpoint API key saved to keychain");
     } catch (e) {
       toasts.error(`Could not save key: ${e}`);
@@ -300,11 +310,13 @@
   }
 
   async function clearOpenaiKey() {
-    if (llmBusy) return;
+    // Only ever removes the key the status was confirmed for.
+    const name = openaiStoredFor;
+    if (llmBusy || !name || name !== openaiSecretName) return;
     llmBusy = true;
     try {
-      await deleteSecret(openaiKeySecret(openaiUrl));
-      openaiStored = false;
+      await deleteSecret(name);
+      openaiStoredFor = null;
       toasts.success("Endpoint API key removed");
     } catch (e) {
       toasts.error(`Could not remove key: ${e}`);

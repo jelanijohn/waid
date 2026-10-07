@@ -399,8 +399,9 @@ waid/
 │       │                         #   QuickCapture, StatusPill, Toasts, Icon, BrandMark,
 │       │                         #   CredentialHelp, IntegrationPanel, IntegrationsModal,
 │       │                         #   WebhooksModal, BriefingModal, BootstrapModal, ProviderTile,
-│       │                         #   ResizeHandles
-│       ├── stores/               # projects / settings / toasts / integrations (all .svelte.ts runes)
+│       │                         #   ResizeHandles, WidgetShell, WidgetRow, WidgetLeaf
+│       ├── stores/               # projects / settings / toasts / integrations / session / widget
+│       │                         #   (all .svelte.ts runes)
 │       ├── tauri.ts              # wrappers around invoke / plugins / secrets / PM + bootstrap commands
 │       ├── credentialHelp.ts     # per-credential setup steps + scopes + docs links (CredentialHelp data)
 │       ├── types.ts              # Brief / Link / Webhook / SyncSource / SyncOutcome / LlmSettings /
@@ -411,7 +412,10 @@ waid/
 │       ├── sections.ts           # per-brief collapsed-section state (localStorage)
 │       ├── bootstrap.ts          # paste-a-prompt template + stub-brief detection (frontend-only)
 │       ├── providers.ts          # PM-provider display metadata (brand/monogram/blurb/form needs + kind helpers)
-│       └── time.ts               # relative-time helper
+│       ├── actions.ts            # launch link / fire webhook / sync-all actions shared by dashboard + widget
+│       ├── widget.ts             # pure widget-mode text helpers (activity line, status tally, state excerpt)
+│       ├── widgetWindow.ts       # every window-API call widget mode makes (size, position, on-top, restore)
+│       └── time.ts               # relative-time helpers (relativeTime, compact shortAgo)
 ├── src-tauri/                    # Rust backend
 │   └── src/
 │       ├── main.rs               # calls run()
@@ -862,6 +866,34 @@ blank).
   (`gmail.client_id` / `gmail.client_secret` in the keyring): save / clear, gated
   so Connect only works once a client is stored. Token fields here carry the same
   **`CredentialHelp`** icons as the integrations modal.
+- **Widget mode (`WidgetShell` / `WidgetRow` / `WidgetLeaf`, `stores/widget.svelte.ts`)**
+  — a small always-on-top roster presentation of the **same `main` window**
+  (no second window). Entering un-maximizes, saves the dashboard rect, drops
+  the 720×480 minimum, sets always-on-top, and sizes the window to the
+  measured content; exiting restores all of it (`widgetWindow.ts` owns every
+  window call, all errors swallowed so `vite dev` no-ops). The dashboard stays
+  **mounted but hidden** (unsaved edits and sessions survive) and every store
+  is shared, so nothing syncs across modes. **At rest** (window blurred, 200ms
+  grace) it shows one row — the dashboard's selection, else the first
+  non-archived brief — plus a status tally; **on focus** the full roster
+  (lead first, archived dropped, sidebar filters ignored), Sync all, Expand,
+  and a capture field (`⌘/Ctrl+K` and the global hotkey focus it instead of
+  opening the modal). A row opens a **leaf**: Current State excerpt (plain
+  text from the `waid:state` region), a count per feed (lazy cached fetch, per-
+  feed refresh), launch chips, NeuroSkill start/end session, and *Open brief*.
+  Peeking never stamps `last_opened`; launching does. The leaf opens inline
+  (**accordion**) or as a **side leaf** beside the roster (the *Widget detail*
+  setting) — on the left the window shifts left so the roster stays put. A
+  `ResizeObserver` drives window size, deduped on the last *successful*
+  physical size; the roster anchor is remembered in settings (`widgetPos`). On
+  platforms where positioning doesn't take (Wayland), `canPosition` goes false:
+  the side leaf always opens right and position memory is skipped. On Linux,
+  Tauri's monitor getters are avoided (they corrupt the X connection) and the
+  screen is read from the DOM instead. Needs `core:window:allow-set-size` /
+  `allow-set-min-size` / `allow-set-position` / `allow-set-always-on-top` in
+  `capabilities/default.json`. Launch, webhook and sync-all logic moved to
+  `actions.ts`, and NeuroSkill session state to `stores/session.svelte.ts`, so
+  dashboard and widget share one implementation.
 - **`BriefingModal.svelte`** — the cross-brief "Morning briefing" view.
 - **`ProviderTile.svelte`** — a provider monogram tile in the provider's brand
   color (`.ptile-<provider>` classes in `app.css`, so dark-mode tweaks stay in
@@ -974,6 +1006,10 @@ The visual layer has a named theme and shares branding with What's Next.
   not currently surfaced in the UI.)*
 - **Quick capture** — `⌘/Ctrl+K` (or global `Ctrl+Shift+Space`) → modal → pick a
   project → append a timestamped note under its `## Captures` heading.
+- **Widget mode** — a compact always-on-top roster of the same window: one
+  line at rest, every brief on focus, a per-brief leaf (Current State, feed
+  counts, launch chips, session control) inline or to the side, its own
+  capture field, and remembered position. *(See §5 UI.)*
 - **Search & status filtering** — text filter (`⌘/Ctrl+F`) + status filter;
   archived briefs hidden by default, surfaced via the "archived" status (archive
   view).
@@ -1024,14 +1060,17 @@ The visual layer has a named theme and shares branding with What's Next.
 - **Appearance** — light/dark, accent, sidebar list style (Rows / Compact /
   Rocks), alternate row shading, density, project-order reset, and the
   **Brief layout** control (two-column rail / body-first / quiet-top, with a
-  resizable rail), all from the **View & appearance** menu in the titlebar.
+  resizable rail), plus **Widget detail** (accordion / side leaf), all from
+  the **View & appearance** menu in the titlebar.
 
 ### Keyboard / shortcuts
 
 - **Global** `Ctrl+Shift+Space` — system-wide hotkey that surfaces the window and
   triggers quick capture via a `waid://quick-capture` event (desktop-only; may be
   intercepted by some Linux WMs — a known limitation, not a bug).
-- **In-app** `⌘/Ctrl+K` — quick-capture modal.
+- **In-app** `⌘/Ctrl+K` — quick-capture modal (in widget mode: focus the
+  widget's capture field).
+- **Widget mode** `Esc` — close the open leaf.
 - **In-app** `⌘/Ctrl+F` — focus the sidebar search/filter.
 - **In-app** `⌘/Ctrl+S` — save in edit mode.
 - **In-app** `Alt+↑/↓` — move the selected project up/down in the sidebar.

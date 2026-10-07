@@ -1,6 +1,6 @@
 // Every window-API call widget mode makes, in one place. Widget mode re-flags
-// and resizes the existing `main` window (no second window, see the widget
-// spec §3.1). Like Titlebar / ResizeHandles, these talk to
+// and resizes the existing `main` window (no second window). Like Titlebar /
+// ResizeHandles, these talk to
 // @tauri-apps/api/window directly; lib/tauri.ts stays backend-commands-only.
 // Every function swallows errors so plain `vite dev` (no Tauri) just no-ops.
 

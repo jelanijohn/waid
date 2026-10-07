@@ -1,5 +1,5 @@
 // Widget mode: a small always-on-top roster presentation of the same `main`
-// window (see docs/spec-widget). The dashboard stays mounted but hidden while
+// window. The dashboard stays mounted but hidden while
 // this is on; every store is shared, so nothing needs syncing across modes.
 
 import { tick } from "svelte";

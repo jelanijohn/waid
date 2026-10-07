@@ -834,7 +834,7 @@ blank).
   query drops the old selector and saves a new one, then re-fetches the panel.
 - **Unified titlebar (`Titlebar.svelte` + `AppMenu.svelte`)** — the app draws its
   own window chrome across the full width (breadcrumb of the selected brief,
-  *Sync all*, the morning-briefing trigger, and the View & appearance menu),
+  *Sync all*, the morning-briefing trigger, and the Settings button),
   replacing the stock OS title bar and the sidebar's old brand header. Window
   controls flip by platform (sniffed from the webview `userAgent`): **macOS**
   keeps its native traffic lights via the **Overlay** title-bar style
@@ -858,14 +858,18 @@ blank).
   gutter **and** reaches a few px onto the opaque panel, because pointer events
   over a fully transparent gutter pass straight through on Linux/WSL. macOS keeps
   its native frame, so the grips are skipped there (same `userAgent` sniff).
-- **View & appearance menu (`AppMenu.svelte`)** — anchored to the titlebar's
-  `tune` button (moved out of the sidebar's old brand header). Besides the
-  appearance controls (light/dark, accent, sidebar list style, density, and the
-  **Brief layout** segmented control) and the GitHub token / Anthropic key /
-  OpenAI-compatible endpoint (URL, model, optional key) / LLM-provider config, it manages the **bring-your-own Google OAuth client**
-  (`gmail.client_id` / `gmail.client_secret` in the keyring): save / clear, gated
-  so Connect only works once a client is stored. Token fields here carry the same
-  **`CredentialHelp`** icons as the integrations modal.
+- **Settings dialog (`AppMenu.svelte` + `SettingsModal.svelte`)** —
+  `AppMenu` is now just the titlebar's `tune` button (moved out of the
+  sidebar's old brand header); it opens `SettingsModal`, a centered dialog
+  with a section nav on the left. **Appearance**: light/dark, sidebar list
+  style, project-order reset, the **Brief layout** and **Widget detail**
+  segmented controls, accent, density. **Sync & GitHub**: auto-sync on open and
+  the GitHub token. **Gmail**: the **bring-your-own Google OAuth client**
+  (`gmail.client_id` / `gmail.client_secret` in the keyring): save / clear,
+  gated so Connect only works once a client is stored. **AI synthesis**: the
+  LLM provider, Anthropic key, and OpenAI-compatible endpoint (URL, model,
+  optional key). Token fields here carry the same **`CredentialHelp`** icons as
+  the integrations modal.
 - **Widget mode (`WidgetShell` / `WidgetRow` / `WidgetLeaf`, `stores/widget.svelte.ts`)**
   — a small always-on-top roster presentation of the **same `main` window**
   (no second window). Entering un-maximizes, saves the dashboard rect, drops
@@ -950,7 +954,7 @@ The visual layer has a named theme and shares branding with What's Next.
   the detail pane (the `--pane-px` / `--pane-py` / `--title-size` / `--md-size`
   tokens).
 - **Brief layout (new setting).** Where a brief's live-state panel sits is
-  user-selectable from the titlebar's View & appearance menu — `briefLayout` in
+  user-selectable in the Settings dialog's Appearance section — `briefLayout` in
   `settings.svelte.ts` (`two-col` | `body` | `quiet`, default `two-col`):
   a right-hand `--rail-bg` rail (resizable — drag its grip or use the arrow
   keys on the focused separator; 320px default, 280px floor, capped at half the
@@ -958,7 +962,7 @@ The visual layer has a named theme and shares branding with What's Next.
   feed-strip across the top. Persisted to `localStorage` alongside accent /
   sidebar style / density / alternate row shading (`sidebarZebra`).
 - **Layout:** a **unified titlebar** (the app's own window chrome — breadcrumb,
-  *Sync all*, briefing, View & appearance menu) over a still **two-pane** body —
+  *Sync all*, briefing, Settings) over a still **two-pane** body —
   a sidebar (search/filter, project name, status
   pill, last-opened) and a detail pane (rendered brief body + link/webhook
   buttons + sync/synthesis/bootstrap affordances + the integration panel, the
@@ -1020,7 +1024,7 @@ The visual layer has a named theme and shares branding with What's Next.
   paths relative to the configured briefs directory (which may be a vault
   subfolder);
   the list updates optimistically and rolls back if the write fails.
-  *Reset to recent* in the appearance settings forgets it.
+  *Reset to recent* in Settings → Appearance forgets it.
 - **Brief sync (deterministic)** — pull live state (open PRs/issues, last push,
   CI via the combined-status API, latest release) from a brief's GitHub link or
   explicit `sources` into the managed `## Activity` block. Frontmatter and prose
@@ -1060,8 +1064,8 @@ The visual layer has a named theme and shares branding with What's Next.
 - **Appearance** — light/dark, accent, sidebar list style (Rows / Compact /
   Rocks), alternate row shading, density, project-order reset, and the
   **Brief layout** control (two-column rail / body-first / quiet-top, with a
-  resizable rail), plus **Widget detail** (accordion / side leaf), all from
-  the **View & appearance** menu in the titlebar.
+  resizable rail), plus **Widget detail** (accordion / side leaf), all in
+  the **Settings** dialog's Appearance section (titlebar `tune` button).
 
 ### Keyboard / shortcuts
 

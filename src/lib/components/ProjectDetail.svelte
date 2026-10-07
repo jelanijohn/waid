@@ -5,10 +5,12 @@
   import { getCurrentWindow, type CursorIcon } from "@tauri-apps/api/window";
   import { settings, RAIL_WIDTH_DEFAULT, RAIL_WIDTH_MIN } from "$lib/stores/settings.svelte";
   import { toasts } from "$lib/stores/toasts.svelte";
-  import { openExternal, fireWebhook } from "$lib/tauri";
+  import { openExternal } from "$lib/tauri";
   import { relativeTime } from "$lib/time";
   import { statusColor, STATUS_ORDER, STATUS_LABEL } from "$lib/status";
   import { isStubBrief } from "$lib/bootstrap";
+  import { session } from "$lib/stores/session.svelte";
+  import { launchLink, launchWebhook, iconForLink, wslHint } from "$lib/actions";
   import { collapsedSections, setSectionCollapsed, DESCRIPTION_SECTION } from "$lib/sections";
   import MarkdownView from "./MarkdownView.svelte";
   import IntegrationPanel from "./IntegrationPanel.svelte";
@@ -186,30 +188,13 @@
   // Briefs that wikilink to this one.
   let backlinks = $derived(projects.backlinksFor(brief.path));
 
-  // WSL can't reach the Windows host without a URL handler; hint at the fix.
-  let wslHint = $derived(
-    projects.isWsl
-      ? " WSL needs a URL handler — install wslu so wslview forwards links to Windows."
-      : "",
-  );
-
-  // Pick a Material glyph for a launch link based on its label.
-  function iconForLink(label: string): string {
-    const l = label.toLowerCase();
-    if (l.includes("github")) return "code";
-    if (l.includes("docs") || l.includes("tauri")) return "menu_book";
-    if (l.includes("obsidian")) return "hub";
-    if (l.includes("claude")) return "auto_awesome";
-    return "north_east";
-  }
-
   async function openInObsidian() {
     if (!obsidianUri) return;
     try {
       await openExternal(obsidianUri);
     } catch (e) {
       toasts.error(
-        `Could not open Obsidian (${e}). Make sure Obsidian is installed and this vault is open in it.${wslHint}`,
+        `Could not open Obsidian (${e}). Make sure Obsidian is installed and this vault is open in it.${wslHint()}`,
       );
     }
   }
@@ -233,76 +218,24 @@
   }
 
   // --- NeuroSkill labeled sessions ---------------------------------------
-  // A brief with a NeuroSkill connection can mark a labeled work session, so
-  // its EEG epochs attribute to this project. Start is fired at the moment of
-  // intent (the first launch/open action, or the explicit button); end is fired
-  // by the explicit button and, as safety nets, on navigating away (onDestroy)
-  // — the backend's session cap is the final backstop.
+  // Session state lives in the app-wide session store (the widget shows and
+  // ends it too); see stores/session.svelte.ts.
   let hasNeuro = $derived(brief.connections.some((c) => c.provider === "neuroskill"));
-  let sessionActive = $state(false);
-  // Warn at most once per "daemon down" stretch so repeatedly launching into
-  // work doesn't spam toasts; cleared the moment a label fires successfully.
-  let neuroWarned = $state(false);
-
-  async function startSession() {
-    if (!hasNeuro || sessionActive) return;
-    sessionActive = true;
-    const ok = await projects.markSession(brief.path, "start");
-    if (ok) {
-      neuroWarned = false;
-    } else {
-      // The label never reached NeuroSkill — don't leave a false "recording"
-      // state, and tell the user so tracking isn't silently lost.
-      sessionActive = false;
-      if (!neuroWarned) {
-        neuroWarned = true;
-        toasts.error(
-          "Couldn't reach NeuroSkill — session not started, so EEG won't attribute to this project. Is the NeuroSkill app running?",
-        );
-      }
-    }
-  }
-
-  function endSession() {
-    if (!sessionActive) return;
-    sessionActive = false;
-    projects.markSession(brief.path, "end").then((ok) => {
-      if (!ok)
-        toasts.error(
-          "Couldn't reach NeuroSkill — the session end wasn't recorded (it auto-closes after 4h).",
-        );
-    });
-  }
+  let sessionActive = $derived(session.isActive(brief.path));
 
   // Safety net: end an open session when this brief is closed/switched away
   // (the component remounts per selection under {#key brief.path}) or on app
   // close. Silent — navigating away shouldn't pop a toast; the 4h cap backstops it.
   onDestroy(() => {
-    if (sessionActive) void projects.markSession(brief.path, "end");
+    if (session.isActive(brief.path)) session.end({ silent: true });
   });
 
-  async function openLink(url: string) {
-    // Opening a link IS launching into work — start the labeled session once.
-    startSession();
-    try {
-      await openExternal(url);
-    } catch (e) {
-      toasts.error(`Could not open link (${e}).${wslHint}`);
-    }
+  function openLink(url: string) {
+    return launchLink(brief, url);
   }
 
-  async function fire(hook: Webhook) {
-    startSession();
-    try {
-      const res = await fireWebhook(brief.path, hook);
-      if (res.ok) {
-        toasts.success(`${hook.label || "Webhook"} → ${res.status}`);
-      } else {
-        toasts.error(`${hook.label || "Webhook"} → ${res.status}`);
-      }
-    } catch (e) {
-      toasts.error(`${hook.label || "Webhook"} failed: ${e}`);
-    }
+  function fire(hook: Webhook) {
+    return launchWebhook(brief, hook);
   }
 
   async function refresh() {
@@ -613,7 +546,7 @@
               <button
                 class="btn"
                 title="End the labeled NeuroSkill work session for this project"
-                onclick={endSession}
+                onclick={() => session.end()}
               >
                 <Icon name="stop_circle" size={14} fill={1} /> End session
               </button>
@@ -621,7 +554,7 @@
               <button
                 class="btn"
                 title="Start a labeled NeuroSkill work session so EEG attributes to this project"
-                onclick={startSession}
+                onclick={() => session.start(brief)}
               >
                 <Icon name="neurology" size={14} /> Start session
               </button>

@@ -7,7 +7,7 @@
   import { onMount } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { projects } from "$lib/stores/projects.svelte";
-  import { toasts } from "$lib/stores/toasts.svelte";
+  import { syncAllProjects } from "$lib/actions";
   import { statusColor } from "$lib/status";
   import { detectPlatform, type Platform } from "$lib/platform";
   import Icon from "./Icon.svelte";
@@ -46,26 +46,7 @@
     if (syncing) return;
     syncing = true;
     try {
-      const outcomes = await projects.syncAll();
-      const failed = outcomes.filter((o) => !o.ok);
-      const synced = outcomes.length - failed.length;
-      // When a provider is configured, also synthesize each syncable brief.
-      if (projects.llmProvider) {
-        try {
-          await projects.synthesizeAll();
-        } catch (e) {
-          toasts.error(`Synthesis failed: ${e}`);
-        }
-      }
-      if (outcomes.length === 0) {
-        toasts.push("Nothing to sync — no briefs have a GitHub link or source.", "info");
-      } else if (failed.length === 0) {
-        toasts.success(`Synced ${synced} project${synced === 1 ? "" : "s"}`);
-      } else {
-        toasts.error(`Synced ${synced}, ${failed.length} failed (${failed[0].name}: ${failed[0].error})`);
-      }
-    } catch (e) {
-      toasts.error(`Sync all failed: ${e}`);
+      await syncAllProjects();
     } finally {
       syncing = false;
     }

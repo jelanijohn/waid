@@ -102,7 +102,8 @@ html,
 body {
   height: 100%;
   /* Transparent so the borderless, transparent Tauri window shows the desktop
-     through the app panel's rounded corners; the panel paints --bg itself. */
+     through the app panel's rounded corners; the panel paints --bg itself. On
+     Windows the panel fills the window (see lib/platform.ts), so nothing shows. */
   background: transparent;
 }
 

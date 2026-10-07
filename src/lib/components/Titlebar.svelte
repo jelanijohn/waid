@@ -9,22 +9,14 @@
   import { projects } from "$lib/stores/projects.svelte";
   import { toasts } from "$lib/stores/toasts.svelte";
   import { statusColor } from "$lib/status";
+  import { detectPlatform, type Platform } from "$lib/platform";
   import Icon from "./Icon.svelte";
   import BrandMark from "./BrandMark.svelte";
   import AppMenu from "./AppMenu.svelte";
   import BriefingModal from "./BriefingModal.svelte";
 
-  /** Platform decides which side the window controls live on. We sniff the
-   *  webview's userAgent (no extra plugin): WebKitGTK on Linux/WSL → "Linux",
-   *  WebView2 → "Windows", WKWebView → "Macintosh". */
-  function detectPlatform(): "macos" | "windows" | "linux" {
-    const ua = navigator.userAgent;
-    if (/Mac OS X|Macintosh/.test(ua)) return "macos";
-    if (/Windows/.test(ua)) return "windows";
-    return "linux";
-  }
-
-  let plat = $state<"macos" | "windows" | "linux">(detectPlatform());
+  // Platform decides which side the window controls live on (see lib/platform).
+  let plat = $state<Platform>(detectPlatform());
   let maximized = $state(false);
   let briefingOpen = $state(false);
   let syncing = $state(false);

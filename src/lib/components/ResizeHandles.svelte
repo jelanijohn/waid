@@ -8,12 +8,15 @@
   // fully transparent 14px gutter pass straight through to the window behind, so
   // a grip floating in the gutter never gets hovered. Each grip therefore
   // straddles the gutter AND reaches a few px onto the opaque panel, so its inner
-  // band always captures the cursor. The side grips start below the 46px titlebar
-  // so they never sit over the caption buttons. macOS keeps its native frame, so
-  // we skip all of this there.
+  // band always captures the cursor. On Windows there is no gutter (the panel
+  // fills the window, see lib/platform.ts), so the grips are a thin band at the
+  // window edge instead. The side grips start below the 46px titlebar so they
+  // never sit over the caption buttons. macOS keeps its native frame, so we skip
+  // all of this there.
   import { getCurrentWindow, type CursorIcon } from "@tauri-apps/api/window";
+  import { platform, paintsOwnFrame } from "$lib/platform";
 
-  const isMac = /Mac OS X|Macintosh/.test(navigator.userAgent);
+  const isMac = platform === "macos";
   const win = getCurrentWindow();
 
   type Dir =
@@ -45,6 +48,7 @@
 </script>
 
 {#if !isMac}
+<div class="rh-root" data-gutter={paintsOwnFrame}>
   <!-- Top edge — left half only, so it clears the right-side action/caption
        buttons. (No top-right grip: the close button lives there.) -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -63,63 +67,75 @@
   <div class="rh corner-sw" onmouseenter={() => enter("SouthWest")} onmouseleave={leave} onmousedown={(e) => start("SouthWest", e)}></div>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="rh corner-se" onmouseenter={() => enter("SouthEast")} onmouseleave={leave} onmousedown={(e) => start("SouthEast", e)}></div>
+</div>
 {/if}
 
 <style>
-  /* Each grip spans 24px in from a window edge: the outer 14px overlaps the
-     transparent gutter, the inner ~10px overlaps the opaque panel border — that
-     inner band is what reliably captures the cursor. */
+  /* Grip thickness. With a transparent gutter (Linux/WSL) each grip spans 24px
+     in from the window edge: the outer 14px overlaps the gutter, the inner ~10px
+     overlaps the opaque panel border — that inner band is what reliably captures
+     the cursor. Without a gutter (Windows) the panel is opaque right up to the
+     edge, so a 6px band is enough and keeps the grips off the content. */
+  .rh-root {
+    --grip: 6px;
+    --side-top: 46px;
+    display: contents;
+  }
+  .rh-root[data-gutter="true"] {
+    --grip: 24px;
+    --side-top: 64px;
+  }
   .rh {
     position: fixed;
     z-index: 100;
   }
   .edge-n {
     top: 0;
-    left: 24px;
+    left: var(--grip);
     right: 50%;
-    height: 24px;
+    height: var(--grip);
     cursor: ns-resize;
   }
   .corner-nw {
     top: 0;
     left: 0;
-    width: 24px;
-    height: 24px;
+    width: var(--grip);
+    height: var(--grip);
     cursor: nwse-resize;
   }
   .edge-w {
     left: 0;
-    width: 24px;
-    top: 64px;
-    bottom: 24px;
+    width: var(--grip);
+    top: var(--side-top);
+    bottom: var(--grip);
     cursor: ew-resize;
   }
   .edge-e {
     right: 0;
-    width: 24px;
-    top: 64px;
-    bottom: 24px;
+    width: var(--grip);
+    top: var(--side-top);
+    bottom: var(--grip);
     cursor: ew-resize;
   }
   .edge-s {
     bottom: 0;
-    height: 24px;
-    left: 24px;
-    right: 24px;
+    height: var(--grip);
+    left: var(--grip);
+    right: var(--grip);
     cursor: ns-resize;
   }
   .corner-sw {
     bottom: 0;
     left: 0;
-    width: 24px;
-    height: 24px;
+    width: var(--grip);
+    height: var(--grip);
     cursor: nesw-resize;
   }
   .corner-se {
     bottom: 0;
     right: 0;
-    width: 24px;
-    height: 24px;
+    width: var(--grip);
+    height: var(--grip);
     cursor: nwse-resize;
   }
 </style>

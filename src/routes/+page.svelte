@@ -3,6 +3,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { projects } from "$lib/stores/projects.svelte";
   import { settings } from "$lib/stores/settings.svelte";
+  import { paintsOwnFrame } from "$lib/platform";
   import Titlebar from "$lib/components/Titlebar.svelte";
   import ResizeHandles from "$lib/components/ResizeHandles.svelte";
   import Sidebar from "$lib/components/Sidebar.svelte";
@@ -37,20 +38,21 @@
   });
 </script>
 
-<!-- Transparent margin: the native window is borderless + transparent, so this
-     padding is just desktop showing through around the rounded panel below and
-     gives the panel's shadow room to fall — keeps the app from bleeding into
-     the background. -->
+<!-- Window shape (see lib/platform.ts `paintsOwnFrame`): by default the page
+     paints its own rounded, bordered panel inside a 14px transparent gutter
+     (desktop showing through the borderless, transparent window). On Windows the
+     compositor draws the corners and border itself, so the panel fills the
+     window edge-to-edge — a CSS radius there would just stack a second,
+     mismatched rounding inside the OS one. -->
 <ResizeHandles />
 
-<div class="h-screen overflow-hidden p-[14px]">
-  <!-- App panel: the rounded, bordered window shape the whole app lives in.
-       overflow-hidden clips the titlebar + content to the corners. -->
+<div class="h-screen overflow-hidden {paintsOwnFrame ? 'p-[14px]' : ''}">
+  <!-- App panel: the shape the whole app lives in. overflow-hidden clips the
+       titlebar + content to the corners when we round them ourselves. -->
   <div
-    class="flex h-full flex-col overflow-hidden rounded-[12px] border border-[var(--border)] bg-[var(--bg)] text-[var(--fg)] shadow-[var(--shadow-win)] {settings.density ===
-    'compact'
-      ? 'dense'
-      : ''}"
+    class="flex h-full flex-col overflow-hidden bg-[var(--bg)] text-[var(--fg)] {paintsOwnFrame
+      ? 'rounded-[12px] border border-[var(--border)] shadow-[var(--shadow-win)]'
+      : ''} {settings.density === 'compact' ? 'dense' : ''}"
   >
     <Titlebar />
 

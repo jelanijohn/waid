@@ -6,6 +6,7 @@
   import { relativeTime } from "$lib/time";
   import { createBrief, pickDirectory, setBriefsDir } from "$lib/tauri";
   import { settings } from "$lib/stores/settings.svelte";
+  import { widget } from "$lib/stores/widget.svelte";
   import { STATUS_ORDER, STATUS_LABEL, statusColor } from "$lib/status";
   import StatusPill from "./StatusPill.svelte";
   import Icon from "./Icon.svelte";
@@ -18,6 +19,8 @@
   onMount(() => {
     // ⌘/Ctrl+F focuses the search box; ⌘/Ctrl+N starts a new project.
     const onKey = (e: KeyboardEvent) => {
+      // The sidebar is hidden (still mounted) in widget mode.
+      if (widget.mode === "widget") return;
       const k = e.key.toLowerCase();
       if ((e.metaKey || e.ctrlKey) && k === "f") {
         e.preventDefault();

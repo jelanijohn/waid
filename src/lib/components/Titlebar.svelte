@@ -8,6 +8,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { projects } from "$lib/stores/projects.svelte";
   import { syncAllProjects } from "$lib/actions";
+  import { widget } from "$lib/stores/widget.svelte";
   import { statusColor } from "$lib/status";
   import { detectPlatform, type Platform } from "$lib/platform";
   import Icon from "./Icon.svelte";
@@ -83,6 +84,9 @@
     {/if}
     <button class="btn-icon" title="Sync all projects" aria-label="Sync all projects" onclick={syncAll} disabled={syncing}>
       <Icon name="sync" size={18} class={syncing ? "spin" : ""} />
+    </button>
+    <button class="btn-icon" title="Widget mode" aria-label="Widget mode" onclick={() => widget.enter()}>
+      <Icon name="picture_in_picture_alt" size={18} />
     </button>
     <AppMenu />
   </div>

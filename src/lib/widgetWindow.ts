@@ -128,8 +128,9 @@ export function setWidgetSize(contentW: number, contentH: number): Promise<void>
       const h = Math.ceil((Math.max(contentH, MIN_CONTENT_H) + 2 * GUTTER) * sf);
       const key = `${w}x${h}`;
       if (key === lastRequested) return;
-      lastRequested = key;
       await win.setSize(new PhysicalSize(w, h));
+      // Only after success, so a refused resize is retried next time.
+      lastRequested = key;
     } catch {
       // Window API unavailable.
     }

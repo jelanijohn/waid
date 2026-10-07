@@ -48,6 +48,9 @@ class WidgetStore {
    *  element's current content height in logical px. */
   measure: (() => number) | null = null;
 
+  /** performance.now() when the widget last went rest → roster. */
+  focusedAt = 0;
+
   private saved: SavedGeometry | null = null;
   private blurTimer: ReturnType<typeof setTimeout> | null = null;
   private busy = false;
@@ -129,6 +132,7 @@ class WidgetStore {
     if (this.mode !== "widget") return;
     if (f) {
       this.clearBlurTimer();
+      if (!this.focused) this.focusedAt = performance.now();
       this.focused = true;
       return;
     }
@@ -213,6 +217,7 @@ class WidgetStore {
   requestCaptureFocus(): void {
     if (this.mode !== "widget") return;
     this.clearBlurTimer();
+    if (!this.focused) this.focusedAt = performance.now();
     this.focused = true;
     this.captureFocusTick++;
   }

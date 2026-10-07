@@ -136,6 +136,23 @@
     };
   });
 
+  // The click that wakes the widget from rest must not also land on whatever
+  // the roster just rendered under the pointer (a row, Sync, Expand). The
+  // roster appears on pointerdown (or the OS focus event just before it), so
+  // a press that began at rest — or within a beat of waking — is swallowed.
+  const WAKE_GUARD_MS = 350;
+  let pressFromRest = false;
+  function onPointerDownCapture() {
+    pressFromRest = !widget.focused || performance.now() - widget.focusedAt < WAKE_GUARD_MS;
+    widget.setFocused(true);
+  }
+  function onClickCapture(e: MouseEvent) {
+    if (!pressFromRest) return;
+    pressFromRest = false;
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
   // --- Capture ---------------------------------------------------------------
   let seenTick = widget.captureFocusTick;
   $effect(() => {
@@ -177,7 +194,8 @@
 <div
   class="fixed inset-0 overflow-hidden"
   style="padding: {GUTTER}px;"
-  onpointerdown={() => widget.setFocused(true)}
+  onpointerdowncapture={onPointerDownCapture}
+  onclickcapture={onClickCapture}
   onkeydown={() => widget.setFocused(true)}
 >
   <div

@@ -28,6 +28,8 @@ Verified against `5b2209e` by reading the code. Where an amendment conflicts wit
   - **Focus:** both `win.onFocusChanged` and DOM focus/blur feed an idempotent `setFocused`; init from `document.hasFocus()`; the grace timer re-checks `document.hasFocus()` before collapsing; `pointerdown`/`keydown` in the shell count as focused.
   - **Position probe:** `moveTo` = `setPosition` then poll `outerPosition` (50ms × 6) for `|Δ| ≤ ceil(sf)+1` physical px; failure sets `canPosition=false` (leaf opens right, no shift, no position memory, exit skips `setPosition`). Guard `currentMonitor()` → `null`.
   - Resizable stays on; a user edge-drag leaves a wrong size until the next content change. Acceptable v1.
+- **A9. Found in testing (Xvfb, X11).** `currentMonitor()` / `monitorFromPoint()` are unsafe on Linux with `tauri-runtime-wry` 2.11.2: the `gdk::Monitor` is fetched on the main thread but its geometry is read on the IPC thread, which corrupts the X connection, and the next window call aborts (`xcb_xlib_threads_sequence_lost`) or hangs. On Linux, `widgetWindow.ts` reads the work area from DOM `screen.avail*` and clamps the saved anchor into it instead of the monitor lookup. Windows and macOS keep the Tauri monitor APIs.
+- **A10. Wake click.** The roster renders on pointerdown (or the OS focus event just before it), so the click that wakes the widget from rest would also land on the row or button rendered under the pointer. `WidgetShell` swallows a click whose press began at rest or within 350ms of waking.
 
 ---
 

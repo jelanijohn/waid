@@ -13,7 +13,7 @@ import {
   PhysicalSize,
   PhysicalPosition,
 } from "@tauri-apps/api/window";
-import { paintsOwnFrame } from "$lib/platform";
+import { platform, paintsOwnFrame } from "$lib/platform";
 
 export const ROSTER_W = 300;
 export const LEAF_W = 340;
@@ -46,6 +46,32 @@ export interface SavedGeometry {
 let canPosition = true;
 export function positionable(): boolean {
   return canPosition;
+}
+
+/** Tauri's monitor getters are unsafe on Linux: tauri-runtime-wry fetches the
+ *  gdk::Monitor on the main thread but reads its geometry (GDK → Xlib) on the
+ *  IPC thread, which corrupts the X connection — the next window call crashes
+ *  ("xcb_xlib_threads_sequence_lost") or hangs. There we read the screen from
+ *  the DOM instead and skip the off-screen anchor check. */
+const nativeMonitors = platform !== "linux";
+
+/** Work area of the window's monitor, in physical px, or null. */
+async function workArea(): Promise<{ x: number; y: number; w: number; h: number } | null> {
+  if (nativeMonitors) {
+    const m = await currentMonitor();
+    if (!m) return null;
+    const wa = m.workArea;
+    return { x: wa.position.x, y: wa.position.y, w: wa.size.width, h: wa.size.height };
+  }
+  const s = window.screen as Screen & { availLeft?: number; availTop?: number };
+  if (!s?.availWidth || !s.availHeight) return null;
+  const sf = await getCurrentWindow().scaleFactor();
+  return {
+    x: (s.availLeft ?? 0) * sf,
+    y: (s.availTop ?? 0) * sf,
+    w: s.availWidth * sf,
+    h: s.availHeight * sf,
+  };
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -164,18 +190,24 @@ export async function enterWidgetWindow(
   try {
     const sf = await win.scaleFactor();
     let target: { x: number; y: number } | null = null;
-    if (anchor && (await monitorFromPoint(anchor.x * sf, anchor.y * sf))) {
-      target = { x: anchor.x * sf, y: anchor.y * sf };
-    } else {
-      const m = await currentMonitor();
-      if (m) {
-        const wa = m.workArea;
-        const winW = Math.ceil((contentW + 2 * GUTTER) * sf);
-        target = {
-          x: wa.position.x + wa.size.width - winW - EDGE_MARGIN * sf,
-          y: wa.position.y + EDGE_MARGIN * sf,
-        };
+    const winW = Math.ceil((contentW + 2 * GUTTER) * sf);
+    if (anchor && nativeMonitors) {
+      if (await monitorFromPoint(anchor.x * sf, anchor.y * sf)) {
+        target = { x: anchor.x * sf, y: anchor.y * sf };
       }
+    } else if (anchor) {
+      // No monitor lookup on Linux: keep the anchor inside the screen instead.
+      const wa = await workArea();
+      target = wa
+        ? {
+            x: Math.min(Math.max(anchor.x * sf, wa.x), wa.x + wa.w - winW),
+            y: Math.min(Math.max(anchor.y * sf, wa.y), wa.y + wa.h - MIN_CONTENT_H * sf),
+          }
+        : { x: anchor.x * sf, y: anchor.y * sf };
+    }
+    if (!target) {
+      const wa = await workArea();
+      if (wa) target = { x: wa.x + wa.w - winW - EDGE_MARGIN * sf, y: wa.y + EDGE_MARGIN * sf };
     }
     if (target) await moveToPhysical(target.x, target.y);
   } catch {
@@ -223,15 +255,14 @@ export async function pickLeafSide(): Promise<"left" | "right"> {
   if (!canPosition) return "right";
   try {
     const win = getCurrentWindow();
-    const m = await currentMonitor();
-    if (!m) return "right";
+    const wa = await workArea();
+    if (!wa) return "right";
     const sf = await win.scaleFactor();
     const p = await win.outerPosition();
     const s = await win.outerSize();
     const centre = p.x + s.width / 2;
-    const wa = m.workArea;
-    const roomLeft = p.x - (LEAF_W + LEAF_GAP) * sf >= wa.position.x;
-    return centre > wa.position.x + wa.size.width / 2 && roomLeft ? "left" : "right";
+    const roomLeft = p.x - (LEAF_W + LEAF_GAP) * sf >= wa.x;
+    return centre > wa.x + wa.w / 2 && roomLeft ? "left" : "right";
   } catch {
     return "right";
   }

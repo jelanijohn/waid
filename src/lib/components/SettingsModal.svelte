@@ -23,6 +23,7 @@
     type SidebarStyle,
     type Density,
     type BriefLayout,
+    type WidgetLeaf,
   } from "$lib/stores/settings.svelte";
   import Icon from "./Icon.svelte";
   import CredentialHelp from "./CredentialHelp.svelte";
@@ -374,6 +375,10 @@
     { value: "body", label: "Body first" },
     { value: "quiet", label: "Quiet top" },
   ];
+  const WIDGET_LEAVES: { value: WidgetLeaf; label: string }[] = [
+    { value: "accordion", label: "Accordion" },
+    { value: "side", label: "Side leaf" },
+  ];
   const DENSITIES: { value: Density; label: string }[] = [
     { value: "comfortable", label: "Comfortable" },
     { value: "compact", label: "Compact" },
@@ -522,6 +527,23 @@
                     ? 'bg-[var(--accent)] text-white'
                     : 'text-[var(--fg2)] hover:text-[var(--fg)]'}"
                   onclick={() => settings.setBriefLayout(opt.value)}
+                >
+                  {opt.label}
+                </button>
+              {/each}
+            </div>
+
+            <div class="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--fg3)]">
+              Widget detail
+            </div>
+            <div class="mb-4 flex max-w-[340px] rounded-lg border p-[2px]" style="border-color: var(--border);">
+              {#each WIDGET_LEAVES as opt (opt.value)}
+                <button
+                  class="flex-1 rounded-md px-2 py-1 text-[12px] font-medium transition-colors {settings.widgetLeaf ===
+                  opt.value
+                    ? 'bg-[var(--accent)] text-white'
+                    : 'text-[var(--fg2)] hover:text-[var(--fg)]'}"
+                  onclick={() => settings.setWidgetLeaf(opt.value)}
                 >
                   {opt.label}
                 </button>

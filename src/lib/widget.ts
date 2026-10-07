@@ -1,13 +1,18 @@
 // Pure helpers for widget mode: read a brief's body / the brief list and
 // produce the short strings the widget shows. No Tauri, no DOM, no stores.
 
-import type { Brief } from "$lib/types";
+import type { Brief, BriefIntegration, IntegrationFetch } from "$lib/types";
 import { STATUS_ORDER } from "$lib/status";
 
-// Marker strings mirror SYNC_START / SYNC_END in src-tauri/src/commands.rs
-// (and marker_start("waid:sync"), which equals SYNC_START by construction).
+// Marker strings mirror SYNC_START / SYNC_END and marker_start/marker_end
+// ("waid:state") in src-tauri/src/commands.rs.
 const SYNC_START = "<!-- waid:sync:start -->";
 const SYNC_END = "<!-- waid:sync:end -->";
+const STATE_START = "<!-- waid:state:start -->";
+const STATE_END = "<!-- waid:state:end -->";
+
+/** NeuroSkill rolling windows (neuroskill::parse_mind_query). */
+const MIND_WINDOWS = ["today", "7d", "14d", "30d"];
 
 /** Text between a start and end marker, or null if either is missing or the
  *  end comes first. */
@@ -56,4 +61,47 @@ export function statusTally(briefs: Brief[]): { status: string; count: number }[
   return STATUS_ORDER.filter((s) => s !== "archived")
     .map((status) => ({ status, count: counts.get(status) ?? 0 }))
     .filter((t) => t.count > 0);
+}
+
+/** Plain-text first paragraph of the Current State (waid:state) region, or
+ *  null. Markdown emphasis, code ticks, links and wikilinks reduce to their
+ *  text; the result is shown via text interpolation, never as HTML. */
+export function currentStateExcerpt(body: string): string | null {
+  const block = between(body, STATE_START, STATE_END);
+  if (block === null) return null;
+  const text = block.trim().replace(/^##\s*Current State[^\n]*\n?/i, "");
+  const para = text
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .find((p) => p.length > 0);
+  if (!para) return null;
+  const plain = para
+    .replace(/\[\[([^\]|\n]+)\|([^\]\n]+)\]\]/g, "$2")
+    .replace(/\[\[([^\]\n]+)\]\]/g, "$1")
+    .replace(/\[([^\]\n]*)\]\([^)\n]*\)/g, "$1")
+    .replace(/\*\*|__|`/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return plain || null;
+}
+
+/** One feed's count text for the leaf's live-state rows. */
+export function feedCountText(
+  ig: BriefIntegration,
+  entry: { loading: boolean; error: string | null; data: IntegrationFetch | null } | null,
+): string {
+  if (ig.kind === "mind") {
+    const tokens = (ig.query ?? "").trim().split(/\s+/).reverse();
+    return tokens.find((t) => MIND_WINDOWS.includes(t.toLowerCase()))?.toLowerCase() ?? "14d";
+  }
+  if (ig.kind === "page") return "";
+  if (entry?.data) {
+    const { total, byStatus } = entry.data.summary;
+    const statuses = Object.entries(byStatus);
+    if (statuses.length === 1) return `${statuses[0][1]} ${statuses[0][0].toLowerCase()}`;
+    return `${total} ${total === 1 ? "item" : "items"}`;
+  }
+  if (entry?.loading) return "…";
+  if (entry?.error) return "—";
+  return "";
 }

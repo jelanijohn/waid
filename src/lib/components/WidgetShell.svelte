@@ -5,6 +5,7 @@
   // heights), so resizing the window can't feed back into the measurement.
   import { onMount, tick } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import type { Brief } from "$lib/types";
   import { projects } from "$lib/stores/projects.svelte";
   import { settings } from "$lib/stores/settings.svelte";
   import { session } from "$lib/stores/session.svelte";
@@ -24,6 +25,7 @@
     windowPosition,
   } from "$lib/widgetWindow";
   import WidgetRow from "./WidgetRow.svelte";
+  import WidgetLeaf from "./WidgetLeaf.svelte";
   import BrandMark from "./BrandMark.svelte";
   import Icon from "./Icon.svelte";
 
@@ -183,6 +185,9 @@
     class="flex {paintsOwnFrame ? 'items-start' : 'items-stretch'}"
     style="width: {widget.contentW}px; gap: {LEAF_GAP}px; visibility: {widget.shifting ? 'hidden' : 'visible'};"
   >
+    {#if widget.sideOpen && widget.openBrief && widget.leafSide === "left"}
+      {@render sidePanel(widget.openBrief)}
+    {/if}
     <section class="roster flex shrink-0 flex-col {panelClass}" aria-label="WAID widget">
       <header class="head" data-tauri-drag-region>
         {#if isMac}<span class="mac-inset" data-tauri-drag-region></span>{/if}
@@ -229,6 +234,11 @@
               side={widget.sideOpen ? widget.leafSide : null}
               onToggle={() => widget.toggleLeaf(b.path)}
             />
+            {#if widget.openPath === b.path && !widget.openAsSide}
+              {#key b.path}
+                <WidgetLeaf brief={b} variant="accordion" />
+              {/key}
+            {/if}
           {:else}
             <span class="empty">No briefs yet</span>
           {/each}
@@ -256,12 +266,43 @@
         </footer>
       {/if}
     </section>
+    {#if widget.sideOpen && widget.openBrief && widget.leafSide === "right"}
+      {@render sidePanel(widget.openBrief)}
+    {/if}
   </div>
 </div>
+
+{#snippet sidePanel(b: Brief)}
+  <!-- On Windows there's no gap between panels (the OS frames the whole
+       window), so the leaf is a column set off by a hairline instead. -->
+  <section
+    class="sidepanel shrink-0 {panelClass} scroll-thin"
+    class:divided={!paintsOwnFrame}
+    class:on-left={widget.leafSide === "left"}
+    aria-label="{b.name} details"
+  >
+    {#key b.path}
+      <WidgetLeaf brief={b} variant="side" />
+    {/key}
+  </section>
+{/snippet}
 
 <style>
   .roster {
     width: 300px;
+  }
+  .sidepanel {
+    width: 340px;
+    padding: 14px;
+    max-height: 560px;
+    overflow-y: auto;
+  }
+  .sidepanel.divided {
+    border-left: 1px solid var(--border);
+  }
+  .sidepanel.divided.on-left {
+    border-left: none;
+    border-right: 1px solid var(--border);
   }
   .head {
     display: flex;

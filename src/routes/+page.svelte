@@ -3,6 +3,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { projects } from "$lib/stores/projects.svelte";
   import { settings } from "$lib/stores/settings.svelte";
+  import { widget } from "$lib/stores/widget.svelte";
   import { paintsOwnFrame } from "$lib/platform";
   import Titlebar from "$lib/components/Titlebar.svelte";
   import ResizeHandles from "$lib/components/ResizeHandles.svelte";
@@ -10,23 +11,29 @@
   import ProjectDetail from "$lib/components/ProjectDetail.svelte";
   import QuickCapture from "$lib/components/QuickCapture.svelte";
   import Toasts from "$lib/components/Toasts.svelte";
+  import WidgetShell from "$lib/components/WidgetShell.svelte";
 
   let captureOpen = $state(false);
+
+  // Quick capture: the modal in the dashboard; in widget mode the roster's
+  // own capture field takes focus instead.
+  function openCapture() {
+    if (widget.mode === "widget") widget.requestCaptureFocus();
+    else captureOpen = true;
+  }
 
   onMount(() => {
     projects.load();
 
     // Global hotkey (registered in Rust) surfaces the window + asks us to open
     // quick-capture.
-    const unlistenPromise = listen("waid://quick-capture", () => {
-      captureOpen = true;
-    });
+    const unlistenPromise = listen("waid://quick-capture", openCapture);
 
     // In-window shortcut as well, so capture works without the global binding.
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        captureOpen = true;
+        openCapture();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -44,8 +51,13 @@
      compositor draws the corners and border itself, so the panel fills the
      window edge-to-edge — a CSS radius there would just stack a second,
      mismatched rounding inside the OS one. -->
-<ResizeHandles />
+{#if widget.mode === "dashboard"}
+  <ResizeHandles />
+{/if}
 
+<!-- Widget mode keeps the dashboard mounted (unsaved edits, sessions) but
+     hidden; the widget is its own fixed layer. -->
+<div class:hidden={widget.mode === "widget"}>
 <div class="h-screen overflow-hidden {paintsOwnFrame ? 'p-[14px]' : ''}">
   <!-- App panel: the shape the whole app lives in. overflow-hidden clips the
        titlebar + content to the corners when we round them ourselves. -->
@@ -78,6 +90,11 @@
     </div>
   </div>
 </div>
+</div>
+
+{#if widget.mode === "widget"}
+  <WidgetShell />
+{/if}
 
 <QuickCapture open={captureOpen} onclose={() => (captureOpen = false)} />
 <Toasts />

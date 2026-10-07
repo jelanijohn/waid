@@ -399,8 +399,9 @@ waid/
 │       │                         #   QuickCapture, StatusPill, Toasts, Icon, BrandMark,
 │       │                         #   CredentialHelp, IntegrationPanel, IntegrationsModal,
 │       │                         #   WebhooksModal, BriefingModal, BootstrapModal, ProviderTile,
-│       │                         #   ResizeHandles
-│       ├── stores/               # projects / settings / toasts / integrations (all .svelte.ts runes)
+│       │                         #   ResizeHandles, WidgetShell, WidgetRow, WidgetLeaf
+│       ├── stores/               # projects / settings / toasts / integrations / session / widget
+│       │                         #   (all .svelte.ts runes)
 │       ├── tauri.ts              # wrappers around invoke / plugins / secrets / PM + bootstrap commands
 │       ├── credentialHelp.ts     # per-credential setup steps + scopes + docs links (CredentialHelp data)
 │       ├── types.ts              # Brief / Link / Webhook / SyncSource / SyncOutcome / LlmSettings /
@@ -411,7 +412,10 @@ waid/
 │       ├── sections.ts           # per-brief collapsed-section state (localStorage)
 │       ├── bootstrap.ts          # paste-a-prompt template + stub-brief detection (frontend-only)
 │       ├── providers.ts          # PM-provider display metadata (brand/monogram/blurb/form needs + kind helpers)
-│       └── time.ts               # relative-time helper
+│       ├── actions.ts            # launch link / fire webhook / sync-all actions shared by dashboard + widget
+│       ├── widget.ts             # pure widget-mode text helpers (activity line, status tally, state excerpt)
+│       ├── widgetWindow.ts       # every window-API call widget mode makes (size, position, on-top, restore)
+│       └── time.ts               # relative-time helpers (relativeTime, compact shortAgo)
 ├── src-tauri/                    # Rust backend
 │   └── src/
 │       ├── main.rs               # calls run()
@@ -830,7 +834,7 @@ blank).
   query drops the old selector and saves a new one, then re-fetches the panel.
 - **Unified titlebar (`Titlebar.svelte` + `AppMenu.svelte`)** — the app draws its
   own window chrome across the full width (breadcrumb of the selected brief,
-  *Sync all*, the morning-briefing trigger, and the View & appearance menu),
+  *Sync all*, the morning-briefing trigger, and the Settings button),
   replacing the stock OS title bar and the sidebar's old brand header. Window
   controls flip by platform (sniffed from the webview `userAgent`): **macOS**
   keeps its native traffic lights via the **Overlay** title-bar style
@@ -854,14 +858,46 @@ blank).
   gutter **and** reaches a few px onto the opaque panel, because pointer events
   over a fully transparent gutter pass straight through on Linux/WSL. macOS keeps
   its native frame, so the grips are skipped there (same `userAgent` sniff).
-- **View & appearance menu (`AppMenu.svelte`)** — anchored to the titlebar's
-  `tune` button (moved out of the sidebar's old brand header). Besides the
-  appearance controls (light/dark, accent, sidebar list style, density, and the
-  **Brief layout** segmented control) and the GitHub token / Anthropic key /
-  OpenAI-compatible endpoint (URL, model, optional key) / LLM-provider config, it manages the **bring-your-own Google OAuth client**
-  (`gmail.client_id` / `gmail.client_secret` in the keyring): save / clear, gated
-  so Connect only works once a client is stored. Token fields here carry the same
-  **`CredentialHelp`** icons as the integrations modal.
+- **Settings dialog (`AppMenu.svelte` + `SettingsModal.svelte`)** —
+  `AppMenu` is now just the titlebar's `tune` button (moved out of the
+  sidebar's old brand header); it opens `SettingsModal`, a centered dialog
+  with a section nav on the left. **Appearance**: light/dark, sidebar list
+  style, project-order reset, the **Brief layout** and **Widget detail**
+  segmented controls, accent, density. **Sync & GitHub**: auto-sync on open and
+  the GitHub token. **Gmail**: the **bring-your-own Google OAuth client**
+  (`gmail.client_id` / `gmail.client_secret` in the keyring): save / clear,
+  gated so Connect only works once a client is stored. **AI synthesis**: the
+  LLM provider, Anthropic key, and OpenAI-compatible endpoint (URL, model,
+  optional key). Token fields here carry the same **`CredentialHelp`** icons as
+  the integrations modal.
+- **Widget mode (`WidgetShell` / `WidgetRow` / `WidgetLeaf`, `stores/widget.svelte.ts`)**
+  — a small always-on-top roster presentation of the **same `main` window**
+  (no second window). Entering un-maximizes, saves the dashboard rect, drops
+  the 720×480 minimum, sets always-on-top, and sizes the window to the
+  measured content; exiting restores all of it (`widgetWindow.ts` owns every
+  window call, all errors swallowed so `vite dev` no-ops). The dashboard stays
+  **mounted but hidden** (unsaved edits and sessions survive) and every store
+  is shared, so nothing syncs across modes. **At rest** (window blurred, 200ms
+  grace) it shows one row — the dashboard's selection, else the first
+  non-archived brief — plus a status tally; **on focus** the full roster
+  (lead first, archived dropped, sidebar filters ignored), Sync all, Expand,
+  and a capture field (`⌘/Ctrl+K` and the global hotkey focus it instead of
+  opening the modal). A row opens a **leaf**: Current State excerpt (plain
+  text from the `waid:state` region), a count per feed (lazy cached fetch, per-
+  feed refresh), launch chips, NeuroSkill start/end session, and *Open brief*.
+  Peeking never stamps `last_opened`; launching does. The leaf opens inline
+  (**accordion**) or as a **side leaf** beside the roster (the *Widget detail*
+  setting) — on the left the window shifts left so the roster stays put. A
+  `ResizeObserver` drives window size, deduped on the last *successful*
+  physical size; the roster anchor is remembered in settings (`widgetPos`). On
+  platforms where positioning doesn't take (Wayland), `canPosition` goes false:
+  the side leaf always opens right and position memory is skipped. On Linux,
+  Tauri's monitor getters are avoided (they corrupt the X connection) and the
+  screen is read from the DOM instead. Needs `core:window:allow-set-size` /
+  `allow-set-min-size` / `allow-set-position` / `allow-set-always-on-top` in
+  `capabilities/default.json`. Launch, webhook and sync-all logic moved to
+  `actions.ts`, and NeuroSkill session state to `stores/session.svelte.ts`, so
+  dashboard and widget share one implementation.
 - **`BriefingModal.svelte`** — the cross-brief "Morning briefing" view.
 - **`ProviderTile.svelte`** — a provider monogram tile in the provider's brand
   color (`.ptile-<provider>` classes in `app.css`, so dark-mode tweaks stay in
@@ -918,7 +954,7 @@ The visual layer has a named theme and shares branding with What's Next.
   the detail pane (the `--pane-px` / `--pane-py` / `--title-size` / `--md-size`
   tokens).
 - **Brief layout (new setting).** Where a brief's live-state panel sits is
-  user-selectable from the titlebar's View & appearance menu — `briefLayout` in
+  user-selectable in the Settings dialog's Appearance section — `briefLayout` in
   `settings.svelte.ts` (`two-col` | `body` | `quiet`, default `two-col`):
   a right-hand `--rail-bg` rail (resizable — drag its grip or use the arrow
   keys on the focused separator; 320px default, 280px floor, capped at half the
@@ -926,7 +962,7 @@ The visual layer has a named theme and shares branding with What's Next.
   feed-strip across the top. Persisted to `localStorage` alongside accent /
   sidebar style / density / alternate row shading (`sidebarZebra`).
 - **Layout:** a **unified titlebar** (the app's own window chrome — breadcrumb,
-  *Sync all*, briefing, View & appearance menu) over a still **two-pane** body —
+  *Sync all*, briefing, Settings) over a still **two-pane** body —
   a sidebar (search/filter, project name, status
   pill, last-opened) and a detail pane (rendered brief body + link/webhook
   buttons + sync/synthesis/bootstrap affordances + the integration panel, the
@@ -974,6 +1010,10 @@ The visual layer has a named theme and shares branding with What's Next.
   not currently surfaced in the UI.)*
 - **Quick capture** — `⌘/Ctrl+K` (or global `Ctrl+Shift+Space`) → modal → pick a
   project → append a timestamped note under its `## Captures` heading.
+- **Widget mode** — a compact always-on-top roster of the same window: one
+  line at rest, every brief on focus, a per-brief leaf (Current State, feed
+  counts, launch chips, session control) inline or to the side, its own
+  capture field, and remembered position. *(See §5 UI.)*
 - **Search & status filtering** — text filter (`⌘/Ctrl+F`) + status filter;
   archived briefs hidden by default, surfaced via the "archived" status (archive
   view).
@@ -984,7 +1024,7 @@ The visual layer has a named theme and shares branding with What's Next.
   paths relative to the configured briefs directory (which may be a vault
   subfolder);
   the list updates optimistically and rolls back if the write fails.
-  *Reset to recent* in the appearance settings forgets it.
+  *Reset to recent* in Settings → Appearance forgets it.
 - **Brief sync (deterministic)** — pull live state (open PRs/issues, last push,
   CI via the combined-status API, latest release) from a brief's GitHub link or
   explicit `sources` into the managed `## Activity` block. Frontmatter and prose
@@ -1024,14 +1064,17 @@ The visual layer has a named theme and shares branding with What's Next.
 - **Appearance** — light/dark, accent, sidebar list style (Rows / Compact /
   Rocks), alternate row shading, density, project-order reset, and the
   **Brief layout** control (two-column rail / body-first / quiet-top, with a
-  resizable rail), all from the **View & appearance** menu in the titlebar.
+  resizable rail), plus **Widget detail** (accordion / side leaf), all in
+  the **Settings** dialog's Appearance section (titlebar `tune` button).
 
 ### Keyboard / shortcuts
 
 - **Global** `Ctrl+Shift+Space` — system-wide hotkey that surfaces the window and
   triggers quick capture via a `waid://quick-capture` event (desktop-only; may be
   intercepted by some Linux WMs — a known limitation, not a bug).
-- **In-app** `⌘/Ctrl+K` — quick-capture modal.
+- **In-app** `⌘/Ctrl+K` — quick-capture modal (in widget mode: focus the
+  widget's capture field).
+- **Widget mode** `Esc` — close the open leaf.
 - **In-app** `⌘/Ctrl+F` — focus the sidebar search/filter.
 - **In-app** `⌘/Ctrl+S` — save in edit mode.
 - **In-app** `Alt+↑/↓` — move the selected project up/down in the sidebar.

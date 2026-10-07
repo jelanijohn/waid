@@ -78,9 +78,9 @@ Full frontmatter reference (webhook headers, `{{secret}}`, app-owned regions):
 
 - **Two-pane layout** — project sidebar (status pills, search **⌘/Ctrl+F**,
   status filters, drag-to-reorder or **Alt+↑/↓**, optional alternate row
-  shading) + detail pane, under a custom titlebar with *Sync all* and the
-  appearance menu (theme, accent, density, brief layout, resizable live-state
-  rail).
+  shading) + detail pane, under a custom titlebar with *Sync all* and a
+  Settings dialog (theme, accent, density, brief layout, resizable live-state
+  rail, tokens and AI provider).
 - **Markdown rendering + edit mode** — `#`/`##` sections fold and remember
   their state per brief; ⌘/Ctrl+S saves; edits round-trip the whole file, so
   frontmatter is never mangled.
@@ -95,6 +95,13 @@ Full frontmatter reference (webhook headers, `{{secret}}`, app-owned regions):
   (custom headers, keyring-backed `{{secret}}`).
 - **Quick capture** — **⌘/Ctrl+K** (or global **Ctrl+Shift+Space**) appends a
   timestamped note under a project's `## Captures`.
+- **Widget mode** — the titlebar's widget button shrinks the window to a small
+  always-on-top roster: at rest it shows one line for your current project,
+  on focus every non-archived brief. Open a row for its Current State, feed
+  counts, launch chips, and NeuroSkill session control — inline under the row
+  or as a side leaf (the *Widget detail* setting). Quick capture goes to the
+  roster's own field; *Expand* or *Open brief* returns to the dashboard. The
+  widget remembers where you left it.
 - **Brief sync** — pull open PRs/issues, last push, CI, and latest release
   from a brief's GitHub link into a managed `## Activity` block.
   Deterministic; your prose is never touched.

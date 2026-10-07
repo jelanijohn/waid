@@ -7,6 +7,8 @@ export type SidebarStyle = "rows" | "compact" | "rocks";
 export type Density = "comfortable" | "compact";
 /** Where a brief's live state sits relative to its body (see ProjectDetail). */
 export type BriefLayout = "two-col" | "body" | "quiet";
+/** Where a widget-mode leaf opens: inline under its row, or beside the roster. */
+export type WidgetLeaf = "accordion" | "side";
 
 /** Curated accent options exposed in settings (blue, green, indigo, coral). */
 export const ACCENTS = ["#1E88E5", "#40A87E", "#6366F1", "#E57373"] as const;
@@ -29,6 +31,18 @@ interface Persisted {
   density: Density;
   autoSyncOnOpen: boolean;
   railWidth: number;
+  widgetLeaf: WidgetLeaf;
+  /** Widget mode: where the roster's top-left was last left (logical px). */
+  widgetPos: { x: number; y: number } | null;
+}
+
+/** A saved widget position, or null unless it's two finite numbers. */
+function validPos(v: unknown): { x: number; y: number } | null {
+  if (!v || typeof v !== "object") return null;
+  const { x, y } = v as { x?: unknown; y?: unknown };
+  return typeof x === "number" && Number.isFinite(x) && typeof y === "number" && Number.isFinite(y)
+    ? { x, y }
+    : null;
 }
 
 function applyDark(dark: boolean): void {
@@ -52,6 +66,8 @@ class Settings {
    *  default — sync is manual unless the user turns this on. */
   autoSyncOnOpen = $state(false);
   railWidth = $state(RAIL_WIDTH_DEFAULT);
+  widgetLeaf = $state<WidgetLeaf>("accordion");
+  widgetPos = $state<{ x: number; y: number } | null>(null);
 
   /** Resolve saved prefs (or sensible defaults) and apply the dark class. */
   init(): void {
@@ -77,6 +93,8 @@ class Settings {
       typeof saved.railWidth === "number" && Number.isFinite(saved.railWidth)
         ? Math.max(RAIL_WIDTH_MIN, Math.round(saved.railWidth))
         : RAIL_WIDTH_DEFAULT;
+    this.widgetLeaf = saved.widgetLeaf === "side" ? "side" : "accordion";
+    this.widgetPos = validPos(saved.widgetPos);
     applyDark(this.dark);
     applyAccent(this.accent);
   }
@@ -91,6 +109,8 @@ class Settings {
       density: this.density,
       autoSyncOnOpen: this.autoSyncOnOpen,
       railWidth: this.railWidth,
+      widgetLeaf: this.widgetLeaf,
+      widgetPos: this.widgetPos,
     };
     localStorage.setItem(KEY, JSON.stringify(data));
   }
@@ -141,6 +161,16 @@ class Settings {
   setRailWidth(px: number, save = true): void {
     this.railWidth = Math.max(RAIL_WIDTH_MIN, Math.round(px));
     if (save) this.persist();
+  }
+
+  setWidgetLeaf(leaf: WidgetLeaf): void {
+    this.widgetLeaf = leaf;
+    this.persist();
+  }
+
+  setWidgetPos(pos: { x: number; y: number } | null): void {
+    this.widgetPos = validPos(pos);
+    this.persist();
   }
 }
 

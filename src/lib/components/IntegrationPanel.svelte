@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import type { Brief, BriefIntegration, IntegrationFetch, IntegrationItem } from "$lib/types";
   import { integrations } from "$lib/stores/integrations.svelte";
   import { projects } from "$lib/stores/projects.svelte";
+  import { widget } from "$lib/stores/widget.svelte";
   import { openExternal, appendCapture } from "$lib/tauri";
   import { toasts } from "$lib/stores/toasts.svelte";
   import { PROVIDERS, PROVIDER_ORDER, kindLabel } from "$lib/providers";
@@ -10,6 +11,7 @@
   import MarkdownView from "./MarkdownView.svelte";
   import ProviderTile from "./ProviderTile.svelte";
   import Icon from "./Icon.svelte";
+  import FreshDot from "./FreshDot.svelte";
 
   let {
     brief,
@@ -70,6 +72,27 @@
       integrations.fetch(brief.path, ig.connection, ig.kind, ig.query, ig.limit).catch(() => {});
     }
   });
+
+  // Auto-sync "new" items: when this brief's feeds are in front of the user,
+  // mark them seen and keep the rows highlighted until the brief is left (the
+  // panel remounts per brief, so `highlight` resets on its own). Gated on
+  // dashboard mode: in widget mode the dashboard stays mounted but hidden, and
+  // a hidden panel must not clear the badge the widget is showing.
+  let highlight = $state<Set<string>>(new Set());
+  $effect(() => {
+    if (widget.mode !== "dashboard" || integrations.freshCount(brief.path) === 0) return;
+    untrack(() => {
+      const taken = integrations.takeFresh(brief.path);
+      if (taken.length) highlight = new Set([...highlight, ...taken]);
+    });
+  });
+  function isNew(ig: BriefIntegration, item: IntegrationItem): boolean {
+    return highlight.size > 0 && highlight.has(integrations.fingerprint(ig.kind, item));
+  }
+  function newCount(ig: BriefIntegration, f: IntegrationFetch | null | undefined): number {
+    if (!highlight.size || !f) return 0;
+    return f.items.filter((it) => isNew(ig, it)).length;
+  }
 
   // NeuroSkill `mind` feeds sync a deterministic body region instead of caching
   // items — track per-feed sync state and call the dedicated command.
@@ -154,6 +177,7 @@
                 {kindLabel(ig.kind, conn?.provider).toLowerCase()}
               {/if}
             </span>
+            <FreshDot count={newCount(ig, entry?.data)} showCount={false} />
           </button>
         {/each}
       </div>
@@ -261,7 +285,10 @@
                   </span>
                 </div>
                 {#if entry?.data}
-                  <div class="mt-px truncate text-[11px] text-[var(--fg3)]">{summaryLine(entry.data)}</div>
+                  {@const fresh = newCount(ig, entry.data)}
+                  <div class="mt-px truncate text-[11px] text-[var(--fg3)]">
+                    {summaryLine(entry.data)}{#if fresh}<span class="font-semibold text-[var(--accent)]"> · {fresh} new</span>{/if}
+                  </div>
                 {/if}
               </div>
               <button
@@ -307,6 +334,9 @@
                         <span class="max-w-[40%] shrink-0 truncate text-[12px] font-semibold text-[var(--fg)]">{item.assignee}</span>
                       {/if}
                       <span class="min-w-0 flex-1 truncate text-[12px] text-[var(--fg-body)]">{item.title}</span>
+                      {#if isNew(ig, item)}
+                        <span class="h-[6px] w-[6px] shrink-0 rounded-full bg-[var(--accent)]" aria-label="new"></span>
+                      {/if}
                       {#if item.updatedAt}
                         <span class="shrink-0 text-[10px] tabular-nums text-[var(--fg4)]">{relativeTime(item.updatedAt)}</span>
                       {/if}

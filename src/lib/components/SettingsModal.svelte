@@ -24,6 +24,7 @@
     type Density,
     type BriefLayout,
     type WidgetLeaf,
+    WIDGET_OPACITY_MIN,
   } from "$lib/stores/settings.svelte";
   import Icon from "./Icon.svelte";
   import CredentialHelp from "./CredentialHelp.svelte";
@@ -549,6 +550,33 @@
                 </button>
               {/each}
             </div>
+
+            <!-- Whole-widget opacity: a constant, user-set value (never adaptive),
+                 floored at 30% so the roster stays readable. The widget previews
+                 live while dragging; the value is saved on release. -->
+            <div class="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--fg3)]">
+              Widget opacity
+            </div>
+            <div class="mb-1 flex max-w-[340px] items-center gap-3">
+              <label for="widget-opacity" class="sr-only">Widget opacity</label>
+              <input
+                id="widget-opacity"
+                class="range min-w-0 flex-1"
+                type="range"
+                min={WIDGET_OPACITY_MIN}
+                max="1"
+                step="0.05"
+                value={settings.widgetOpacity}
+                oninput={(e) => settings.setWidgetOpacity(Number(e.currentTarget.value), false)}
+                onchange={(e) => settings.setWidgetOpacity(Number(e.currentTarget.value))}
+              />
+              <span class="w-[38px] text-right text-[12px] tabular-nums text-[var(--fg2)]">
+                {Math.round(settings.widgetOpacity * 100)}%
+              </span>
+            </div>
+            <p class="mb-4 text-[11.5px] text-[var(--fg3)]">
+              Lets the desktop show through the widget. Lower is more see-through; 100% is solid.
+            </p>
 
             <div class="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--fg3)]">
               Accent

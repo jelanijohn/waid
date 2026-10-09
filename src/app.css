@@ -25,6 +25,7 @@
   /* density (comfortable default; `.dense` tightens the detail pane) */
   --pane-px: 34px;
   --pane-py: 26px;
+  --pane-pb: 120px; /* scroll runway below the last line of the detail pane */
   --title-size: 20px;
   --md-size: 13.5px;
 
@@ -111,6 +112,7 @@ body {
 .dense {
   --pane-px: 24px;
   --pane-py: 18px;
+  --pane-pb: 96px;
   --title-size: 18px;
   --md-size: 13px;
 }

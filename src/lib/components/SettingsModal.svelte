@@ -24,6 +24,7 @@
     type Density,
     type BriefLayout,
     type WidgetLeaf,
+    WIDGET_OPACITY_MIN,
   } from "$lib/stores/settings.svelte";
   import Icon from "./Icon.svelte";
   import CredentialHelp from "./CredentialHelp.svelte";
@@ -549,6 +550,54 @@
                 </button>
               {/each}
             </div>
+
+            <!-- Whole-widget opacity: a constant, user-set value (never adaptive),
+                 floored at 30% so the roster stays readable. Settings can't be
+                 open in widget mode (the dashboard is hidden there), so the
+                 preview below stands in for the widget: a mock panel at the
+                 chosen opacity over a desktop-like backdrop. Saved on release. -->
+            <div class="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--fg3)]">
+              Widget opacity
+            </div>
+            <div class="mb-2 flex max-w-[340px] items-center gap-3">
+              <label for="widget-opacity" class="sr-only">Widget opacity</label>
+              <input
+                id="widget-opacity"
+                class="range min-w-0 flex-1"
+                type="range"
+                min={WIDGET_OPACITY_MIN}
+                max="1"
+                step="0.05"
+                value={settings.widgetOpacity}
+                aria-valuetext="{Math.round(settings.widgetOpacity * 100)}%"
+                oninput={(e) => settings.setWidgetOpacity(Number(e.currentTarget.value), false)}
+                onchange={(e) => settings.setWidgetOpacity(Number(e.currentTarget.value))}
+              />
+              <span class="w-[38px] text-right text-[12px] tabular-nums text-[var(--fg2)]">
+                {Math.round(settings.widgetOpacity * 100)}%
+              </span>
+            </div>
+            <div
+              class="opacity-preview mb-1 flex max-w-[340px] items-center justify-center rounded-lg p-3"
+              aria-hidden="true"
+            >
+              <div
+                class="flex w-[200px] flex-col gap-1.5 rounded-[8px] border px-2.5 py-2 text-[11px]"
+                style="opacity: {settings.widgetOpacity}; background: var(--bg); border-color: var(--border); box-shadow: var(--shadow-win);"
+              >
+                <div class="flex items-center justify-between font-medium text-[var(--fg-body)]">
+                  <span>WAID</span>
+                  <span class="flex items-center gap-1 text-[10px] text-[var(--fg2)]">
+                    <span class="inline-block h-[6px] w-[6px] rounded-full bg-[var(--accent)]"></span>3
+                  </span>
+                </div>
+                <div class="h-[6px] w-[70%] rounded-full bg-[var(--fg4)]"></div>
+                <div class="h-[6px] w-[55%] rounded-full bg-[var(--fg4)]"></div>
+              </div>
+            </div>
+            <p class="mb-4 text-[11.5px] text-[var(--fg3)]">
+              Lets the desktop show through the widget. Lower is more see-through; 100% is solid.
+            </p>
 
             <div class="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--fg3)]">
               Accent

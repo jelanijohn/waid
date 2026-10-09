@@ -863,8 +863,11 @@ blank).
   sidebar's old brand header); it opens `SettingsModal`, a centered dialog
   with a section nav on the left. **Appearance**: light/dark, sidebar list
   style, project-order reset, the **Brief layout** and **Widget detail**
-  segmented controls, accent, density. **Sync & GitHub**: auto-sync on open and
-  the GitHub token. **Gmail**: the **bring-your-own Google OAuth client**
+  segmented controls, the **Widget opacity** slider (30–100%, with an inline
+  mock-panel preview over a desktop-like backdrop since the widget itself is
+  never on screen while Settings is open; saved on release), accent, density.
+  **Sync & GitHub**: auto-sync on open and the GitHub token. **Gmail**: the
+  **bring-your-own Google OAuth client**
   (`gmail.client_id` / `gmail.client_secret` in the keyring): save / clear,
   gated so Connect only works once a client is stored. **AI synthesis**: the
   LLM provider, Anthropic key, and OpenAI-compatible endpoint (URL, model,
@@ -889,7 +892,12 @@ blank).
   (**accordion**) or as a **side leaf** beside the roster (the *Widget detail*
   setting) — on the left the window shifts left so the roster stays put. A
   `ResizeObserver` drives window size, deduped on the last *successful*
-  physical size; the roster anchor is remembered in settings (`widgetPos`). On
+  physical size; the roster anchor is remembered in settings (`widgetPos`).
+  The panel group carries a user-set whole-widget CSS `opacity`
+  (`widgetOpacity`, clamped to `0.3..1`, default 1 — the window is already
+  `transparent`, so the desktop shows through; the dashboard never gets it;
+  scrollers inside are promoted to their own layer, `translateZ(0)`, since
+  WebKitGTK leaves repaint trails under an opacity-reduced ancestor). On
   platforms where positioning doesn't take (Wayland), `canPosition` goes false:
   the side leaf always opens right and position memory is skipped. On Linux,
   Tauri's monitor getters are avoided (they corrupt the X connection) and the
@@ -1064,7 +1072,8 @@ The visual layer has a named theme and shares branding with What's Next.
 - **Appearance** — light/dark, accent, sidebar list style (Rows / Compact /
   Rocks), alternate row shading, density, project-order reset, and the
   **Brief layout** control (two-column rail / body-first / quiet-top, with a
-  resizable rail), plus **Widget detail** (accordion / side leaf), all in
+  resizable rail), plus **Widget detail** (accordion / side leaf) and
+  **Widget opacity** (30–100%, desktop shows through the widget), all in
   the **Settings** dialog's Appearance section (titlebar `tune` button).
 
 ### Keyboard / shortcuts

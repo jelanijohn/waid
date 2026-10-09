@@ -198,10 +198,15 @@
   onclickcapture={onClickCapture}
   onkeydown={() => widget.setFocused(true)}
 >
+  <!-- The panel group carries the user's widget opacity (Settings → Widget
+       opacity). The window itself is transparent, so lowering it lets the
+       desktop show through the roster and leaf; the dashboard never gets it. -->
   <div
     bind:this={measured}
     class="flex {paintsOwnFrame ? 'items-start' : 'items-stretch'}"
-    style="width: {widget.contentW}px; gap: {LEAF_GAP}px; visibility: {widget.shifting ? 'hidden' : 'visible'};"
+    style="width: {widget.contentW}px; gap: {LEAF_GAP}px; visibility: {widget.shifting
+      ? 'hidden'
+      : 'visible'}; opacity: {settings.widgetOpacity};"
   >
     {#if widget.sideOpen && widget.openBrief && widget.leafSide === "left"}
       {@render sidePanel(widget.openBrief)}
@@ -314,6 +319,9 @@
     padding: 14px;
     max-height: 560px;
     overflow-y: auto;
+    /* Own compositing layer: WebKitGTK leaves repaint trails in a scroller
+       under an opacity-reduced ancestor (the widget opacity above). */
+    transform: translateZ(0);
   }
   .sidepanel.divided {
     border-left: 1px solid var(--border);
@@ -405,6 +413,7 @@
   .list.capped {
     max-height: 240px;
     overflow-y: auto;
+    transform: translateZ(0);
   }
   .capture {
     display: flex;

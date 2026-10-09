@@ -224,6 +224,9 @@
     border-bottom: 1px solid var(--border);
     max-height: 320px;
     overflow-y: auto;
+    /* Own compositing layer: WebKitGTK leaves repaint trails in a scroller
+       under an opacity-reduced ancestor (WidgetShell's widget opacity). */
+    transform: translateZ(0);
   }
   .block {
     display: flex;

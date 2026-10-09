@@ -186,8 +186,9 @@ class Settings {
     this.persist();
   }
 
-  /** `save = false` while dragging the slider — the widget previews live,
-   *  localStorage is written once on release. */
+  /** `save = false` while dragging the slider — state updates live (the
+   *  Settings preview follows it; the widget itself can't be on screen while
+   *  Settings is open), localStorage is written once on release. */
   setWidgetOpacity(v: number, save = true): void {
     this.widgetOpacity = clampWidgetOpacity(v);
     if (save) this.persist();

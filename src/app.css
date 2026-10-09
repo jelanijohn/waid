@@ -156,6 +156,14 @@ body {
 .range:focus-visible::-webkit-slider-thumb {
   box-shadow: 0 0 0 3px var(--accent-tint);
 }
+/* Backdrop for the Widget opacity preview: a busy, desktop-like gradient so
+   the mock panel's transparency actually reads (a flat --bg would hide it). */
+.opacity-preview {
+  background:
+    radial-gradient(circle at 20% 30%, color-mix(in srgb, var(--accent) 55%, transparent), transparent 45%),
+    radial-gradient(circle at 80% 70%, rgba(236, 120, 90, 0.6), transparent 45%),
+    linear-gradient(135deg, #5b7cfa, #2bb3a0 50%, #f2c14e);
+}
 
 /* =========================================================================
  * Buttons — Mercury-restraint: 1px hairline, accent only on the primary.

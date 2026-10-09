@@ -865,8 +865,9 @@ blank).
   style, project-order reset, the **Brief layout** and **Widget detail**
   segmented controls, the **Widget opacity** slider (30–100%, with an inline
   mock-panel preview over a desktop-like backdrop since the widget itself is
-  never on screen while Settings is open; saved on release), accent, density. **Sync & GitHub**: auto-sync on open and
-  the GitHub token. **Gmail**: the **bring-your-own Google OAuth client**
+  never on screen while Settings is open; saved on release), accent, density.
+  **Sync & GitHub**: auto-sync on open and the GitHub token. **Gmail**: the
+  **bring-your-own Google OAuth client**
   (`gmail.client_id` / `gmail.client_secret` in the keyring): save / clear,
   gated so Connect only works once a client is stored. **AI synthesis**: the
   LLM provider, Anthropic key, and OpenAI-compatible endpoint (URL, model,

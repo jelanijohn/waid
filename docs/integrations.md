@@ -33,6 +33,33 @@ Tokens are read-only API tokens you create in each provider; only GitHub
 exposes notifications, Jira needs a base URL + account email, Asana needs a
 workspace id, and GitHub Enterprise needs a base URL.
 
+## Auto-sync
+
+Off by default. Turn on **Auto-sync** in Settings → Sync & GitHub (not to be
+confused with **Sync on open**, which refreshes a brief's `## Activity` block
+when you open it) and a background poller re-runs each feed's normal fetch, so
+new items show up without opening the brief:
+
+- **Where "new" shows** — an accent dot + count on the brief in the sidebar
+  and the widget roster, a total in the resting widget's header, and
+  "· N new" on the feed line. Opening the brief (or its widget leaf) marks the
+  items seen; the new rows stay highlighted until you leave it.
+- **How often** — per brief: the one you're viewing every 20 s, other active
+  or blocked briefs every 60 s, paused every 10 min, archived never. Slower
+  kinds are capped by provider rate limits (email and Slack 30 s, GitHub
+  notifications and Figma comments 60 s), each provider is spaced out, and
+  errors or rate limits back off automatically. Hover the ⓘ next to the
+  toggle for the current rates.
+- **What it never does** — write to a `.md`, call the LLM, or toast. A failed
+  background fetch just shows the panel's usual "Couldn't refresh" line.
+- **What it stores** — only hashes of seen items, in `localStorage`
+  (`waid-feed-seen`), so a restart flags what arrived while WAID was closed.
+  No titles, URLs, queries or paths. Turning Auto-sync off deletes it.
+
+Notion pages and NeuroSkill feeds are never polled. Your own Slack messages
+that match a feed's query count as new (WAID doesn't know which Slack user is
+you) — add `-from:me` to the query to exclude them.
+
 ## Secret storage
 
 Tokens and keys live in the platform keychain, never in settings, env, or the

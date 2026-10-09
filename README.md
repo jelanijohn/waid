@@ -110,6 +110,13 @@ Full frontmatter reference (webhook headers, `{{secret}}`, app-owned regions):
   messages / comments inline with a local rollup. Strictly additive — a failed
   fetch is a toast, never a write. Setup guides:
   [docs/integrations.md](docs/integrations.md).
+- **Auto-sync** _(opt-in)_ — turn on *Auto-sync* in Settings → Sync & GitHub
+  and WAID re-checks every brief's feeds in the background, marking new items
+  with an accent dot and count in the sidebar, the widget, and the feed panel.
+  The brief you're viewing is checked about every 20 s, other active briefs
+  every 60 s, paused every 10 min, archived never (the ⓘ next to the toggle
+  lists the rates). Read-only: no writes, no LLM, no toasts.
+  [docs/integrations.md](docs/integrations.md#auto-sync).
 - **Mind State** — connect a local
   **[NeuroSkill](https://github.com/NeuroSkill-com/skill)** EEG dashboard and get a
   deterministic `## Mind State` region aggregating focus / engagement / mood

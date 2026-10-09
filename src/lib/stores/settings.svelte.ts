@@ -30,6 +30,8 @@ interface Persisted {
   briefLayout: BriefLayout;
   density: Density;
   autoSyncOnOpen: boolean;
+  /** Background feed polling + "new" markers (see stores/autosync.svelte.ts). */
+  autoSyncFeeds: boolean;
   railWidth: number;
   widgetLeaf: WidgetLeaf;
   /** Widget mode: where the roster's top-left was last left (logical px). */
@@ -65,6 +67,9 @@ class Settings {
   /** Opt-in: auto-refresh a brief's sync block when it's opened. Off by
    *  default — sync is manual unless the user turns this on. */
   autoSyncOnOpen = $state(false);
+  /** Opt-in: poll connected feeds in the background and mark new items. Off
+   *  by default; off means zero background requests. */
+  autoSyncFeeds = $state(false);
   railWidth = $state(RAIL_WIDTH_DEFAULT);
   widgetLeaf = $state<WidgetLeaf>("accordion");
   widgetPos = $state<{ x: number; y: number } | null>(null);
@@ -89,6 +94,7 @@ class Settings {
     this.briefLayout = saved.briefLayout ?? "two-col";
     this.density = saved.density ?? "comfortable";
     this.autoSyncOnOpen = saved.autoSyncOnOpen ?? false;
+    this.autoSyncFeeds = saved.autoSyncFeeds ?? false;
     this.railWidth =
       typeof saved.railWidth === "number" && Number.isFinite(saved.railWidth)
         ? Math.max(RAIL_WIDTH_MIN, Math.round(saved.railWidth))
@@ -108,6 +114,7 @@ class Settings {
       briefLayout: this.briefLayout,
       density: this.density,
       autoSyncOnOpen: this.autoSyncOnOpen,
+      autoSyncFeeds: this.autoSyncFeeds,
       railWidth: this.railWidth,
       widgetLeaf: this.widgetLeaf,
       widgetPos: this.widgetPos,
@@ -153,6 +160,11 @@ class Settings {
 
   setAutoSyncOnOpen(on: boolean): void {
     this.autoSyncOnOpen = on;
+    this.persist();
+  }
+
+  setAutoSyncFeeds(on: boolean): void {
+    this.autoSyncFeeds = on;
     this.persist();
   }
 

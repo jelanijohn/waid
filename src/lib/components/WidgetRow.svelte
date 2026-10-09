@@ -7,6 +7,7 @@
   import { shortAgo } from "$lib/time";
   import { activityLine } from "$lib/widget";
   import Icon from "./Icon.svelte";
+  import FreshDot from "./FreshDot.svelte";
 
   let {
     brief,
@@ -15,6 +16,7 @@
     open = false,
     side = null,
     still = false,
+    fresh = 0,
     onToggle,
   }: {
     brief: Brief;
@@ -25,6 +27,8 @@
     side?: "left" | "right" | null;
     /** Rest state: no button, no chevron. */
     still?: boolean;
+    /** Auto-sync: new items across this brief's feeds (0 hides the dot). */
+    fresh?: number;
     onToggle?: () => void;
   } = $props();
 
@@ -42,6 +46,7 @@
       <span class="session">· in session</span>
     {/if}
     <span class="spacer"></span>
+    <FreshDot count={fresh} />
     {#if status}
       <span class="status">
         <span class="dot" style="background: {statusColor(status)};"></span>

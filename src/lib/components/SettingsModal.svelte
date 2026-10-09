@@ -25,6 +25,8 @@
     type BriefLayout,
     type WidgetLeaf,
   } from "$lib/stores/settings.svelte";
+  import { autosync } from "$lib/stores/autosync.svelte";
+  import { pollingRatesSummary } from "$lib/feedSync";
   import Icon from "./Icon.svelte";
   import CredentialHelp from "./CredentialHelp.svelte";
 
@@ -589,10 +591,14 @@
               Sync
             </div>
             <button
-              class="flex w-full max-w-[340px] items-center justify-between gap-2 text-left"
+              class="mb-3 flex w-full max-w-[340px] items-center justify-between gap-2 text-left"
               onclick={() => settings.setAutoSyncOnOpen(!settings.autoSyncOnOpen)}
+              aria-pressed={settings.autoSyncOnOpen}
             >
-              <span class="text-[12px] text-[var(--fg2)]">Auto-sync on open</span>
+              <span class="text-[12px] text-[var(--fg2)]">
+                Sync on open
+                <span class="block text-[10.5px] text-[var(--fg3)]">Refresh a brief's Activity block when you open it</span>
+              </span>
               <span
                 class="relative h-[18px] w-[30px] shrink-0 rounded-full transition-colors"
                 style="background: {settings.autoSyncOnOpen ? 'var(--accent)' : 'var(--border)'};"
@@ -600,6 +606,38 @@
                 <span
                   class="absolute top-[2px] h-[14px] w-[14px] rounded-full bg-white transition-[left]"
                   style="left: {settings.autoSyncOnOpen ? '14px' : '2px'};"
+                ></span>
+              </span>
+            </button>
+
+            <button
+              class="flex w-full max-w-[340px] items-center justify-between gap-2 text-left"
+              onclick={() => autosync.setEnabled(!settings.autoSyncFeeds)}
+              aria-pressed={settings.autoSyncFeeds}
+            >
+              <span class="text-[12px] text-[var(--fg2)]">
+                Auto-sync
+                <!-- Native title tooltip with the polling rates; the icon never
+                     flips the switch. Text comes from the scheduler's constants. -->
+                <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+                <span
+                  class="ml-[3px] inline-flex translate-y-[2px] cursor-help text-[var(--fg3)] hover:text-[var(--fg)]"
+                  title={pollingRatesSummary()}
+                  aria-label="Polling rates"
+                  tabindex="0"
+                  onclick={(e) => e.stopPropagation()}
+                >
+                  <Icon name="info" size={12} />
+                </span>
+                <span class="block text-[10.5px] text-[var(--fg3)]">Check connected feeds in the background and mark new items</span>
+              </span>
+              <span
+                class="relative h-[18px] w-[30px] shrink-0 rounded-full transition-colors"
+                style="background: {settings.autoSyncFeeds ? 'var(--accent)' : 'var(--border)'};"
+              >
+                <span
+                  class="absolute top-[2px] h-[14px] w-[14px] rounded-full bg-white transition-[left]"
+                  style="left: {settings.autoSyncFeeds ? '14px' : '2px'};"
                 ></span>
               </span>
             </button>

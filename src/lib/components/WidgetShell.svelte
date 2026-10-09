@@ -11,6 +11,7 @@
   import { session } from "$lib/stores/session.svelte";
   import { toasts } from "$lib/stores/toasts.svelte";
   import { widget } from "$lib/stores/widget.svelte";
+  import { integrations } from "$lib/stores/integrations.svelte";
   import { appendCapture } from "$lib/tauri";
   import { syncAllProjects } from "$lib/actions";
   import { statusColor } from "$lib/status";
@@ -223,6 +224,11 @@
           </button>
         {:else}
           <span class="tally" data-tauri-drag-region>
+            {#if integrations.totalFresh > 0}
+              <span class="tcount fresh" title="{integrations.totalFresh} new across your projects">
+                <span class="tdot" style="background: var(--accent);"></span>{integrations.totalFresh} new
+              </span>
+            {/if}
             {#each tally as t (t.status)}
               <span class="tcount" title={t.status}>
                 <span class="tdot" style="background: {statusColor(t.status)};"></span>{t.count}
@@ -236,7 +242,7 @@
         <!-- Rest: one button that brings the roster back. -->
         <button type="button" class="rest" aria-label="Show all projects" onclick={() => widget.setFocused(true)}>
           {#if lead}
-            <WidgetRow brief={lead} lead still inSession={session.isActive(lead.path)} />
+            <WidgetRow brief={lead} lead still inSession={session.isActive(lead.path)} fresh={integrations.freshCount(lead.path)} />
           {:else}
             <span class="empty">No briefs yet</span>
           {/if}
@@ -248,6 +254,7 @@
               brief={b}
               lead={i === 0}
               inSession={session.isActive(b.path)}
+              fresh={integrations.freshCount(b.path)}
               open={widget.openPath === b.path}
               side={widget.sideOpen ? widget.leafSide : null}
               onToggle={() => widget.toggleLeaf(b.path)}
@@ -376,6 +383,10 @@
     font-size: 12px;
     color: var(--fg2);
     font-variant-numeric: tabular-nums;
+  }
+  .tcount.fresh {
+    color: var(--accent);
+    font-weight: 600;
   }
   .tdot {
     width: 7px;

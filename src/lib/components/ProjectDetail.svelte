@@ -420,7 +420,7 @@
   {/if}
 {/snippet}
 
-<div class="flex h-screen flex-col bg-[var(--bg)] text-[var(--fg)]">
+<div class="flex h-full flex-col bg-[var(--bg)] text-[var(--fg)]">
   <!-- Header -->
   <header class="shrink-0 border-b" style="border-color: var(--border); padding: var(--pane-py) var(--pane-px) 16px;">
     <!-- Title row -->
@@ -625,7 +625,7 @@
 
   <!-- Body: editor, or one of the three live-state layouts -->
   {#if editing}
-    <div class="scroll-thin min-h-0 flex-1 overflow-y-auto" style="padding: var(--pane-py) var(--pane-px);">
+    <div class="scroll-thin min-h-0 flex-1 overflow-y-auto" style="padding: var(--pane-py) var(--pane-px) var(--pane-pb);">
       <!-- svelte-ignore a11y_autofocus -->
       <textarea
         class="h-full min-h-[56vh] w-full resize-none rounded-[10px] border p-4 font-mono text-[12.5px] leading-[1.65] text-[var(--fg-body)] outline-none focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_var(--accent-tint)]"
@@ -648,7 +648,7 @@
       class="flex min-h-0 flex-1 items-stretch"
       class:select-none={railDragging}
     >
-      <div class="scroll-thin min-w-0 flex-1 overflow-y-auto" style="padding: var(--pane-py) var(--pane-px);">
+      <div class="scroll-thin min-w-0 flex-1 overflow-y-auto" style="padding: var(--pane-py) var(--pane-px) var(--pane-pb);">
         {#if isStub}{@render generateCTA()}{/if}
         {@render bodyAndBacklinks()}
       </div>
@@ -681,7 +681,7 @@
           onmouseenter={() => setCursor("ewResize")}
           onmouseleave={() => !railDragging && setCursor("default")}
         ></div>
-        <div class="scroll-thin min-h-0 flex-1 overflow-y-auto" style="padding: var(--pane-py) 22px;">
+        <div class="scroll-thin min-h-0 flex-1 overflow-y-auto" style="padding: var(--pane-py) 22px var(--pane-pb);">
           {@render sectionLabel("Live state", true)}
           <IntegrationPanel {brief} narrow onManage={manage} />
         </div>
@@ -689,7 +689,7 @@
     </div>
   {:else if settings.briefLayout === "body"}
     <!-- Body first, then the live-state block below a hairline divider. -->
-    <div class="scroll-thin min-h-0 flex-1 overflow-y-auto" style="padding: var(--pane-py) var(--pane-px);">
+    <div class="scroll-thin min-h-0 flex-1 overflow-y-auto" style="padding: var(--pane-py) var(--pane-px) var(--pane-pb);">
       {#if isStub}{@render generateCTA()}{/if}
       {@render bodyAndBacklinks()}
       <div style="margin-top: 34px; padding-top: 26px; border-top: 1px solid var(--border);">
@@ -699,7 +699,7 @@
     </div>
   {:else}
     <!-- Quiet top: a slim feed strip (or connect row), then the body. -->
-    <div class="scroll-thin min-h-0 flex-1 overflow-y-auto" style="padding: var(--pane-py) var(--pane-px);">
+    <div class="scroll-thin min-h-0 flex-1 overflow-y-auto" style="padding: var(--pane-py) var(--pane-px) var(--pane-pb);">
       <div class="mb-[26px]">
         <IntegrationPanel {brief} strip onManage={manage} />
       </div>

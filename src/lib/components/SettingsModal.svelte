@@ -569,6 +569,7 @@
                 max="1"
                 step="0.05"
                 value={settings.widgetOpacity}
+                aria-valuetext="{Math.round(settings.widgetOpacity * 100)}%"
                 oninput={(e) => settings.setWidgetOpacity(Number(e.currentTarget.value), false)}
                 onchange={(e) => settings.setWidgetOpacity(Number(e.currentTarget.value))}
               />

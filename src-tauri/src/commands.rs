@@ -4466,8 +4466,12 @@ fn cache_scope(conn: &Connection) -> String {
         .map(|r| r.trim().trim_matches('/').trim_end_matches(".git").to_ascii_lowercase())
         .filter(|r| !r.is_empty())
         .collect();
-    repos.sort();
-    repos.dedup();
+    // Order doesn't matter while every repo fits in the search query; past the
+    // cap only the first few are sent, so the configured order is the feed.
+    if repos.len() <= provider::github::MAX_INJECTED_REPOS {
+        repos.sort();
+        repos.dedup();
+    }
     format!(
         "{}|{}|{}",
         effective_host(conn),
@@ -6662,6 +6666,13 @@ mod tests {
         // Same set in another order/case is the same feed; a different set isn't.
         assert_eq!(CacheKey::new("id", &a, &s), CacheKey::new("id", &b, &s));
         assert_ne!(CacheKey::new("id", &a, &s), CacheKey::new("id", &c, &s));
+        // Past the query's repo cap the order picks which repos are searched.
+        let many: Vec<String> = (0..=provider::github::MAX_INJECTED_REPOS).map(|i| format!("a/r{i}")).collect();
+        let mut fwd = conn(provider::Provider::Github);
+        fwd.repos = Some(many.clone());
+        let mut rev = conn(provider::Provider::Github);
+        rev.repos = Some(many.into_iter().rev().collect());
+        assert_ne!(CacheKey::new("id", &fwd, &s), CacheKey::new("id", &rev, &s));
         // The credential, query and kind are part of the key too.
         assert_ne!(CacheKey::new("id", &a, &s), CacheKey::new("other", &a, &s));
         assert_ne!(

@@ -175,7 +175,7 @@ fn conditional(rb: reqwest::RequestBuilder, v: Option<&Validators>) -> reqwest::
 /// GitHub caps the `q` length, so a connection naming a long `repos` list can't
 /// have every one injected — we take the first (the intended setup is one repo,
 /// or a small handful, where this never bites).
-const MAX_INJECTED_REPOS: usize = 10;
+pub(crate) const MAX_INJECTED_REPOS: usize = 10;
 
 /// The error shown when a GitHub feed has no repo scope. Scoping is mandatory:
 /// without it, `pulls`/`commits` become global public searches across unrelated

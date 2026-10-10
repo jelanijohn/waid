@@ -4414,6 +4414,18 @@ fn url_host(base: Option<&str>) -> String {
         .to_ascii_lowercase()
 }
 
+/// The host a connection's requests really go to, for credential identity and
+/// cache scope. GitHub ignores a `base_url` pointing at public GitHub (see
+/// `provider::github::api_base`), so that counts as the default host — the same
+/// PAT must share one budget however its base URL was typed.
+fn effective_host(conn: &Connection) -> String {
+    let base = conn.base_url.as_deref();
+    if conn.provider == provider::Provider::Github && base.is_some_and(provider::github::is_public_github) {
+        return String::new();
+    }
+    url_host(base)
+}
+
 /// What makes two connections the same credential for rate limiting: the Gmail
 /// account (one OAuth grant per address, however often its access token
 /// refreshes), otherwise the host + the secret itself. NeuroSkill has none.
@@ -4428,7 +4440,7 @@ fn credential_identity(conn: &Connection, token: &str) -> Option<String> {
             .map(str::to_ascii_lowercase),
         provider::Provider::Neuroskill => None,
         _ => (!token.is_empty())
-            .then(|| format!("{}|{}", url_host(conn.base_url.as_deref()), token)),
+            .then(|| format!("{}|{}", effective_host(conn), token)),
     }
 }
 
@@ -4458,7 +4470,7 @@ fn cache_scope(conn: &Connection) -> String {
     repos.dedup();
     format!(
         "{}|{}|{}",
-        url_host(conn.base_url.as_deref()),
+        effective_host(conn),
         conn.account.as_deref().map(str::trim).unwrap_or_default().to_ascii_lowercase(),
         repos.join(",")
     )
@@ -6552,6 +6564,23 @@ mod tests {
         assert_ne!(id, credential_id(&b, "|ghp_secret"), "a new launch, a new id");
         assert_ne!(id, credential_id(&a, "|ghp_other"));
         assert!(!id.contains("secret"));
+    }
+
+    #[test]
+    fn github_identity_ignores_a_public_base_url() {
+        let plain = conn(provider::Provider::Github);
+        let mut web = conn(provider::Provider::Github);
+        web.base_url = Some("https://github.com/".into());
+        let mut api = conn(provider::Provider::Github);
+        api.base_url = Some("https://api.github.com".into());
+        let mut ghe = conn(provider::Provider::Github);
+        ghe.base_url = Some("https://ghe.example.com".into());
+        // github.com / api.github.com are ignored by api_base, so one PAT is one budget.
+        let id = credential_identity(&plain, "ghp_x");
+        assert_eq!(credential_identity(&web, "ghp_x"), id);
+        assert_eq!(credential_identity(&api, "ghp_x"), id);
+        assert_eq!(cache_scope(&web), cache_scope(&plain));
+        assert_ne!(credential_identity(&ghe, "ghp_x"), id, "Enterprise is a different host");
     }
 
     #[test]

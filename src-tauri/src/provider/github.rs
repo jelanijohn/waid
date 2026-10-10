@@ -48,7 +48,7 @@ fn api_base(conn: &Connection) -> String {
 
 /// Whether a `base_url` is really public github.com (or its API host) — in which
 /// case there's no Enterprise instance and the default API base applies.
-fn is_public_github(base: &str) -> bool {
+pub(crate) fn is_public_github(base: &str) -> bool {
     let host = base
         .trim()
         .trim_start_matches("https://")

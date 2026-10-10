@@ -88,6 +88,9 @@ class AutoSync {
   private cleanups: (() => void)[] = [];
   private running = false;
   private lastKick = 0;
+  /** Bumped by `stop()`, so a poll still in flight from an earlier run can't
+   *  write its bookkeeping into the cleared state. */
+  private generation = 0;
 
   // Scheduler state — in memory only. Per feed:
   private lastAttempt = new Map<string, number>();
@@ -150,6 +153,7 @@ class AutoSync {
 
   /** Clears the timer and every listener. Scheduler state is dropped too. */
   stop(): void {
+    this.generation++;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     this.cleanups.forEach((fn) => fn());
@@ -304,6 +308,7 @@ class AutoSync {
     if (this.running || !this.timer) return;
     if (!navigator.onLine || document.visibilityState === "hidden") return;
     this.running = true;
+    const gen = this.generation;
     try {
       const now = Date.now();
       const all = this.feeds(now);
@@ -362,8 +367,8 @@ class AutoSync {
 
       let prev: string | null = null;
       for (const f of picks) {
-        if (!this.timer) break;
         if (prev === f.domain) await sleep(GAP_MS);
+        if (gen !== this.generation) break;
         prev = f.domain;
         // Selection reserved the domain; restamp at dispatch so `minGapMs` runs
         // from the real request, not from a pick made before slower fetches.
@@ -372,6 +377,7 @@ class AutoSync {
         this.jitters.delete(f.key); // fresh jitter for the next cycle
         const maxAge = Math.min(this.interval(f) / 2, POLL_MAX_AGE_CAP_MS);
         const res = await integrations.poll(f.path, f.connection, f.kind, f.query, f.limit, maxAge);
+        if (gen !== this.generation) break; // stopped meanwhile: its state is gone
         // Return the reservation; the ledger carries what was really spent
         // (0 for a cache hit or a 304), debited at the next settle.
         this.bucket(f.domain, Date.now()).tokens += f.estCost;

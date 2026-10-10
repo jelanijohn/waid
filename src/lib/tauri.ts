@@ -217,13 +217,41 @@ export const generateSlackQuery = (prompt: string) =>
 /** Generate a cross-brief "morning briefing" across all briefs' integrations. */
 export const morningBriefing = () => invoke<string>("morning_briefing");
 
-/** Fetch live items for one of a brief's integration selectors (token internal). */
+/** A rejected `fetch_integration`, typed so auto-sync can tell a rate limit
+ *  (and how long to wait) from any other failure. `toString()` is the plain
+ *  message, so `String(e)` / `${e}` read exactly as before. */
+export class IntegrationFetchError extends Error {
+  kind: "rateLimited" | "auth" | "http" | "network" | "other";
+  retryAfterMs?: number;
+  status?: number;
+
+  constructor(raw: unknown) {
+    const o = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+    super(o && typeof o.message === "string" ? o.message : String(raw));
+    this.name = "IntegrationFetchError";
+    const kind = o?.kind;
+    this.kind =
+      kind === "rateLimited" || kind === "auth" || kind === "http" || kind === "network" ? kind : "other";
+    if (typeof o?.retryAfterMs === "number") this.retryAfterMs = o.retryAfterMs;
+    if (typeof o?.status === "number") this.status = o.status;
+  }
+
+  toString(): string {
+    return this.message;
+  }
+}
+
+/** Fetch live items for one of a brief's integration selectors (token internal).
+ *  `maxAgeMs` lets the backend answer from its in-memory feed cache when its
+ *  copy is at most that old (shared across briefs on the same credential);
+ *  omitted or 0 always asks the provider. Rejects with `IntegrationFetchError`. */
 export const fetchIntegration = (
   path: string,
   connectionId: string,
   kind: string,
   query?: string | null,
   limit?: number | null,
+  maxAgeMs?: number,
 ) =>
   invoke<IntegrationFetch>("fetch_integration", {
     path,
@@ -231,6 +259,9 @@ export const fetchIntegration = (
     kind,
     query: query ?? null,
     limit: limit ?? null,
+    maxAgeMs: maxAgeMs ? Math.round(maxAgeMs) : null,
+  }).catch((e: unknown) => {
+    throw new IntegrationFetchError(e);
   });
 
 /** Open a URL in the user's default browser. */

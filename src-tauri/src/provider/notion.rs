@@ -18,7 +18,7 @@
 
 use std::collections::BTreeMap;
 
-use super::{BriefIntegration, Connection, IntegrationItem};
+use super::{BriefIntegration, Connection, FetchCtx, FetchError, FetchOutcome, IntegrationItem};
 
 const BASE: &str = "https://api.notion.com/v1";
 const VERSION: &str = "2025-09-03";
@@ -43,40 +43,59 @@ pub async fn fetch(
     _conn: &Connection,
     sel: &BriefIntegration,
     token: &str,
-) -> Result<Vec<IntegrationItem>, String> {
+    ctx: &FetchCtx<'_>,
+) -> Result<FetchOutcome, FetchError> {
     match sel.kind.as_str() {
-        "tasks" => fetch_database(sel, token).await,
+        "tasks" => fetch_database(sel, token, ctx.aux).await,
         "page" => fetch_page(sel, token).await,
-        other => Err(format!(
-            "Notion supports kind: tasks, page (got \"{other}\")."
-        )),
+        other => Err(format!("Notion supports kind: tasks, page (got \"{other}\").").into()),
     }
 }
 
 /// A single Notion page surfaced as one item (its title + last-edited time). Used
 /// for "project page" feeds. The page's text feeds synthesis separately via
 /// `fetch_page_text`; here we only need it to render as a panel row.
-async fn fetch_page(sel: &BriefIntegration, token: &str) -> Result<Vec<IntegrationItem>, String> {
+async fn fetch_page(sel: &BriefIntegration, token: &str) -> Result<FetchOutcome, FetchError> {
     let page_id = extract_id(sel.query.as_deref().unwrap_or_default())
         .ok_or("Notion page selector needs a page id or URL in `query`.")?;
     let client = super::http_client()?;
     let resp = with_headers(client.get(format!("{BASE}/pages/{page_id}")), token)
         .send()
         .await
-        .map_err(|e| format!("request failed: {e}"))?;
-    let page = super::read_json(resp, "Notion").await?;
-    Ok(vec![map_page(&page)])
+        .map_err(FetchError::network)?;
+    let read = super::read_response(resp, "Notion").await?;
+    let meta = read.meta.clone();
+    let page = read.json("Notion")?;
+    Ok(FetchOutcome::fresh(vec![map_page(&page)], 1).with_meta(&meta))
 }
 
 /// Query a Notion database's rows as items (the original `fetch` behaviour).
+/// `aux` is the cached `{ db_id: ds_id }` map; a miss costs one extra request
+/// and returns the map with the new entry for the cache.
 async fn fetch_database(
     sel: &BriefIntegration,
     token: &str,
-) -> Result<Vec<IntegrationItem>, String> {
+    aux: Option<&serde_json::Value>,
+) -> Result<FetchOutcome, FetchError> {
     let db_id = extract_id(sel.query.as_deref().unwrap_or_default())
         .ok_or("Notion selector needs a database id or URL in `query`.")?;
     let client = super::http_client()?;
-    let ds_id = resolve_data_source(&client, token, &db_id).await?;
+    let cached = aux
+        .and_then(|m| m.get(&db_id))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let (ds_id, fresh_aux) = match cached {
+        Some(ds) => (ds, None),
+        None => {
+            let ds = resolve_data_source(&client, token, &db_id).await?;
+            let mut map = aux
+                .and_then(|m| m.as_object())
+                .cloned()
+                .unwrap_or_default();
+            map.insert(db_id.clone(), serde_json::Value::String(ds.clone()));
+            (ds, Some(serde_json::Value::Object(map)))
+        }
+    };
     let max = sel.limit.unwrap_or(25).clamp(1, 100);
 
     let body = serde_json::json!({
@@ -90,13 +109,18 @@ async fn fetch_database(
     .json(&body)
     .send()
     .await
-    .map_err(|e| format!("request failed: {e}"))?;
-    let json = super::read_json(resp, "Notion").await?;
+    .map_err(FetchError::network)?;
+    let read = super::read_response(resp, "Notion").await?;
+    let meta = read.meta.clone();
+    let json = read.json("Notion")?;
     let results = json
         .get("results")
         .and_then(|v| v.as_array())
         .ok_or("unexpected Notion response (no results)")?;
-    Ok(results.iter().map(map_page).collect())
+    let cost = 1 + fresh_aux.is_some() as u32;
+    Ok(FetchOutcome::fresh(results.iter().map(map_page).collect(), cost)
+        .with_meta(&meta)
+        .with_aux(fresh_aux))
 }
 
 /// Resolve a database id to its first data source's id (2025-09-03 model). Falls
@@ -106,12 +130,12 @@ async fn resolve_data_source(
     client: &reqwest::Client,
     token: &str,
     db_id: &str,
-) -> Result<String, String> {
+) -> Result<String, FetchError> {
     let resp = with_headers(client.get(format!("{BASE}/databases/{db_id}")), token)
         .send()
         .await
-        .map_err(|e| format!("request failed: {e}"))?;
-    let json = super::read_json(resp, "Notion").await?;
+        .map_err(FetchError::network)?;
+    let json = super::read_response(resp, "Notion").await?.json("Notion")?;
     Ok(json
         .pointer("/data_sources/0/id")
         .and_then(|v| v.as_str())

@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
-use super::{BriefIntegration, Connection, IntegrationItem};
+use super::{BriefIntegration, Connection, FetchCtx, FetchError, FetchErrorKind, FetchOutcome, IntegrationItem};
 
 const BASE: &str = "https://slack.com/api";
 
@@ -34,8 +34,9 @@ fn with_headers(rb: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBui
 /// Slack wraps errors in HTTP-200 bodies: `{"ok": false, "error": "…"}`, so
 /// `read_json`'s 401/403 mapping won't fire — every call checks `ok` after it
 /// (same family as Linear's post-`read_json` GraphQL-error check). Maps the
-/// error slug to a friendly message. Pure — unit-tested.
-fn check_ok(json: &serde_json::Value) -> Result<(), String> {
+/// error slug to a friendly message; `ratelimited` becomes a typed rate limit
+/// (the caller merges `Retry-After` from the headers). Pure — unit-tested.
+fn check_ok(json: &serde_json::Value) -> Result<(), FetchError> {
     if json.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
         return Ok(());
     }
@@ -50,10 +51,20 @@ app's User Token Scopes and reinstall the app."
         "not_allowed_token_type" => "Slack search needs a user token (xoxp-…), not a bot token — \
 copy the User OAuth Token from your app's OAuth & Permissions page."
             .to_string(),
-        "ratelimited" => "Slack rate limit hit — try again in a minute.".to_string(),
+        "ratelimited" => {
+            return Err(FetchError::rate_limited(
+                "Slack rate limit hit — WAID will wait before trying again.",
+                None,
+            ))
+        }
         other => format!("Slack error: {other}"),
     };
-    Err(msg)
+    let kind = if msg.contains("rejected the credentials") {
+        FetchErrorKind::Auth
+    } else {
+        FetchErrorKind::Other
+    };
+    Err(FetchError { message: msg, kind })
 }
 
 /// Cheap credential check: hit `auth.test` with the bearer token. (It succeeds
@@ -65,26 +76,30 @@ pub async fn validate(_conn: &Connection, token: &str) -> Result<(), String> {
         .await
         .map_err(|e| format!("request failed: {e}"))?;
     let json = super::read_json(resp, "Slack").await?;
-    check_ok(&json)
+    check_ok(&json).map_err(|e| e.message)
 }
 
 pub async fn fetch(
     _conn: &Connection,
     sel: &BriefIntegration,
     token: &str,
-) -> Result<Vec<IntegrationItem>, String> {
+    ctx: &FetchCtx<'_>,
+) -> Result<FetchOutcome, FetchError> {
     match sel.kind.as_str() {
-        "messages" => fetch_messages(sel, token).await,
-        other => Err(format!("Slack supports kind: messages (got \"{other}\").")),
+        "messages" => fetch_messages(sel, token, ctx.aux).await,
+        other => Err(format!("Slack supports kind: messages (got \"{other}\").").into()),
     }
 }
 
 /// One `search.messages` request, recency-ordered, mapped to items. Empty query
 /// errors, since the per-brief query *is* the assignment (mirrors Gmail/Notion).
+/// `aux` is the cached `{ user_id: display_name }` directory, which skips the
+/// `users.list` paging; costs `1 + pages` requests.
 async fn fetch_messages(
     sel: &BriefIntegration,
     token: &str,
-) -> Result<Vec<IntegrationItem>, String> {
+    aux: Option<&serde_json::Value>,
+) -> Result<FetchOutcome, FetchError> {
     let q = sel
         .query
         .as_deref()
@@ -107,9 +122,11 @@ async fn fetch_messages(
     ])
     .send()
     .await
-    .map_err(|e| format!("request failed: {e}"))?;
-    let json = super::read_json(resp, "Slack").await?;
-    check_ok(&json)?;
+    .map_err(FetchError::network)?;
+    let read = super::read_response(resp, "Slack").await?;
+    let meta = read.meta.clone();
+    let json = read.json("Slack")?;
+    check_ok(&json).map_err(|e| e.with_retry_after(meta.retry_after_ms))?;
 
     let matches: Vec<&serde_json::Value> = json
         .pointer("/messages/matches")
@@ -123,26 +140,37 @@ async fn fetch_messages(
             .and_then(|v| v.as_str())
             .is_some_and(|t| t.contains("<@"))
     });
-    let users = if needs_users {
-        fetch_user_directory(token).await
-    } else {
-        HashMap::new()
+    let cached: Option<HashMap<String, String>> = aux
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .filter(|m: &HashMap<String, String>| !m.is_empty());
+    let (users, pages) = match cached {
+        Some(map) => (map, 0),
+        None if needs_users => fetch_user_directory(token).await,
+        None => (HashMap::new(), 0),
     };
 
     let items = matches.iter().map(|m| map_match(m, &users)).collect();
-    Ok(items)
+    // Only a freshly fetched, non-empty directory is worth caching.
+    let fresh_aux = (pages > 0 && !users.is_empty())
+        .then(|| serde_json::to_value(&users).ok())
+        .flatten();
+    Ok(FetchOutcome::fresh(items, 1 + pages)
+        .with_meta(&meta)
+        .with_aux(fresh_aux))
 }
 
 /// Best-effort `users.list` → `{ user_id: display_name }` for mention
-/// resolution. Returns an **empty map on any failure** (missing `users:read`,
-/// rate-limit, network error) so resolution degrades to raw ids rather than
-/// failing the fetch. Network — not unit-tested; the pure `collect_users` /
+/// resolution, plus the number of pages requested (the fetch's real cost).
+/// Returns an **empty map on any failure** (missing `users:read`, rate-limit,
+/// network error) so resolution degrades to raw ids rather than failing the
+/// fetch. Network — not unit-tested; the pure `collect_users` /
 /// `pick_display_name` it feeds are.
-async fn fetch_user_directory(token: &str) -> HashMap<String, String> {
+async fn fetch_user_directory(token: &str) -> (HashMap<String, String>, u32) {
     let mut map = HashMap::new();
+    let mut pages = 0u32;
     let client = match super::http_client() {
         Ok(c) => c,
-        Err(_) => return map,
+        Err(_) => return (map, pages),
     };
     let mut cursor: Option<String> = None;
     for _ in 0..MAX_USER_PAGES {
@@ -150,6 +178,7 @@ async fn fetch_user_directory(token: &str) -> HashMap<String, String> {
         if let Some(c) = &cursor {
             params.push(("cursor", c.clone()));
         }
+        pages += 1;
         let resp = match with_headers(client.get(format!("{BASE}/users.list")), token)
             .query(&params)
             .send()
@@ -175,7 +204,7 @@ async fn fetch_user_directory(token: &str) -> HashMap<String, String> {
             None => break,
         }
     }
-    map
+    (map, pages)
 }
 
 /// Map one `search.messages` match into a normalized item. Pure — fixture-tested.
@@ -532,19 +561,25 @@ mod tests {
     fn check_ok_maps_errors() {
         assert!(check_ok(&serde_json::json!({ "ok": true })).is_ok());
 
-        let cred = check_ok(&serde_json::json!({ "ok": false, "error": "invalid_auth" }));
-        assert!(cred.unwrap_err().contains("rejected the credentials"));
+        let cred = check_ok(&serde_json::json!({ "ok": false, "error": "invalid_auth" })).unwrap_err();
+        assert!(cred.message.contains("rejected the credentials"));
+        assert_eq!(cred.kind, FetchErrorKind::Auth);
 
         let scope = check_ok(&serde_json::json!({ "ok": false, "error": "missing_scope" }));
-        assert!(scope.unwrap_err().contains("search:read"));
+        assert!(scope.unwrap_err().message.contains("search:read"));
 
         let bot = check_ok(&serde_json::json!({ "ok": false, "error": "not_allowed_token_type" }));
-        assert!(bot.unwrap_err().contains("user token"));
+        assert!(bot.unwrap_err().message.contains("user token"));
 
-        let rl = check_ok(&serde_json::json!({ "ok": false, "error": "ratelimited" }));
-        assert!(rl.unwrap_err().contains("rate limit"));
+        let rl = check_ok(&serde_json::json!({ "ok": false, "error": "ratelimited" })).unwrap_err();
+        assert!(rl.message.contains("rate limit"));
+        assert_eq!(rl.kind, FetchErrorKind::RateLimited { retry_after_ms: None });
+        // The caller merges Retry-After from the response headers.
+        let merged = rl.with_retry_after(Some(30_000));
+        assert_eq!(merged.kind, FetchErrorKind::RateLimited { retry_after_ms: Some(30_000) });
 
-        let other = check_ok(&serde_json::json!({ "ok": false, "error": "weird_thing" }));
-        assert_eq!(other.unwrap_err(), "Slack error: weird_thing");
+        let other = check_ok(&serde_json::json!({ "ok": false, "error": "weird_thing" })).unwrap_err();
+        assert_eq!(other.message, "Slack error: weird_thing");
+        assert_eq!(other.kind, FetchErrorKind::Other);
     }
 }

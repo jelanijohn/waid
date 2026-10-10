@@ -26,7 +26,7 @@
     type WidgetLeaf,
   } from "$lib/stores/settings.svelte";
   import { autosync } from "$lib/stores/autosync.svelte";
-  import { pollingRatesSummary } from "$lib/feedSync";
+  import { pollingRatesSummary, DORMANT_DAYS_MIN, DORMANT_DAYS_MAX } from "$lib/feedSync";
   import Icon from "./Icon.svelte";
   import CredentialHelp from "./CredentialHelp.svelte";
 
@@ -622,7 +622,7 @@
                 <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
                 <span
                   class="ml-[3px] inline-flex translate-y-[2px] cursor-help text-[var(--fg3)] hover:text-[var(--fg)]"
-                  title={pollingRatesSummary()}
+                  title={pollingRatesSummary(settings.dormantAfterDays, Object.values(autosync.domains))}
                   aria-label="Polling rates"
                   tabindex="0"
                   onclick={(e) => e.stopPropagation()}
@@ -641,6 +641,30 @@
                 ></span>
               </span>
             </button>
+
+            <label class="mt-2.5 flex w-full max-w-[340px] items-center justify-between gap-2">
+              <span class="text-[12px] text-[var(--fg2)]">
+                Dormant after
+                <span class="block text-[10.5px] text-[var(--fg3)]">Briefs you haven't opened for this long are checked every 30 min</span>
+              </span>
+              <span class="flex shrink-0 items-center gap-1.5 text-[12px] text-[var(--fg2)]">
+                <input
+                  class="w-[52px] rounded-md border px-2 py-1 text-right text-[12px] tabular-nums text-[var(--fg)] outline-none transition-colors focus:border-[var(--accent)]"
+                  style="background: var(--input-bg); border-color: var(--border);"
+                  type="number"
+                  min={DORMANT_DAYS_MIN}
+                  max={DORMANT_DAYS_MAX}
+                  step="1"
+                  value={settings.dormantAfterDays}
+                  aria-label="Dormant after days"
+                  onchange={(e) => {
+                    settings.setDormantAfterDays(Number(e.currentTarget.value));
+                    e.currentTarget.value = String(settings.dormantAfterDays);
+                  }}
+                />
+                {settings.dormantAfterDays === 1 ? "day" : "days"}
+              </span>
+            </label>
 
             <div
               class="mb-1.5 mt-4 flex max-w-[340px] items-center justify-between border-t pt-4 text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--fg3)]"

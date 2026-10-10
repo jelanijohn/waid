@@ -15,7 +15,7 @@
 
 use std::collections::BTreeMap;
 
-use super::{BriefIntegration, Connection, IntegrationItem};
+use super::{BriefIntegration, Connection, FetchCtx, FetchError, FetchOutcome, IntegrationItem};
 
 const BASE: &str = "https://api.figma.com/v1";
 
@@ -47,20 +47,22 @@ pub async fn fetch(
     _conn: &Connection,
     sel: &BriefIntegration,
     token: &str,
-) -> Result<Vec<IntegrationItem>, String> {
+    ctx: &FetchCtx<'_>,
+) -> Result<FetchOutcome, FetchError> {
     match sel.kind.as_str() {
-        "comments" => fetch_comments(sel, token).await,
-        other => Err(format!("Figma supports kind: comments (got \"{other}\").")),
+        "comments" => fetch_comments(sel, token, ctx.aux).await,
+        other => Err(format!("Figma supports kind: comments (got \"{other}\").").into()),
     }
 }
 
 /// Fetch one file's comments, optionally narrowed to @-mentions of the
 /// authenticated user. The per-brief `query` carries the file URL/key (required)
-/// plus an optional `mentions:me` token.
+/// plus an optional `mentions:me` token. `aux` is the cached `/v1/me` handle.
 async fn fetch_comments(
     sel: &BriefIntegration,
     token: &str,
-) -> Result<Vec<IntegrationItem>, String> {
+    aux: Option<&serde_json::Value>,
+) -> Result<FetchOutcome, FetchError> {
     let raw = sel
         .query
         .as_deref()
@@ -77,13 +79,15 @@ async fn fetch_comments(
     .query(&[("as_md", "true")])
     .send()
     .await
-    .map_err(|e| format!("request failed: {e}"))?;
+    .map_err(FetchError::network)?;
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Err("Figma file not found, or the token's account can't see it — \
 check the URL and that you have access."
-            .to_string());
+            .into());
     }
-    let json = super::read_json(resp, "Figma").await?;
+    let read = super::read_response(resp, "Figma").await?;
+    let meta = read.meta.clone();
+    let json = read.json("Figma")?;
 
     let comments: Vec<&serde_json::Value> = json
         .get("comments")
@@ -94,10 +98,12 @@ check the URL and that you have access."
     // For `mentions:me`, learn the handle. On any `/v1/me` failure, degrade to
     // returning all comments rather than erroring (best-effort, like Slack's
     // `users.list`).
-    let handle = if mentions_only {
-        fetch_my_handle(token).await
-    } else {
-        None
+    let cached = aux.and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(String::from);
+    let handle_fetched = mentions_only && cached.is_none();
+    let handle = match (mentions_only, cached) {
+        (false, _) => None,
+        (true, Some(h)) => Some(h),
+        (true, None) => fetch_my_handle(token).await,
     };
 
     let mut kept: Vec<&serde_json::Value> = comments
@@ -124,7 +130,10 @@ check the URL and that you have access."
     });
     let max = sel.limit.unwrap_or(15).clamp(1, 50) as usize;
     let items = kept.iter().take(max).map(|c| map_comment(c)).collect();
-    Ok(items)
+    let fresh_aux = handle.filter(|_| handle_fetched).map(serde_json::Value::String);
+    Ok(FetchOutcome::fresh(items, 1 + handle_fetched as u32)
+        .with_meta(&meta)
+        .with_aux(fresh_aux))
 }
 
 /// Best-effort `GET /v1/me` → the authenticated user's handle for the mention

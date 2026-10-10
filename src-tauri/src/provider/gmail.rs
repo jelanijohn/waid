@@ -16,7 +16,7 @@
 
 use std::collections::BTreeMap;
 
-use super::{BriefIntegration, Connection, IntegrationItem};
+use super::{BriefIntegration, Connection, FetchError, FetchOutcome, IntegrationItem};
 
 const BASE: &str = "https://gmail.googleapis.com/gmail/v1";
 
@@ -44,17 +44,18 @@ pub async fn fetch(
     _conn: &Connection,
     sel: &BriefIntegration,
     token: &str,
-) -> Result<Vec<IntegrationItem>, String> {
+) -> Result<FetchOutcome, FetchError> {
     match sel.kind.as_str() {
         "email" => fetch_emails(sel, token).await,
-        other => Err(format!("Gmail supports kind: email (got \"{other}\").")),
+        other => Err(format!("Gmail supports kind: email (got \"{other}\").").into()),
     }
 }
 
 /// List message ids matching the search string, then fetch each one's metadata
 /// (sequential — the cap is modest) and map it. Empty query errors, since the
 /// per-brief query *is* the assignment (mirrors Notion).
-async fn fetch_emails(sel: &BriefIntegration, token: &str) -> Result<Vec<IntegrationItem>, String> {
+/// Costs `1 + ids.len()` requests.
+async fn fetch_emails(sel: &BriefIntegration, token: &str) -> Result<FetchOutcome, FetchError> {
     let q = sel
         .query
         .as_deref()
@@ -68,8 +69,10 @@ async fn fetch_emails(sel: &BriefIntegration, token: &str) -> Result<Vec<Integra
         .query(&[("q", q), ("maxResults", &max.to_string())])
         .send()
         .await
-        .map_err(|e| format!("request failed: {e}"))?;
-    let list = super::read_json(resp, "Gmail").await?;
+        .map_err(FetchError::network)?;
+    let read = super::read_response(resp, "Gmail").await?;
+    let meta = read.meta.clone();
+    let list = read.json("Gmail")?;
     let ids: Vec<String> = list
         .get("messages")
         .and_then(|v| v.as_array())
@@ -95,11 +98,12 @@ async fn fetch_emails(sel: &BriefIntegration, token: &str) -> Result<Vec<Integra
         ])
         .send()
         .await
-        .map_err(|e| format!("request failed: {e}"))?;
-        let msg = super::read_json(resp, "Gmail").await?;
+        .map_err(FetchError::network)?;
+        let msg = super::read_response(resp, "Gmail").await?.json("Gmail")?;
         items.push(map_message(&msg));
     }
-    Ok(items)
+    let cost = 1 + items.len() as u32;
+    Ok(FetchOutcome::fresh(items, cost).with_meta(&meta))
 }
 
 /// Case-insensitive lookup of a header value in `payload.headers: [{name, value}]`.

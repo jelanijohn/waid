@@ -4,6 +4,8 @@
   import { integrations } from "$lib/stores/integrations.svelte";
   import { projects } from "$lib/stores/projects.svelte";
   import { widget } from "$lib/stores/widget.svelte";
+  import { autosync } from "$lib/stores/autosync.svelte";
+  import { approxEvery, clockTime } from "$lib/feedSync";
   import { openExternal, appendCapture } from "$lib/tauri";
   import { toasts } from "$lib/stores/toasts.svelte";
   import { PROVIDERS, PROVIDER_ORDER, kindLabel } from "$lib/providers";
@@ -286,8 +288,15 @@
                 </div>
                 {#if entry?.data}
                   {@const fresh = newCount(ig, entry.data)}
+                  <!-- Auto-sync cadence, only when it differs from the tier: a busy
+                       shared key stretches it, a rate limit pauses it. -->
+                  {@const cad = autosync.cadenceFor(brief.path, ig.connection, ig.kind, ig.query)}
                   <div class="mt-px truncate text-[11px] text-[var(--fg3)]">
-                    {summaryLine(entry.data)}{#if fresh}<span class="font-semibold text-[var(--accent)]"> · {fresh} new</span>{/if}
+                    {summaryLine(entry.data)}{#if fresh}<span class="font-semibold text-[var(--accent)]"> · {fresh} new</span>{/if}{#if cad?.holdUntil}<span
+                        title="The provider asked WAID to slow down"> · paused until {clockTime(cad.holdUntil)}</span
+                      >{:else if cad?.stretched}<span
+                        title="Feeds sharing this API key share its rate limit, so each is checked less often"
+                      > · checks every {approxEvery(cad.everyMs)}</span>{/if}
                   </div>
                 {/if}
               </div>

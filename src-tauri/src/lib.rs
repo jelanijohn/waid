@@ -15,6 +15,8 @@ pub fn run() {
     }
 
     builder
+        // In-memory feed cache + per-launch credential salt (see commands::FeedState).
+        .manage(commands::FeedState::new())
         .setup(|app| {
             // Custom unified toolbar (Titlebar.svelte) draws the window chrome.
             // macOS keeps its native traffic lights via the Overlay title-bar

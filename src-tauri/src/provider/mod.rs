@@ -29,7 +29,7 @@ pub mod slack;
 
 /// The supported providers. Serialized lowercase (`"linear"`) to mirror the
 /// `Provider` string union in `types.ts`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Provider {
     Linear,
@@ -62,29 +62,319 @@ pub(crate) fn http_client() -> Result<reqwest::Client, String> {
         .map_err(|e| format!("could not build HTTP client: {e}"))
 }
 
-/// Read a JSON response, mapping auth failures and non-2xx into clear, provider-
-/// labelled errors. GraphQL-style in-band errors (Linear) are checked by the
-/// caller after this returns.
+// --- Typed fetch errors + server-reported limits ---------------------------
+//
+// `fetch_integration` rejects with a `FetchError` so the auto-sync scheduler can
+// tell a rate limit (and how long to wait) from any other failure. Every `?` on
+// a `String` helper still compiles through `From<String>` (kind `Other`).
+
+/// What went wrong, for the scheduler. Serialized flat next to `message`:
+/// `{"message": "…", "kind": "rateLimited", "retryAfterMs": 30000}`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum FetchErrorKind {
+    #[serde(rename_all = "camelCase")]
+    RateLimited { retry_after_ms: Option<u64> },
+    Auth,
+    Http { status: u16 },
+    Network,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FetchError {
+    pub message: String,
+    #[serde(flatten)]
+    pub kind: FetchErrorKind,
+}
+
+impl FetchError {
+    pub fn rate_limited(message: impl Into<String>, retry_after_ms: Option<u64>) -> Self {
+        Self {
+            message: message.into(),
+            kind: FetchErrorKind::RateLimited { retry_after_ms },
+        }
+    }
+
+    /// A failed `send()` (DNS, connect, timeout) — never reached the provider.
+    pub fn network(e: reqwest::Error) -> Self {
+        Self {
+            message: format!("request failed: {e}"),
+            kind: FetchErrorKind::Network,
+        }
+    }
+
+    /// Fill a missing `Retry-After` on a rate-limit error from the response
+    /// headers (Slack reports the limit in-band but the wait in a header).
+    pub fn with_retry_after(mut self, ms: Option<u64>) -> Self {
+        if let FetchErrorKind::RateLimited { retry_after_ms } = &mut self.kind {
+            if retry_after_ms.is_none() {
+                *retry_after_ms = ms;
+            }
+        }
+        self
+    }
+}
+
+impl From<String> for FetchError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            kind: FetchErrorKind::Other,
+        }
+    }
+}
+
+impl From<&str> for FetchError {
+    fn from(message: &str) -> Self {
+        message.to_string().into()
+    }
+}
+
+impl std::fmt::Display for FetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+/// HTTP cache validators from a response, replayed as `If-None-Match` /
+/// `If-Modified-Since` on the next poll of the same feed.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Validators {
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+}
+
+impl Validators {
+    fn is_empty(&self) -> bool {
+        self.etag.is_none() && self.last_modified.is_none()
+    }
+}
+
+/// Rate-limit state the provider reported on its last response.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RateInfo {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remaining: Option<u32>,
+    /// RFC3339.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reset_at: Option<String>,
+    /// Server-requested minimum poll interval (GitHub `X-Poll-Interval`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_interval_ms: Option<u64>,
+}
+
+/// Everything the scheduler and the cache want from a response's headers.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ResponseMeta {
+    pub status: u16,
+    pub validators: Validators,
+    pub rate: Option<RateInfo>,
+    pub retry_after_ms: Option<u64>,
+}
+
+impl ResponseMeta {
+    /// Parse `ETag`, `Last-Modified`, `X-RateLimit-Remaining/Reset` (GitHub) and
+    /// `X-RateLimit-Requests-Remaining/Reset` (Linear), `Retry-After` (seconds or
+    /// HTTP-date) and `X-Poll-Interval`. Pure — `now` is injected.
+    pub fn from_headers(
+        status: u16,
+        headers: &reqwest::header::HeaderMap,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Self {
+        let h = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+        };
+        let validators = Validators {
+            etag: h("etag"),
+            last_modified: h("last-modified"),
+        };
+
+        let remaining = h("x-ratelimit-remaining")
+            .or_else(|| h("x-ratelimit-requests-remaining"))
+            .and_then(|s| s.parse::<u32>().ok());
+        let reset_at = h("x-ratelimit-reset")
+            .or_else(|| h("x-ratelimit-requests-reset"))
+            .and_then(|s| s.parse::<i64>().ok())
+            .and_then(|n| {
+                // GitHub sends epoch seconds, Linear epoch milliseconds.
+                let ms = if n > 100_000_000_000 { n } else { n * 1000 };
+                chrono::DateTime::from_timestamp_millis(ms)
+            })
+            .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+        let min_interval_ms = h("x-poll-interval")
+            .and_then(|s| s.parse::<u64>().ok())
+            .map(|s| s * 1000);
+        let rate = (remaining.is_some() || reset_at.is_some() || min_interval_ms.is_some())
+            .then(|| RateInfo {
+                remaining,
+                reset_at,
+                min_interval_ms,
+            });
+
+        let retry_after_ms = h("retry-after").and_then(|s| {
+            if let Ok(secs) = s.parse::<u64>() {
+                return Some(secs * 1000);
+            }
+            let at = chrono::DateTime::parse_from_rfc2822(&s).ok()?;
+            Some((at.with_timezone(&chrono::Utc) - now).num_milliseconds().max(0) as u64)
+        });
+
+        Self {
+            status,
+            validators,
+            rate,
+            retry_after_ms,
+        }
+    }
+
+    fn validators(&self) -> Option<Validators> {
+        (!self.validators.is_empty()).then(|| self.validators.clone())
+    }
+}
+
+/// A read response: `body` is `None` on a 304.
+pub struct Read {
+    pub body: Option<serde_json::Value>,
+    pub meta: ResponseMeta,
+}
+
+impl Read {
+    /// The JSON body; a 304 here is a bug in the caller (no validators sent).
+    pub fn json(self, provider: &str) -> Result<serde_json::Value, FetchError> {
+        self.body
+            .ok_or_else(|| format!("{provider} returned 304 Not Modified unexpectedly").into())
+    }
+}
+
+/// Read a response, mapping auth failures, rate limits and non-2xx into clear,
+/// provider-labelled, typed errors. A 304 is a success with no body.
+/// GraphQL-style in-band errors (Linear) are checked by the caller.
+pub(crate) async fn read_response(
+    resp: reqwest::Response,
+    provider: &str,
+) -> Result<Read, FetchError> {
+    let status = resp.status();
+    let meta = ResponseMeta::from_headers(status.as_u16(), resp.headers(), chrono::Utc::now());
+    if status == reqwest::StatusCode::NOT_MODIFIED {
+        return Ok(Read { body: None, meta });
+    }
+    // GitHub signals primary/secondary limits with a 403 + Retry-After or
+    // X-RateLimit-Remaining: 0, not only a 429.
+    let exhausted = meta.retry_after_ms.is_some()
+        || meta.rate.as_ref().and_then(|r| r.remaining) == Some(0);
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        || (status == reqwest::StatusCode::FORBIDDEN && exhausted)
+    {
+        return Err(FetchError::rate_limited(
+            format!("{provider} rate limit hit — WAID will wait before trying again."),
+            meta.retry_after_ms,
+        ));
+    }
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        return Err(FetchError {
+            message: format!("{provider} rejected the credentials — check the connection in Settings."),
+            kind: FetchErrorKind::Auth,
+        });
+    }
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(FetchError {
+            message: format!(
+                "{provider} returned {status}: {}",
+                text.chars().take(200).collect::<String>()
+            ),
+            kind: FetchErrorKind::Http {
+                status: status.as_u16(),
+            },
+        });
+    }
+    let body = resp
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("invalid JSON from {provider}: {e}"))?;
+    Ok(Read {
+        body: Some(body),
+        meta,
+    })
+}
+
+/// Read a JSON response as a plain `String` error — the shim for the call sites
+/// (validate, evidence, lookups) that don't need typed errors or headers.
 pub(crate) async fn read_json(
     resp: reqwest::Response,
     provider: &str,
 ) -> Result<serde_json::Value, String> {
-    let status = resp.status();
-    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        return Err(format!(
-            "{provider} rejected the credentials — check the connection in Settings."
-        ));
-    }
-    if !status.is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(format!(
-            "{provider} returned {status}: {}",
-            text.chars().take(200).collect::<String>()
-        ));
-    }
-    resp.json::<serde_json::Value>()
+    read_response(resp, provider)
         .await
-        .map_err(|e| format!("invalid JSON from {provider}: {e}"))
+        .and_then(|r| r.json(provider))
+        .map_err(|e| e.message)
+}
+
+// --- The provider fetch seam ------------------------------------------------
+
+/// What the command layer hands a provider besides the token: validators from
+/// the last response (conditional requests) and a cached auxiliary lookup
+/// (Slack users, Figma handle, Asana workspace, Notion data source).
+#[derive(Default)]
+pub struct FetchCtx<'a> {
+    pub validators: Option<&'a Validators>,
+    pub aux: Option<&'a serde_json::Value>,
+}
+
+/// A provider's result. `cost` is the true number of requests made.
+pub enum FetchOutcome {
+    NotModified {
+        cost: u32,
+        rate: Option<RateInfo>,
+    },
+    Fresh {
+        items: Vec<IntegrationItem>,
+        cost: u32,
+        validators: Option<Validators>,
+        rate: Option<RateInfo>,
+        /// A refreshed auxiliary lookup for the cache (`None` = nothing new).
+        aux: Option<serde_json::Value>,
+    },
+}
+
+impl FetchOutcome {
+    pub fn fresh(items: Vec<IntegrationItem>, cost: u32) -> Self {
+        Self::Fresh {
+            items,
+            cost,
+            validators: None,
+            rate: None,
+            aux: None,
+        }
+    }
+
+    /// Attach the main response's rate info (and validators, when present).
+    pub fn with_meta(mut self, meta: &ResponseMeta) -> Self {
+        match &mut self {
+            Self::Fresh {
+                validators, rate, ..
+            } => {
+                *validators = meta.validators();
+                *rate = meta.rate.clone();
+            }
+            Self::NotModified { rate, .. } => *rate = meta.rate.clone(),
+        }
+        self
+    }
+
+    pub fn with_aux(mut self, value: Option<serde_json::Value>) -> Self {
+        if let Self::Fresh { aux, .. } = &mut self {
+            *aux = value;
+        }
+        self
+    }
 }
 
 /// An account-level connection to a provider. **Metadata only** — the API token
@@ -147,6 +437,10 @@ pub struct BriefIntegration {
     /// Optional cap on the number of items fetched.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
+    /// `false` opts this feed out of background auto-sync (manual refresh still
+    /// works). Absent means on, so existing files are untouched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poll: Option<bool>,
 }
 
 fn default_kind() -> String {
@@ -189,48 +483,85 @@ pub struct IntegrationSummary {
     pub updated_recently: Option<u32>,
 }
 
+/// Where a fetch's items came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ServedFrom {
+    /// A real request returned new data.
+    Network,
+    /// The in-memory response cache, within the caller's max age (no request).
+    Cache,
+    /// A conditional request answered 304; the cached items were re-served.
+    NotModified,
+}
+
 /// What `fetch_integration` returns: the normalized items, when they were
-/// fetched, and the local rollup.
+/// fetched, the local rollup, and the bookkeeping the auto-sync scheduler
+/// budgets with.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IntegrationFetch {
     pub items: Vec<IntegrationItem>,
     pub fetched_at: String,
     pub summary: IntegrationSummary,
+    /// Session-salted hash of the credential (see `commands::credential_id`).
+    /// Feeds sharing a token share an id, and so a rate-limit budget.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_id: Option<String>,
+    /// Requests this fetch actually made (0 for a cache hit).
+    pub cost: u32,
+    pub served_from: ServedFrom,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate: Option<RateInfo>,
 }
 
-/// Dispatch a fetch to the right provider and attach the local rollup. The
-/// caller supplies `fetched_at` (not read from the clock here) so this stays
-/// deterministic. Unsupported providers return a clear error rather than panic.
+impl IntegrationFetch {
+    /// Assemble a result and attach the local rollup.
+    pub fn new(
+        items: Vec<IntegrationItem>,
+        fetched_at: String,
+        credential_id: Option<String>,
+        cost: u32,
+        served_from: ServedFrom,
+        rate: Option<RateInfo>,
+    ) -> Self {
+        let summary = summarize(&items);
+        Self {
+            items,
+            fetched_at,
+            summary,
+            credential_id,
+            cost,
+            served_from,
+            rate,
+        }
+    }
+}
+
+/// Dispatch a fetch to the right provider. The command layer owns the cache,
+/// the clock and the rollup; providers only report what they fetched and what
+/// it cost. Unsupported providers return a clear error rather than panic.
 pub async fn fetch(
     conn: &Connection,
     sel: &BriefIntegration,
     token: &str,
-    fetched_at: String,
-) -> Result<IntegrationFetch, String> {
-    let items = match conn.provider {
-        Provider::Linear => linear::fetch(conn, sel, token).await?,
-        Provider::Jira => jira::fetch(conn, sel, token).await?,
-        Provider::Asana => asana::fetch(conn, sel, token).await?,
-        Provider::Github => github::fetch(conn, sel, token).await?,
-        Provider::Notion => notion::fetch(conn, sel, token).await?,
-        Provider::Gmail => gmail::fetch(conn, sel, token).await?,
-        Provider::Slack => slack::fetch(conn, sel, token).await?,
-        Provider::Figma => figma::fetch(conn, sel, token).await?,
+    ctx: &FetchCtx<'_>,
+) -> Result<FetchOutcome, FetchError> {
+    match conn.provider {
+        Provider::Linear => linear::fetch(conn, sel, token).await,
+        Provider::Jira => jira::fetch(conn, sel, token).await,
+        Provider::Asana => asana::fetch(conn, sel, token, ctx).await,
+        Provider::Github => github::fetch(conn, sel, token, ctx).await,
+        Provider::Notion => notion::fetch(conn, sel, token, ctx).await,
+        Provider::Gmail => gmail::fetch(conn, sel, token).await,
+        Provider::Slack => slack::fetch(conn, sel, token, ctx).await,
+        Provider::Figma => figma::fetch(conn, sel, token, ctx).await,
         // NeuroSkill is not a panel feed — it syncs into the `## Mind State` body
         // region via `sync_mind_state`, not through this network dispatch.
-        Provider::Neuroskill => {
-            return Err("NeuroSkill mind-state feeds aren't panel items — they sync into \
+        Provider::Neuroskill => Err("NeuroSkill mind-state feeds aren't panel items — they sync into \
 the ## Mind State region via sync_mind_state."
-                .into())
-        }
-    };
-    let summary = summarize(&items);
-    Ok(IntegrationFetch {
-        items,
-        fetched_at,
-        summary,
-    })
+            .into()),
+    }
 }
 
 /// Cheap credential check used by `test_connection`: hit a trivial authenticated
@@ -316,5 +647,122 @@ mod tests {
         assert_eq!(s.by_status.get("Todo"), Some(&1));
         assert_eq!(s.updated_recently, Some(1));
         assert_eq!(s.overdue, None);
+    }
+
+    fn headers(pairs: &[(&'static str, &str)]) -> reqwest::header::HeaderMap {
+        let mut h = reqwest::header::HeaderMap::new();
+        for (k, v) in pairs {
+            h.insert(*k, v.parse().unwrap());
+        }
+        h
+    }
+
+    fn at(s: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn response_meta_parses_github_limit_headers() {
+        let h = headers(&[
+            ("etag", "W/\"abc\""),
+            ("last-modified", "Thu, 08 Oct 2026 12:00:00 GMT"),
+            ("x-ratelimit-remaining", "4321"),
+            ("x-ratelimit-reset", "1791460800"), // epoch seconds
+            ("x-poll-interval", "60"),
+        ]);
+        let m = ResponseMeta::from_headers(200, &h, at("2026-10-09T00:00:00Z"));
+        assert_eq!(m.validators.etag.as_deref(), Some("W/\"abc\""));
+        assert_eq!(m.validators.last_modified.as_deref(), Some("Thu, 08 Oct 2026 12:00:00 GMT"));
+        let rate = m.rate.unwrap();
+        assert_eq!(rate.remaining, Some(4321));
+        assert_eq!(rate.reset_at.as_deref(), Some("2026-10-08T12:00:00Z"));
+        assert_eq!(rate.min_interval_ms, Some(60_000));
+        assert_eq!(m.retry_after_ms, None);
+    }
+
+    #[test]
+    fn response_meta_parses_linear_millisecond_reset() {
+        let h = headers(&[
+            ("x-ratelimit-requests-remaining", "12"),
+            ("x-ratelimit-requests-reset", "1791460800000"), // epoch ms
+        ]);
+        let rate = ResponseMeta::from_headers(200, &h, at("2026-10-09T00:00:00Z")).rate.unwrap();
+        assert_eq!(rate.remaining, Some(12));
+        assert_eq!(rate.reset_at.as_deref(), Some("2026-10-08T12:00:00Z"));
+    }
+
+    #[test]
+    fn response_meta_parses_retry_after_seconds_and_http_date() {
+        let now = at("2026-10-09T12:00:00Z");
+        let secs = ResponseMeta::from_headers(429, &headers(&[("retry-after", "30")]), now);
+        assert_eq!(secs.retry_after_ms, Some(30_000));
+        let date = ResponseMeta::from_headers(
+            429,
+            &headers(&[("retry-after", "Fri, 09 Oct 2026 12:02:00 GMT")]),
+            now,
+        );
+        assert_eq!(date.retry_after_ms, Some(120_000));
+        // A date in the past means "now", not a negative wait.
+        let past = ResponseMeta::from_headers(
+            429,
+            &headers(&[("retry-after", "Fri, 09 Oct 2026 11:00:00 GMT")]),
+            now,
+        );
+        assert_eq!(past.retry_after_ms, Some(0));
+    }
+
+    #[test]
+    fn response_meta_without_headers_is_empty() {
+        let m = ResponseMeta::from_headers(304, &headers(&[]), at("2026-10-09T00:00:00Z"));
+        assert_eq!(m.status, 304);
+        assert!(m.rate.is_none());
+        assert!(m.validators().is_none());
+    }
+
+    #[test]
+    fn not_modified_read_has_no_body() {
+        let r = Read {
+            body: None,
+            meta: ResponseMeta::default(),
+        };
+        assert!(r.json("GitHub").is_err());
+    }
+
+    #[test]
+    fn fetch_error_serializes_flat_and_tagged() {
+        let e = FetchError::rate_limited("slow down", Some(30_000));
+        assert_eq!(
+            serde_json::to_value(&e).unwrap(),
+            serde_json::json!({"message": "slow down", "kind": "rateLimited", "retryAfterMs": 30000})
+        );
+        let http = FetchError {
+            message: "nope".into(),
+            kind: FetchErrorKind::Http { status: 500 },
+        };
+        assert_eq!(
+            serde_json::to_value(&http).unwrap(),
+            serde_json::json!({"message": "nope", "kind": "http", "status": 500})
+        );
+    }
+
+    #[test]
+    fn fetch_error_from_string_is_other() {
+        let e: FetchError = String::from("boom").into();
+        assert_eq!(e.kind, FetchErrorKind::Other);
+        assert_eq!(e.to_string(), "boom");
+        assert_eq!(
+            serde_json::to_value(&e).unwrap(),
+            serde_json::json!({"message": "boom", "kind": "other"})
+        );
+    }
+
+    #[test]
+    fn with_retry_after_fills_only_missing_waits() {
+        let e = FetchError::rate_limited("x", None).with_retry_after(Some(5_000));
+        assert_eq!(e.kind, FetchErrorKind::RateLimited { retry_after_ms: Some(5_000) });
+        let kept = FetchError::rate_limited("x", Some(1_000)).with_retry_after(Some(5_000));
+        assert_eq!(kept.kind, FetchErrorKind::RateLimited { retry_after_ms: Some(1_000) });
+        let other = FetchError::from("x").with_retry_after(Some(5_000));
+        assert_eq!(other.kind, FetchErrorKind::Other);
     }
 }

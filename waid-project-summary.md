@@ -934,14 +934,12 @@ errors and request bookkeeping (below). A feed's `poll: false` opts it out
   sidebar's old brand header); it opens `SettingsModal`, a centered dialog
   with a section nav on the left. **Appearance**: light/dark, sidebar list
   style, project-order reset, the **Brief layout** and **Widget detail**
-  segmented controls, accent, density. **Sync & GitHub**: *Sync on open*, the
-  opt-in *Auto-sync* toggle (with an ⓘ polling-rates tooltip), and the GitHub
-  token. **Gmail**: the **bring-your-own Google OAuth client**
   segmented controls, the **Widget opacity** slider (30–100%, with an inline
   mock-panel preview over a desktop-like backdrop since the widget itself is
   never on screen while Settings is open; saved on release), accent, density.
-  **Sync & GitHub**: auto-sync on open and the GitHub token. **Gmail**: the
-  **bring-your-own Google OAuth client**
+  **Sync & GitHub**: *Sync on open*, the opt-in *Auto-sync* toggle (with an ⓘ
+  polling-rates tooltip) and its dormant-after-days input, and the GitHub
+  token. **Gmail**: the **bring-your-own Google OAuth client**
   (`gmail.client_id` / `gmail.client_secret` in the keyring): save / clear,
   gated so Connect only works once a client is stored. **AI synthesis**: the
   LLM provider, Anthropic key, and OpenAI-compatible endpoint (URL, model,

@@ -365,6 +365,9 @@ class AutoSync {
         if (!this.timer) break;
         if (prev === f.domain) await sleep(GAP_MS);
         prev = f.domain;
+        // Selection reserved the domain; restamp at dispatch so `minGapMs` runs
+        // from the real request, not from a pick made before slower fetches.
+        this.lastDomainPoll.set(f.domain, Date.now());
         this.lastAttempt.set(f.key, Date.now());
         this.jitters.delete(f.key); // fresh jitter for the next cycle
         const maxAge = Math.min(this.interval(f) / 2, POLL_MAX_AGE_CAP_MS);

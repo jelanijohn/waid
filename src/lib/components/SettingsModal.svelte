@@ -42,6 +42,9 @@
 
   type Section = "appearance" | "sync" | "gmail" | "ai";
   let section = $state<Section>("appearance");
+  // Auto-sync's polling-rates disclosure (the ⓘ next to the toggle).
+  let showRates = $state(false);
+  let ratesText = $derived(pollingRatesSummary(settings.dormantAfterDays, Object.values(autosync.domains)));
 
   const THEMES: { value: boolean; label: string; icon: string }[] = [
     { value: false, label: "Light", icon: "light_mode" },
@@ -659,37 +662,46 @@
               </span>
             </button>
 
-            <button
-              class="flex w-full max-w-[340px] items-center justify-between gap-2 text-left"
-              onclick={() => autosync.setEnabled(!settings.autoSyncFeeds)}
-              aria-pressed={settings.autoSyncFeeds}
-            >
-              <span class="text-[12px] text-[var(--fg2)]">
-                Auto-sync
-                <!-- Native title tooltip with the polling rates; the icon never
-                     flips the switch. Text comes from the scheduler's constants. -->
-                <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-                <span
+            <!-- The polling-rates button sits beside the switch, not inside it, so
+                 it never flips the setting; the labels still do. Text comes from
+                 the scheduler's constants. -->
+            <div class="flex w-full max-w-[340px] items-center justify-between gap-2">
+              <div class="text-[12px] text-[var(--fg2)]">
+                <label for="autosync-toggle" class="cursor-pointer">Auto-sync</label>
+                <button
+                  type="button"
                   class="ml-[3px] inline-flex translate-y-[2px] cursor-help text-[var(--fg3)] hover:text-[var(--fg)]"
-                  title={pollingRatesSummary(settings.dormantAfterDays, Object.values(autosync.domains))}
+                  title={ratesText}
                   aria-label="Polling rates"
-                  tabindex="0"
-                  onclick={(e) => e.stopPropagation()}
+                  aria-expanded={showRates}
+                  aria-controls="autosync-rates"
+                  onclick={() => (showRates = !showRates)}
                 >
                   <Icon name="info" size={12} />
-                </span>
-                <span class="block text-[10.5px] text-[var(--fg3)]">Check connected feeds in the background and mark new items</span>
-              </span>
-              <span
+                </button>
+                <label for="autosync-toggle" class="block cursor-pointer text-[10.5px] text-[var(--fg3)]">Check connected feeds in the background and mark new items</label>
+              </div>
+              <button
+                id="autosync-toggle"
                 class="relative h-[18px] w-[30px] shrink-0 rounded-full transition-colors"
                 style="background: {settings.autoSyncFeeds ? 'var(--accent)' : 'var(--border)'};"
+                onclick={() => autosync.setEnabled(!settings.autoSyncFeeds)}
+                aria-label="Auto-sync"
+                aria-pressed={settings.autoSyncFeeds}
               >
                 <span
                   class="absolute top-[2px] h-[14px] w-[14px] rounded-full bg-white transition-[left]"
                   style="left: {settings.autoSyncFeeds ? '14px' : '2px'};"
                 ></span>
-              </span>
-            </button>
+              </button>
+            </div>
+            <p
+              id="autosync-rates"
+              class="mt-1.5 max-w-[340px] whitespace-pre-line text-[10.5px] leading-[1.5] text-[var(--fg3)]"
+              hidden={!showRates}
+            >
+              {ratesText}
+            </p>
 
             <label class="mt-2.5 flex w-full max-w-[340px] items-center justify-between gap-2">
               <span class="text-[12px] text-[var(--fg2)]">

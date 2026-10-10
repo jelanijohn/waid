@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from "svelte";
   import type { Brief, BriefIntegration, IntegrationFetch, IntegrationItem } from "$lib/types";
-  import { integrations } from "$lib/stores/integrations.svelte";
+  import { integrations, type Highlights } from "$lib/stores/integrations.svelte";
   import { projects } from "$lib/stores/projects.svelte";
   import { widget } from "$lib/stores/widget.svelte";
   import { autosync } from "$lib/stores/autosync.svelte";
@@ -80,16 +80,15 @@
   // panel remounts per brief, so `highlight` resets on its own). Gated on
   // dashboard mode: in widget mode the dashboard stays mounted but hidden, and
   // a hidden panel must not clear the badge the widget is showing.
-  let highlight = $state<Set<string>>(new Set());
+  let highlight = $state<Highlights>(new Map());
   $effect(() => {
     if (widget.mode !== "dashboard" || integrations.freshCount(brief.path) === 0) return;
     untrack(() => {
-      const taken = integrations.takeFresh(brief.path);
-      if (taken.length) highlight = new Set([...highlight, ...taken]);
+      highlight = integrations.takeFresh(brief.path, highlight);
     });
   });
   function isNew(ig: BriefIntegration, item: IntegrationItem): boolean {
-    return highlight.size > 0 && highlight.has(integrations.fingerprint(ig.kind, item));
+    return integrations.isHighlighted(highlight, brief.path, ig, item);
   }
   function newCount(ig: BriefIntegration, f: IntegrationFetch | null | undefined): number {
     if (!highlight.size || !f) return 0;

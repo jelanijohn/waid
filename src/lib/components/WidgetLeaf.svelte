@@ -6,7 +6,7 @@
   import { onMount, untrack } from "svelte";
   import type { Brief, BriefIntegration, IntegrationItem } from "$lib/types";
   import { projects, isSyncableBrief } from "$lib/stores/projects.svelte";
-  import { integrations } from "$lib/stores/integrations.svelte";
+  import { integrations, type Highlights } from "$lib/stores/integrations.svelte";
   import { session } from "$lib/stores/session.svelte";
   import { toasts } from "$lib/stores/toasts.svelte";
   import { widget } from "$lib/stores/widget.svelte";
@@ -40,16 +40,15 @@
 
   // Auto-sync: a leaf is only mounted while open, so the brief's new items are
   // in front of the user — mark them seen and keep them highlighted here.
-  let highlight = $state<Set<string>>(new Set());
+  let highlight = $state<Highlights>(new Map());
   $effect(() => {
     if (integrations.freshCount(brief.path) === 0) return;
     untrack(() => {
-      const taken = integrations.takeFresh(brief.path);
-      if (taken.length) highlight = new Set([...highlight, ...taken]);
+      highlight = integrations.takeFresh(brief.path, highlight);
     });
   });
   function isNew(ig: BriefIntegration, item: IntegrationItem): boolean {
-    return highlight.size > 0 && highlight.has(integrations.fingerprint(ig.kind, item));
+    return integrations.isHighlighted(highlight, brief.path, ig, item);
   }
   function newCount(ig: BriefIntegration): number {
     if (!highlight.size) return 0;

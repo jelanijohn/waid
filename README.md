@@ -101,7 +101,8 @@ Full frontmatter reference (webhook headers, `{{secret}}`, app-owned regions):
   counts, launch chips, and NeuroSkill session control — inline under the row
   or as a side leaf (the *Widget detail* setting). Quick capture goes to the
   roster's own field; *Expand* or *Open brief* returns to the dashboard. The
-  widget remembers where you left it.
+  widget remembers where you left it, and the *Widget opacity* setting lets
+  the desktop show through it (30–100%, solid by default).
 - **Brief sync** — pull open PRs/issues, last push, CI, and latest release
   from a brief's GitHub link into a managed `## Activity` block.
   Deterministic; your prose is never touched.

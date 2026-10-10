@@ -133,6 +133,38 @@ body {
   font-variation-settings: "opsz" 20, "wght" 400, "FILL" 1, "GRAD" 0;
 }
 
+/* Range slider (Settings → Widget opacity): accent thumb on a hairline track.
+   WebKit pseudo-elements only — that's every webview WAID runs in. */
+.range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--border);
+  outline: none;
+  cursor: pointer;
+}
+.range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+.range:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+/* Backdrop for the Widget opacity preview: a busy, desktop-like gradient so
+   the mock panel's transparency actually reads (a flat --bg would hide it). */
+.opacity-preview {
+  background:
+    radial-gradient(circle at 20% 30%, color-mix(in srgb, var(--accent) 55%, transparent), transparent 45%),
+    radial-gradient(circle at 80% 70%, rgba(236, 120, 90, 0.6), transparent 45%),
+    linear-gradient(135deg, #5b7cfa, #2bb3a0 50%, #f2c14e);
+}
+
 /* =========================================================================
  * Buttons — Mercury-restraint: 1px hairline, accent only on the primary.
  * ========================================================================= */

@@ -20,6 +20,17 @@ export const ACCENTS = ["#1E88E5", "#40A87E", "#6366F1", "#E57373"] as const;
 export const RAIL_WIDTH_DEFAULT = 320;
 export const RAIL_WIDTH_MIN = 280;
 
+/** Widget-mode opacity floor: the slider's minimum and the clamp. Below this
+ *  the roster goes unreadable and effectively un-clickable. */
+export const WIDGET_OPACITY_MIN = 0.3;
+
+/** Clamp any value into the legal `[WIDGET_OPACITY_MIN, 1]` range; anything
+ *  non-numeric reads as fully opaque. */
+export function clampWidgetOpacity(v: unknown): number {
+  const n = typeof v === "number" && Number.isFinite(v) ? v : 1;
+  return Math.min(1, Math.max(WIDGET_OPACITY_MIN, n));
+}
+
 const KEY = "waid-settings";
 const LEGACY_THEME_KEY = "waid-theme"; // pre-Tidewater: just "dark"/"light"
 
@@ -38,6 +49,10 @@ interface Persisted {
   dormantAfterDays: number;
   railWidth: number;
   widgetLeaf: WidgetLeaf;
+  /** Widget mode: whole-widget opacity, `WIDGET_OPACITY_MIN..1` (1 = opaque).
+   *  A constant, user-set value — never adaptive — applied as CSS `opacity`
+   *  on the widget panels; the dashboard is unaffected. */
+  widgetOpacity: number;
   /** Widget mode: where the roster's top-left was last left (logical px). */
   widgetPos: { x: number; y: number } | null;
 }
@@ -85,6 +100,7 @@ class Settings {
   dormantAfterDays = $state(DEFAULT_DORMANT_DAYS);
   railWidth = $state(RAIL_WIDTH_DEFAULT);
   widgetLeaf = $state<WidgetLeaf>("accordion");
+  widgetOpacity = $state(1);
   widgetPos = $state<{ x: number; y: number } | null>(null);
 
   /** Resolve saved prefs (or sensible defaults) and apply the dark class. */
@@ -114,6 +130,7 @@ class Settings {
         ? Math.max(RAIL_WIDTH_MIN, Math.round(saved.railWidth))
         : RAIL_WIDTH_DEFAULT;
     this.widgetLeaf = saved.widgetLeaf === "side" ? "side" : "accordion";
+    this.widgetOpacity = clampWidgetOpacity(saved.widgetOpacity);
     this.widgetPos = validPos(saved.widgetPos);
     applyDark(this.dark);
     applyAccent(this.accent);
@@ -132,6 +149,7 @@ class Settings {
       dormantAfterDays: this.dormantAfterDays,
       railWidth: this.railWidth,
       widgetLeaf: this.widgetLeaf,
+      widgetOpacity: this.widgetOpacity,
       widgetPos: this.widgetPos,
     };
     localStorage.setItem(KEY, JSON.stringify(data));
@@ -198,6 +216,14 @@ class Settings {
   setWidgetLeaf(leaf: WidgetLeaf): void {
     this.widgetLeaf = leaf;
     this.persist();
+  }
+
+  /** `save = false` while dragging the slider — state updates live (the
+   *  Settings preview follows it; the widget itself can't be on screen while
+   *  Settings is open), localStorage is written once on release. */
+  setWidgetOpacity(v: number, save = true): void {
+    this.widgetOpacity = clampWidgetOpacity(v);
+    if (save) this.persist();
   }
 
   setWidgetPos(pos: { x: number; y: number } | null): void {

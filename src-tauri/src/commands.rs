@@ -4564,21 +4564,23 @@ impl FeedCache {
         self.trim();
     }
 
-    /// A 304 confirmed the entry: restamp it and hand back its items.
+    /// A 304 confirmed the entry: restamp it and hand back its items and rate
+    /// info. A 304 that omits rate headers keeps the stored ones, so a server
+    /// poll floor (`X-Poll-Interval`) survives it.
     fn revalidate(
         &mut self,
         key: &CacheKey,
         now: std::time::Instant,
         fetched_at: &str,
         rate: Option<RateInfo>,
-    ) -> Option<Vec<IntegrationItem>> {
+    ) -> Option<(Vec<IntegrationItem>, Option<RateInfo>)> {
         let e = self.entries.get_mut(key)?;
         e.stored_at = now;
         e.fetched_at = fetched_at.to_string();
         if rate.is_some() {
             e.rate = rate;
         }
-        Some(e.items.clone())
+        Some((e.items.clone(), e.rate.clone()))
     }
 
     fn aux_get(&self, cred: &str, tag: &'static str, ttl: Duration, now: std::time::Instant) -> Option<&serde_json::Value> {
@@ -4698,10 +4700,10 @@ async fn fetch_with_cache_inner(
     let mut extra_cost = 0;
     let outcome = match provider::fetch(conn, sel, &token, &ctx).await? {
         FetchOutcome::NotModified { cost, rate } => {
-            let items = key
+            let cached = key
                 .as_ref()
                 .and_then(|k| state.lock().revalidate(k, std::time::Instant::now(), &fetched_at, rate.clone()));
-            if let Some(items) = items {
+            if let Some((items, rate)) = cached {
                 return Ok(IntegrationFetch::new(
                     items,
                     fetched_at,
@@ -6648,10 +6650,25 @@ mod tests {
         assert_eq!(cache.validators(&key).and_then(|v| v.etag.as_deref()), Some("\"v1\""));
 
         // A 304 restamps the entry, including its reported fetch time.
-        let items = cache.revalidate(&key, later, "2026-01-01T00:00:30Z", None).unwrap();
+        let (items, _) = cache.revalidate(&key, later, "2026-01-01T00:00:30Z", None).unwrap();
         assert_eq!(items.len(), 2);
         let hit = cache.get_fresh(&key, Duration::from_secs(10), later).unwrap();
         assert_eq!(hit.fetched_at, "2026-01-01T00:00:30Z");
+    }
+
+    #[test]
+    fn revalidate_keeps_the_stored_poll_floor() {
+        let t0 = std::time::Instant::now();
+        let mut cache = FeedCache::with_cap(8);
+        let key = CacheKey::new("abcd1234", &conn(provider::Provider::Github), &sel("notifications", None));
+        let floor = RateInfo {
+            min_interval_ms: Some(60_000),
+            ..Default::default()
+        };
+        cache.put(key.clone(), CacheEntry { rate: Some(floor), ..entry(1, t0) });
+        // A 304 without rate headers hands back the stored X-Poll-Interval.
+        let (_, rate) = cache.revalidate(&key, t0, "2026-01-01T00:01:00Z", None).unwrap();
+        assert_eq!(rate.and_then(|r| r.min_interval_ms), Some(60_000));
     }
 
     #[test]

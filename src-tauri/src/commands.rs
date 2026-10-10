@@ -4503,6 +4503,9 @@ struct CacheEntry {
     items: Vec<IntegrationItem>,
     validators: Option<Validators>,
     stored_at: std::time::Instant,
+    /// RFC3339 time of the request that produced (or last revalidated) the
+    /// items — what a cache hit reports as its `fetchedAt`.
+    fetched_at: String,
     rate: Option<RateInfo>,
 }
 
@@ -4550,10 +4553,12 @@ impl FeedCache {
         &mut self,
         key: &CacheKey,
         now: std::time::Instant,
+        fetched_at: &str,
         rate: Option<RateInfo>,
     ) -> Option<Vec<IntegrationItem>> {
         let e = self.entries.get_mut(key)?;
         e.stored_at = now;
+        e.fetched_at = fetched_at.to_string();
         if rate.is_some() {
             e.rate = rate;
         }
@@ -4657,7 +4662,7 @@ async fn fetch_with_cache_inner(
             if let Some(hit) = cache.get_fresh(key, max_age, now) {
                 return Ok(IntegrationFetch::new(
                     hit.items.clone(),
-                    fetched_at,
+                    hit.fetched_at.clone(),
                     Some(cred.clone()),
                     0,
                     ServedFrom::Cache,
@@ -4679,7 +4684,7 @@ async fn fetch_with_cache_inner(
         FetchOutcome::NotModified { cost, rate } => {
             let items = key
                 .as_ref()
-                .and_then(|k| state.lock().revalidate(k, std::time::Instant::now(), rate.clone()));
+                .and_then(|k| state.lock().revalidate(k, std::time::Instant::now(), &fetched_at, rate.clone()));
             if let Some(items) = items {
                 return Ok(IntegrationFetch::new(
                     items,
@@ -4723,6 +4728,7 @@ async fn fetch_with_cache_inner(
                 items: items.clone(),
                 validators,
                 stored_at: now,
+                fetched_at: fetched_at.clone(),
                 rate: rate.clone(),
             },
         );
@@ -6588,6 +6594,7 @@ mod tests {
                 last_modified: None,
             }),
             stored_at: at,
+            fetched_at: "2026-01-01T00:00:00Z".into(),
             rate: None,
         }
     }
@@ -6600,16 +6607,18 @@ mod tests {
         cache.put(key.clone(), entry(2, t0));
 
         let later = t0 + Duration::from_secs(30);
-        assert!(cache.get_fresh(&key, Duration::from_secs(60), later).is_some());
+        let hit = cache.get_fresh(&key, Duration::from_secs(60), later).unwrap();
+        assert_eq!(hit.fetched_at, "2026-01-01T00:00:00Z", "a hit keeps the original fetch time");
         assert!(cache.get_fresh(&key, Duration::from_secs(10), later).is_none(), "too old");
         assert!(cache.get_fresh(&key, Duration::ZERO, t0).is_none(), "max age 0 never hits");
         // Validators survive regardless of age, so a forced refresh is still conditional.
         assert_eq!(cache.validators(&key).and_then(|v| v.etag.as_deref()), Some("\"v1\""));
 
-        // A 304 restamps the entry.
-        let items = cache.revalidate(&key, later, None).unwrap();
+        // A 304 restamps the entry, including its reported fetch time.
+        let items = cache.revalidate(&key, later, "2026-01-01T00:00:30Z", None).unwrap();
         assert_eq!(items.len(), 2);
-        assert!(cache.get_fresh(&key, Duration::from_secs(10), later).is_some());
+        let hit = cache.get_fresh(&key, Duration::from_secs(10), later).unwrap();
+        assert_eq!(hit.fetched_at, "2026-01-01T00:00:30Z");
     }
 
     #[test]

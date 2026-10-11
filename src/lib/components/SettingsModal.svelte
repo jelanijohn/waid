@@ -26,6 +26,8 @@
     type WidgetLeaf,
     WIDGET_OPACITY_MIN,
   } from "$lib/stores/settings.svelte";
+  import { autosync } from "$lib/stores/autosync.svelte";
+  import { pollingRatesSummary, DORMANT_DAYS_MIN, DORMANT_DAYS_MAX } from "$lib/feedSync";
   import Icon from "./Icon.svelte";
   import CredentialHelp from "./CredentialHelp.svelte";
 
@@ -40,6 +42,9 @@
 
   type Section = "appearance" | "sync" | "gmail" | "ai";
   let section = $state<Section>("appearance");
+  // Auto-sync's polling-rates disclosure (the ⓘ next to the toggle).
+  let showRates = $state(false);
+  let ratesText = $derived(pollingRatesSummary(settings.dormantAfterDays, Object.values(autosync.domains)));
 
   const THEMES: { value: boolean; label: string; icon: string }[] = [
     { value: false, label: "Light", icon: "light_mode" },
@@ -638,10 +643,14 @@
               Sync
             </div>
             <button
-              class="flex w-full max-w-[340px] items-center justify-between gap-2 text-left"
+              class="mb-3 flex w-full max-w-[340px] items-center justify-between gap-2 text-left"
               onclick={() => settings.setAutoSyncOnOpen(!settings.autoSyncOnOpen)}
+              aria-pressed={settings.autoSyncOnOpen}
             >
-              <span class="text-[12px] text-[var(--fg2)]">Auto-sync on open</span>
+              <span class="text-[12px] text-[var(--fg2)]">
+                Sync on open
+                <span class="block text-[10.5px] text-[var(--fg3)]">Refresh a brief's Activity block when you open it</span>
+              </span>
               <span
                 class="relative h-[18px] w-[30px] shrink-0 rounded-full transition-colors"
                 style="background: {settings.autoSyncOnOpen ? 'var(--accent)' : 'var(--border)'};"
@@ -652,6 +661,71 @@
                 ></span>
               </span>
             </button>
+
+            <!-- The polling-rates button sits beside the switch, not inside it, so
+                 it never flips the setting; the labels still do. Text comes from
+                 the scheduler's constants. -->
+            <div class="flex w-full max-w-[340px] items-center justify-between gap-2">
+              <div class="text-[12px] text-[var(--fg2)]">
+                <label for="autosync-toggle" class="cursor-pointer">Auto-sync</label>
+                <button
+                  type="button"
+                  class="ml-[3px] inline-flex translate-y-[2px] cursor-help text-[var(--fg3)] hover:text-[var(--fg)]"
+                  title={ratesText}
+                  aria-label="Polling rates"
+                  aria-expanded={showRates}
+                  aria-controls="autosync-rates"
+                  onclick={() => (showRates = !showRates)}
+                >
+                  <Icon name="info" size={12} />
+                </button>
+                <label for="autosync-toggle" class="block cursor-pointer text-[10.5px] text-[var(--fg3)]">Check connected feeds in the background and mark new items</label>
+              </div>
+              <button
+                id="autosync-toggle"
+                class="relative h-[18px] w-[30px] shrink-0 rounded-full transition-colors"
+                style="background: {settings.autoSyncFeeds ? 'var(--accent)' : 'var(--border)'};"
+                onclick={() => autosync.setEnabled(!settings.autoSyncFeeds)}
+                aria-label="Auto-sync"
+                aria-pressed={settings.autoSyncFeeds}
+              >
+                <span
+                  class="absolute top-[2px] h-[14px] w-[14px] rounded-full bg-white transition-[left]"
+                  style="left: {settings.autoSyncFeeds ? '14px' : '2px'};"
+                ></span>
+              </button>
+            </div>
+            <p
+              id="autosync-rates"
+              class="mt-1.5 max-w-[340px] whitespace-pre-line text-[10.5px] leading-[1.5] text-[var(--fg3)]"
+              hidden={!showRates}
+            >
+              {ratesText}
+            </p>
+
+            <label class="mt-2.5 flex w-full max-w-[340px] items-center justify-between gap-2">
+              <span class="text-[12px] text-[var(--fg2)]">
+                Dormant after
+                <span class="block text-[10.5px] text-[var(--fg3)]">Briefs you haven't opened for this long are checked every 30 min</span>
+              </span>
+              <span class="flex shrink-0 items-center gap-1.5 text-[12px] text-[var(--fg2)]">
+                <input
+                  class="w-[52px] rounded-md border px-2 py-1 text-right text-[12px] tabular-nums text-[var(--fg)] outline-none transition-colors focus:border-[var(--accent)]"
+                  style="background: var(--input-bg); border-color: var(--border);"
+                  type="number"
+                  min={DORMANT_DAYS_MIN}
+                  max={DORMANT_DAYS_MAX}
+                  step="1"
+                  value={settings.dormantAfterDays}
+                  aria-label="Dormant after days"
+                  onchange={(e) => {
+                    settings.setDormantAfterDays(Number(e.currentTarget.value));
+                    e.currentTarget.value = String(settings.dormantAfterDays);
+                  }}
+                />
+                {settings.dormantAfterDays === 1 ? "day" : "days"}
+              </span>
+            </label>
 
             <div
               class="mb-1.5 mt-4 flex max-w-[340px] items-center justify-between border-t pt-4 text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--fg3)]"

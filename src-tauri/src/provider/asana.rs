@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use super::{BriefIntegration, Connection, IntegrationItem};
+use super::{BriefIntegration, Connection, FetchCtx, FetchError, FetchOutcome, IntegrationItem};
 
 const BASE: &str = "https://app.asana.com/api/1.0";
 
@@ -19,14 +19,18 @@ pub async fn fetch(
     conn: &Connection,
     sel: &BriefIntegration,
     token: &str,
-) -> Result<Vec<IntegrationItem>, String> {
+    ctx: &FetchCtx<'_>,
+) -> Result<FetchOutcome, FetchError> {
     if sel.kind != "tasks" {
-        return Err(format!("Asana supports kind: tasks (got \"{}\").", sel.kind));
+        return Err(format!("Asana supports kind: tasks (got \"{}\").", sel.kind).into());
     }
     let client = super::http_client()?;
-    let workspace = match conn.account.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(w) => w.to_string(),
-        None => first_workspace(&client, token).await?,
+    // Pinned workspace, else the cached first-workspace lookup (aux), else ask.
+    let pinned = conn.account.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let cached = ctx.aux.and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+    let (workspace, looked_up) = match (pinned, cached) {
+        (Some(w), _) | (None, Some(w)) => (w.to_string(), false),
+        (None, None) => (first_workspace(&client, token).await?, true),
     };
     let max = sel.limit.unwrap_or(20).clamp(1, 100);
 
@@ -40,13 +44,18 @@ pub async fn fetch(
         .header(reqwest::header::ACCEPT, "application/json")
         .send()
         .await
-        .map_err(|e| format!("request failed: {e}"))?;
-    let json = super::read_json(resp, "Asana").await?;
+        .map_err(FetchError::network)?;
+    let read = super::read_response(resp, "Asana").await?;
+    let meta = read.meta.clone();
+    let json = read.json("Asana")?;
     let data = json
         .get("data")
         .and_then(|v| v.as_array())
         .ok_or("unexpected Asana response (no data)")?;
-    Ok(data.iter().map(map_task).collect())
+    let items = data.iter().map(map_task).collect();
+    Ok(FetchOutcome::fresh(items, 1 + looked_up as u32)
+        .with_meta(&meta)
+        .with_aux(looked_up.then(|| serde_json::Value::String(workspace))))
 }
 
 pub async fn validate(_conn: &Connection, token: &str) -> Result<(), String> {
@@ -62,19 +71,19 @@ pub async fn validate(_conn: &Connection, token: &str) -> Result<(), String> {
 
 /// First workspace gid for the token's user (used when the connection doesn't
 /// pin one).
-async fn first_workspace(client: &reqwest::Client, token: &str) -> Result<String, String> {
+async fn first_workspace(client: &reqwest::Client, token: &str) -> Result<String, FetchError> {
     let resp = client
         .get(format!("{BASE}/workspaces"))
         .bearer_auth(token)
         .header(reqwest::header::ACCEPT, "application/json")
         .send()
         .await
-        .map_err(|e| format!("request failed: {e}"))?;
-    let json = super::read_json(resp, "Asana").await?;
+        .map_err(FetchError::network)?;
+    let json = super::read_response(resp, "Asana").await?.json("Asana")?;
     json.pointer("/data/0/gid")
         .and_then(|v| v.as_str())
         .map(String::from)
-        .ok_or_else(|| "Asana account has no workspaces.".to_string())
+        .ok_or_else(|| "Asana account has no workspaces.".into())
 }
 
 /// Map one Asana task into a normalized item. Pure — fixture-tested.

@@ -28,7 +28,7 @@
 
 use std::collections::BTreeMap;
 
-use super::{BriefIntegration, Connection, IntegrationItem};
+use super::{BriefIntegration, Connection, FetchCtx, FetchError, FetchOutcome, IntegrationItem, Validators};
 
 const DEFAULT_API: &str = "https://api.github.com";
 
@@ -48,7 +48,7 @@ fn api_base(conn: &Connection) -> String {
 
 /// Whether a `base_url` is really public github.com (or its API host) — in which
 /// case there's no Enterprise instance and the default API base applies.
-fn is_public_github(base: &str) -> bool {
+pub(crate) fn is_public_github(base: &str) -> bool {
     let host = base
         .trim()
         .trim_start_matches("https://")
@@ -67,61 +67,107 @@ pub async fn fetch(
     conn: &Connection,
     sel: &BriefIntegration,
     token: &str,
-) -> Result<Vec<IntegrationItem>, String> {
+    ctx: &FetchCtx<'_>,
+) -> Result<FetchOutcome, FetchError> {
     let client = super::http_client()?;
     let base = api_base(conn);
     let max = sel.limit.unwrap_or(20).clamp(1, 100);
     // Every GitHub feed must name its repo(s) — there is no global fallback.
     let override_repos = repo_override(conn);
+    // Every kind is one request, sent conditionally when the cache has
+    // validators: an unchanged feed answers 304, which costs no rate limit.
+    let v = ctx.validators;
 
     match sel.kind.as_str() {
         "tasks" => {
             let repos = require_repos(&override_repos)?;
             let url = format!("{base}/issues?filter=assigned&state=open&per_page={max}");
-            let json = get(&client, &url, token).await?;
+            let read = super::read_response(send(&client, &url, token, v).await?, "GitHub").await?;
+            let Some(json) = read.body else {
+                return Ok(not_modified(&read.meta));
+            };
             let arr = json
                 .as_array()
                 .ok_or("unexpected GitHub response (expected an array)")?;
             let mut items: Vec<IntegrationItem> = arr.iter().map(map_issue).collect();
             // The assigned-issues endpoint is cross-repo; keep only this project's.
             retain_by_repos(&mut items, repos);
-            Ok(items)
+            Ok(FetchOutcome::fresh(items, 1).with_meta(&read.meta))
         }
         "notifications" => {
             let repos = require_repos(&override_repos)?;
             let url = format!("{base}/notifications?per_page={max}");
-            let resp = send(&client, &url, token).await?;
+            let resp = send(&client, &url, token, v).await?;
             // Fine-grained PATs can't reach this endpoint at all (403); steer the
             // user to a classic token rather than the generic "bad credentials".
+            // A 403 that carries rate-limit headers is a limit, not a token issue.
             if resp.status() == reqwest::StatusCode::FORBIDDEN {
-                return Err("GitHub notifications need a classic personal access token \
-                    with the `notifications` scope — fine-grained tokens can't access \
-                    this endpoint."
-                    .to_string());
+                let meta = super::ResponseMeta::from_headers(403, resp.headers(), chrono::Utc::now());
+                let limited = meta.retry_after_ms.is_some()
+                    || meta.rate.as_ref().and_then(|r| r.remaining) == Some(0);
+                if !limited {
+                    return Err("GitHub notifications need a classic personal access token \
+                        with the `notifications` scope — fine-grained tokens can't access \
+                        this endpoint."
+                        .into());
+                }
             }
-            let json = super::read_json(resp, "GitHub").await?;
+            let read = super::read_response(resp, "GitHub").await?;
+            let Some(json) = read.body else {
+                return Ok(not_modified(&read.meta));
+            };
             let arr = json
                 .as_array()
                 .ok_or("unexpected GitHub response (expected an array)")?;
             let mut items: Vec<IntegrationItem> = arr.iter().map(map_notification).collect();
             retain_by_repos(&mut items, repos);
-            Ok(items)
+            Ok(FetchOutcome::fresh(items, 1).with_meta(&read.meta))
         }
         "pulls" => {
             // Search-issues items share the issue shape (html_url, state,
             // repository_url, pull_request, assignee), so map_issue applies.
             let q = resolve_scope(sel, "is:pr is:open author:@me", &override_repos)?;
-            let json = search(&client, &base, "issues", &q, max, token).await?;
-            Ok(search_items(&json)?.iter().map(map_issue).collect())
+            let read = search(&client, &base, "issues", &q, max, token, v).await?;
+            let Some(json) = read.body else {
+                return Ok(not_modified(&read.meta));
+            };
+            let items = search_items(&json)?.iter().map(map_issue).collect();
+            Ok(FetchOutcome::fresh(items, 1).with_meta(&read.meta))
         }
         "commits" => {
             let q = resolve_scope(sel, "author:@me", &override_repos)?;
-            let json = search(&client, &base, "commits", &q, max, token).await?;
-            Ok(search_items(&json)?.iter().map(map_commit).collect())
+            let read = search(&client, &base, "commits", &q, max, token, v).await?;
+            let Some(json) = read.body else {
+                return Ok(not_modified(&read.meta));
+            };
+            let items = search_items(&json)?.iter().map(map_commit).collect();
+            Ok(FetchOutcome::fresh(items, 1).with_meta(&read.meta))
         }
         other => Err(format!(
             "GitHub supports kind: tasks | notifications | pulls | commits (got \"{other}\")."
-        )),
+        )
+        .into()),
+    }
+}
+
+/// A 304: the cached items still stand. One request made.
+fn not_modified(meta: &super::ResponseMeta) -> FetchOutcome {
+    FetchOutcome::NotModified {
+        cost: 1,
+        rate: meta.rate.clone(),
+    }
+}
+
+/// Add `If-None-Match` / `If-Modified-Since` from the last response, if any.
+fn conditional(rb: reqwest::RequestBuilder, v: Option<&Validators>) -> reqwest::RequestBuilder {
+    let Some(v) = v else { return rb };
+    let rb = match &v.etag {
+        Some(etag) => rb.header(reqwest::header::IF_NONE_MATCH, etag),
+        None => rb,
+    };
+    match &v.last_modified {
+        Some(lm) => rb.header(reqwest::header::IF_MODIFIED_SINCE, lm),
+        None => rb,
     }
 }
 
@@ -129,7 +175,7 @@ pub async fn fetch(
 /// GitHub caps the `q` length, so a connection naming a long `repos` list can't
 /// have every one injected — we take the first (the intended setup is one repo,
 /// or a small handful, where this never bites).
-const MAX_INJECTED_REPOS: usize = 10;
+pub(crate) const MAX_INJECTED_REPOS: usize = 10;
 
 /// The error shown when a GitHub feed has no repo scope. Scoping is mandatory:
 /// without it, `pulls`/`commits` become global public searches across unrelated
@@ -242,7 +288,8 @@ fn query_or(sel: &BriefIntegration, default: &str) -> String {
 }
 
 /// GET a `/search/{path}` endpoint (`issues` | `commits`), letting reqwest
-/// URL-encode the query string. Returns the parsed `{ "items": [...] }` body.
+/// URL-encode the query string. The body (absent on a 304) is the
+/// `{ "items": [...] }` object.
 async fn search(
     client: &reqwest::Client,
     base: &str,
@@ -250,17 +297,16 @@ async fn search(
     q: &str,
     max: u32,
     token: &str,
-) -> Result<serde_json::Value, String> {
-    let resp = client
+    v: Option<&Validators>,
+) -> Result<super::Read, FetchError> {
+    let rb = client
         .get(format!("{base}/search/{path}"))
         .header(reqwest::header::USER_AGENT, "WAID")
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
         .bearer_auth(token)
-        .query(&[("q", q), ("per_page", &max.to_string())])
-        .send()
-        .await
-        .map_err(|e| format!("request failed: {e}"))?;
-    super::read_json(resp, "GitHub").await
+        .query(&[("q", q), ("per_page", &max.to_string())]);
+    let resp = conditional(rb, v).send().await.map_err(FetchError::network)?;
+    super::read_response(resp, "GitHub").await
 }
 
 /// The `items` array of a search response (search endpoints wrap results in an
@@ -278,21 +324,21 @@ pub async fn validate(conn: &Connection, token: &str) -> Result<(), String> {
         .map(|_| ())
 }
 
-/// GET a GitHub API URL with the required headers + bearer token, returning the
-/// raw response so callers can inspect the status before parsing.
+/// GET a GitHub API URL with the required headers + bearer token (and the
+/// conditional headers, when validators are given), returning the raw response
+/// so callers can inspect the status before parsing.
 async fn send(
     client: &reqwest::Client,
     url: &str,
     token: &str,
-) -> Result<reqwest::Response, String> {
-    client
+    v: Option<&Validators>,
+) -> Result<reqwest::Response, FetchError> {
+    let rb = client
         .get(url)
         .header(reqwest::header::USER_AGENT, "WAID")
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
-        .bearer_auth(token)
-        .send()
-        .await
-        .map_err(|e| format!("request failed: {e}"))
+        .bearer_auth(token);
+    conditional(rb, v).send().await.map_err(FetchError::network)
 }
 
 /// GET and parse a GitHub API URL as JSON, mapping non-2xx via `read_json`.
@@ -301,7 +347,7 @@ async fn get(
     url: &str,
     token: &str,
 ) -> Result<serde_json::Value, String> {
-    let resp = send(client, url, token).await?;
+    let resp = send(client, url, token, None).await.map_err(|e| e.message)?;
     super::read_json(resp, "GitHub").await
 }
 
@@ -647,6 +693,7 @@ mod tests {
             kind: kind.into(),
             query: query.map(String::from),
             limit: None,
+            poll: None,
         }
     }
 

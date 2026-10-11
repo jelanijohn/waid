@@ -255,6 +255,7 @@ interface BriefIntegration {     // a brief's selector referencing one of its co
   kind: string;                  // "tasks" | "notifications" | "pulls" | "commits" (GitHub) | "page" (Notion) | "email" (Gmail) | "messages" (Slack) | "comments" (Figma) | "mind" (NeuroSkill); defaults to tasks
   query?: string | null;         // part of the feed's identity (Gmail: a required search string)
   limit?: number | null;
+  poll?: boolean | null;         // false = opted out of background auto-sync; absent = on
 }
 interface IntegrationItem {      // normalized task/notification from any provider
   id: string; title: string; url: string;
@@ -269,7 +270,17 @@ interface IntegrationSummary {   // local (no-LLM) rollup
   overdue?: number | null;       // null in v1 (no due-date signal)
   updatedRecently?: number | null; // items updated within the last 7 days
 }
-interface IntegrationFetch { items: IntegrationItem[]; fetchedAt: string; summary: IntegrationSummary; }
+interface RateInfo { remaining?: number | null; resetAt?: string | null; minIntervalMs?: number | null; }
+type ServedFrom = "network" | "cache" | "notModified";
+interface IntegrationFetch {
+  items: IntegrationItem[];
+  fetchedAt: string;             // when the provider last answered (a cache hit keeps the original time)
+  summary: IntegrationSummary;
+  credentialId?: string | null;  // session-salted hash; feeds sharing a token share it
+  cost?: number;                 // requests actually made (0 for a cache hit)
+  servedFrom?: ServedFrom;
+  rate?: RateInfo | null;        // provider-reported rate-limit state
+}
 ```
 
 **Feed identity is `(connection, kind, query)`.** A single connection can host
@@ -399,8 +410,9 @@ waid/
 │       │                         #   QuickCapture, StatusPill, Toasts, Icon, BrandMark,
 │       │                         #   CredentialHelp, IntegrationPanel, IntegrationsModal,
 │       │                         #   WebhooksModal, BriefingModal, BootstrapModal, ProviderTile,
-│       │                         #   ResizeHandles, WidgetShell, WidgetRow, WidgetLeaf
-│       ├── stores/               # projects / settings / toasts / integrations / session / widget
+│       │                         #   ResizeHandles, WidgetShell, WidgetRow, WidgetLeaf, FreshDot
+│       ├── stores/               # projects / settings / toasts / integrations / session / widget /
+│       │                         #   autosync
 │       │                         #   (all .svelte.ts runes)
 │       ├── tauri.ts              # wrappers around invoke / plugins / secrets / PM + bootstrap commands
 │       ├── credentialHelp.ts     # per-credential setup steps + scopes + docs links (CredentialHelp data)
@@ -414,6 +426,7 @@ waid/
 │       ├── providers.ts          # PM-provider display metadata (brand/monogram/blurb/form needs + kind helpers)
 │       ├── actions.ts            # launch link / fire webhook / sync-all actions shared by dashboard + widget
 │       ├── widget.ts             # pure widget-mode text helpers (activity line, status tally, state excerpt)
+│       ├── feedSync.ts           # pure auto-sync core: tiers, kind floors, provider gaps, fingerprint/hash, tooltip text
 │       ├── widgetWindow.ts       # every window-API call widget mode makes (size, position, on-top, restore)
 │       └── time.ts               # relative-time helpers (relativeTime, compact shortAgo)
 ├── src-tauri/                    # Rust backend
@@ -797,11 +810,70 @@ On top of the local rollup, with a provider configured (`make_provider`):
 ### Caching (frontend)
 
 `stores/integrations.svelte.ts` keeps an in-memory cache keyed by
-`path + connection + kind + query` (and per-brief LLM digests). No disk
-persistence, no auto-polling: fetches are lazy on brief open and on manual
+`path + connection + kind + query` (and per-brief LLM digests). Fetched data is
+never persisted. By default fetches are lazy on brief open and on manual
 refresh, and the last good result is kept so switching briefs back doesn't
 refetch (and a failed refresh degrades to "stale + error" rather than going
 blank).
+
+### Auto-sync (opt-in background polling)
+
+The **Auto-sync** setting (`settings.autoSyncFeeds`, off by default; distinct
+from **Sync on open**, `autoSyncOnOpen`, which writes `## Activity`) turns on a
+**frontend** poller, `stores/autosync.svelte.ts`, started/stopped by one
+`$effect` in `+page.svelte`. It re-runs the existing `fetch_integration` through
+`integrations.poll` — a background fetch that never flips `loading`, never
+throws, never toasts, and records errors on the entry with the old data kept.
+No new Tauri command or dependency; the Rust side gained a feed cache, typed
+errors and request bookkeeping (below). A feed's `poll: false` opts it out
+(manual refresh only), toggled per feed in the integrations modal.
+
+- **Cadence is per brief, not per kind** (`lib/feedSync.ts`, pure): the
+  attention brief (dashboard selection; widget open leaf, else lead row) is
+  `focused` at 20 s, `active` / `blocked` / custom statuses 60 s, `paused`
+  10 min, briefs not opened for `dormantAfterDays` (Settings, default 3)
+  `dormant` at 30 min, `archived` never. Per-kind floors from provider rate
+  limits apply in every tier (`notifications` / `comments` 60 s, `email` /
+  `messages` 30 s, others 20 s; a server `X-Poll-Interval` replaces the floor).
+  Failures double the interval for the first five (at most ×32, never past
+  1 h), so a failing feed keeps retrying on a steady slow cadence. 5 s tick,
+  ≤ 3 polls per tick, attention brief first, then comms kinds, then most
+  overdue. Kicked on window focus / online / visible; skipped while hidden or
+  offline. `mind` and `page` feeds are never polled.
+- **Budgets are per credential** — providers limit per token, so feeds pace by
+  domain = (budget class × `credentialId`). Each domain is a token bucket
+  (`BUDGET`: roughly half of each provider's published limit, GitHub search
+  separate from core) debited by the `cost` the backend reports, with a minimum
+  gap between two polls (`minGapMs`: 1 s for most classes, GitHub search 2 s,
+  Slack 3 s, Figma 15 s). When a domain's demand exceeds its budget the
+  non-focused feeds in it are stretched, never starved. A typed
+  `IntegrationFetchError` of kind `rateLimited` holds the domain for the
+  server's `Retry-After` (else 60 s), and a reported `remaining` under 10% of a
+  minute's budget holds it until `resetAt`.
+- **Backend feed cache** — `FeedState` (managed Tauri state, memory only)
+  keys responses by (credential id, provider, kind, query, limit, scope), so
+  briefs sharing a token and a query share one request. A hit within
+  `max_age_ms` costs 0 and keeps its original `fetchedAt`; GitHub polls replay
+  ETag / Last-Modified so an unchanged feed is a free 304; small per-credential
+  lookups (Slack users, Figma handle, Asana workspace, Notion data source) are
+  reused. The credential id is a per-launch salted hash, never the token.
+- **"New" items** — each item gets a hashed fingerprint (comms kinds
+  `url|updatedAt`, others `url` only, so your own task edits aren't new; Gmail
+  `read` is never new). A feed's first fetch is a silent baseline; afterwards
+  unseen fingerprints are **fresh** until the panel or widget leaf **takes**
+  them (`takeFresh`), which marks them seen and highlights those rows for the
+  visit — per feed, so an item shared by two overlapping selectors is only new
+  in the one it was fresh in. The dashboard panel only takes in dashboard
+  mode, so the hidden panel can't clear the widget's badge. Seen hashes (only
+  hashes, keyed by a hash of the feed key, ≤ 300 per feed) persist in
+  `localStorage` `waid-feed-seen`;
+  turning the setting off deletes it.
+- **Where it shows** — `FreshDot.svelte` (6 px accent dot + count) on sidebar
+  rows (all three styles) and widget roster rows, a total in the resting
+  widget header, "· N new" on feed summary lines, and a dot on new rows.
+- The settings toggle's ⓘ tooltip is generated by `pollingRatesSummary()` from
+  the same tables, so UI and scheduler can't drift. Push (webhooks, Pub/Sub,
+  Slack Events) would need an inbound server, so it's polling by charter.
 
 ### UI
 
@@ -866,8 +938,9 @@ blank).
   segmented controls, the **Widget opacity** slider (30–100%, with an inline
   mock-panel preview over a desktop-like backdrop since the widget itself is
   never on screen while Settings is open; saved on release), accent, density.
-  **Sync & GitHub**: auto-sync on open and the GitHub token. **Gmail**: the
-  **bring-your-own Google OAuth client**
+  **Sync & GitHub**: *Sync on open*, the opt-in *Auto-sync* toggle (with an ⓘ
+  polling-rates tooltip) and its dormant-after-days input, and the GitHub
+  token. **Gmail**: the **bring-your-own Google OAuth client**
   (`gmail.client_id` / `gmail.client_secret` in the keyring): save / clear,
   gated so Connect only works once a client is stored. **AI synthesis**: the
   LLM provider, Anthropic key, and OpenAI-compatible endpoint (URL, model,
@@ -1044,6 +1117,10 @@ The visual layer has a named theme and shares branding with What's Next.
   rollup. One connection can host several feeds. Tokens live in the OS keyring;
   Gmail instead signs in via **Google OAuth** (read-only, metadata-only) with an
   account-scoped grant in the keyring. *(See §5.)*
+- **Auto-sync (opt-in)** — background polling of every non-archived brief's
+  feeds on a per-brief cadence (viewed brief ~20 s, active 60 s, paused
+  10 min), with "new" dots + counts in the sidebar, widget and feed panel.
+  Read-only and LLM-free; only hashes of seen items are stored. *(See §5.)*
 - **AI synthesis (optional)** — with a provider configured (local **Ollama**,
   **Anthropic**, or any **OpenAI-compatible** endpoint), Refresh also writes a `## Current State` summary and an
   `## Open Questions` inner block from the brief's links + Notion page text +

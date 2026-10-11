@@ -20,7 +20,10 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use crate::neuroskill;
-use crate::provider::{self, BriefIntegration, Connection, IntegrationFetch, IntegrationItem};
+use crate::provider::{
+    self, BriefIntegration, Connection, FetchCtx, FetchError, FetchOutcome, IntegrationFetch,
+    IntegrationItem, RateInfo, ServedFrom, Validators,
+};
 
 /// A link button rendered in the detail pane (opens in the default browser).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -2322,9 +2325,15 @@ pub async fn synthesize_all(app: AppHandle) -> Result<Vec<SyncOutcome>, String> 
 // item as DATA, never instructions (titles can carry injected text), and never
 // write to disk — the digest is display-only until the user snapshots it.
 
-/// Fetch one of a brief's integration selectors (token from the keyring). Shared
-/// by the per-selector command and the digest/briefing aggregators.
+/// How stale a cached feed the digest / morning briefing will accept, so a
+/// briefing across dozens of briefs reuses what auto-sync already fetched
+/// instead of bursting every provider's rate limit.
+const DIGEST_MAX_AGE: Duration = Duration::from_secs(300);
+
+/// Fetch one of a brief's integration selectors for the digest/briefing
+/// aggregators (token from the keyring, served from the feed cache when fresh).
 async fn fetch_brief_integration(
+    state: &FeedState,
     brief_path: &str,
     conns: &[Connection],
     sel: &BriefIntegration,
@@ -2333,9 +2342,9 @@ async fn fetch_brief_integration(
         .iter()
         .find(|c| c.id == sel.connection)
         .ok_or_else(|| format!("brief has no connection \"{}\"", sel.connection))?;
-    let token = resolve_connection_token(conn, brief_path).await?;
-    let fetched_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    provider::fetch(conn, sel, &token, fetched_at).await
+    fetch_with_cache(state, brief_path, conn, sel, DIGEST_MAX_AGE)
+        .await
+        .map_err(|e| e.message)
 }
 
 /// Render one normalized item as a compact bullet for an LLM prompt.
@@ -2429,6 +2438,7 @@ attention today, and keep it tight (a few sentences or short bullets).",
 #[tauri::command]
 pub async fn digest_integrations(app: AppHandle, path: String) -> Result<String, String> {
     let provider = make_provider(&app)?;
+    let feeds = app.state::<FeedState>();
 
     let p = PathBuf::from(&path);
     let raw = fs::read_to_string(&p).map_err(|e| format!("could not read {path}: {e}"))?;
@@ -2445,7 +2455,7 @@ pub async fn digest_integrations(app: AppHandle, path: String) -> Result<String,
         if sel.kind == "page" || sel.kind == "mind" {
             continue;
         }
-        if let Ok(fetch) = fetch_brief_integration(&path, &brief.connections, sel).await {
+        if let Ok(fetch) = fetch_brief_integration(&feeds, &path, &brief.connections, sel).await {
             sections.push((sel.clone(), fetch));
         }
     }
@@ -2466,6 +2476,7 @@ pulled from their project-management tools for ONE project.",
 #[tauri::command]
 pub async fn morning_briefing(app: AppHandle) -> Result<String, String> {
     let provider = make_provider(&app)?;
+    let feeds = app.state::<FeedState>();
 
     let dir = briefs_dir(&app)?;
     let mut briefs: Vec<Brief> = Vec::new();
@@ -2481,7 +2492,9 @@ pub async fn morning_briefing(app: AppHandle) -> Result<String, String> {
             if sel.kind == "page" || sel.kind == "mind" {
                 continue; // page (synthesis-only) and mind (body region) aren't items
             }
-            if let Ok(fetch) = fetch_brief_integration(&brief.path, &brief.connections, sel).await {
+            if let Ok(fetch) =
+                fetch_brief_integration(&feeds, &brief.path, &brief.connections, sel).await
+            {
                 sections.push((sel.clone(), fetch));
             }
         }
@@ -4150,6 +4163,7 @@ fn rewrite_brief_lists(
 /// adding a new connection. Returns the reparsed brief.
 #[tauri::command]
 pub fn save_brief_connection(
+    state: tauri::State<'_, FeedState>,
     path: String,
     mut connection: Connection,
     token: String,
@@ -4173,6 +4187,9 @@ pub fn save_brief_connection(
     } else if !exists {
         return Err("a token is required to add a connection".into());
     }
+    // A new token or changed metadata (host, repos, account) must not be served
+    // stale feeds from the old credential.
+    state.evict_connection(&path, &connection.id);
     match conns.iter_mut().find(|c| c.id == connection.id) {
         Some(existing) => *existing = connection,
         None => conns.push(connection),
@@ -4183,7 +4200,12 @@ pub fn save_brief_connection(
 /// Remove a connection from a brief: drop its metadata, any selectors that
 /// reference it, and its keyring token (best-effort, idempotent).
 #[tauri::command]
-pub fn delete_brief_connection(path: String, id: String) -> Result<Brief, String> {
+pub fn delete_brief_connection(
+    state: tauri::State<'_, FeedState>,
+    path: String,
+    id: String,
+) -> Result<Brief, String> {
+    state.evict_connection(&path, &id);
     let (conns, integs) = read_brief_lists(&path)?;
     let conns: Vec<Connection> = conns.into_iter().filter(|c| c.id != id).collect();
     let integs: Vec<BriefIntegration> =
@@ -4328,33 +4350,448 @@ pub async fn test_brief_connection(path: String, id: String) -> Result<(), Strin
     provider::validate(&conn, &token).await
 }
 
+// --- Feed cache + credential identity (auto-sync at scale) -----------------
+//
+// `FeedState` is managed Tauri state (in memory only, never disk). It holds a
+// per-process salt for credential ids and a response cache keyed by
+// (credential, provider, kind, query, limit, scope): briefs sharing a token and
+// a query share one request, GitHub polls replay ETag/Last-Modified so an
+// unchanged feed costs a free 304, and small per-credential lookups (Slack
+// users, Figma handle, Asana workspace, Notion data source) are reused. The
+// lock is never held across an `.await`; providers stay pure.
+
+/// Most cached feed responses kept; the oldest are dropped beyond this.
+const FEED_CACHE_CAP: usize = 256;
+
+pub struct FeedState {
+    salt: [u8; 32],
+    cache: std::sync::Mutex<FeedCache>,
+}
+
+impl FeedState {
+    pub fn new() -> Self {
+        let mut salt = [0u8; 32];
+        if getrandom::fill(&mut salt).is_err() {
+            // No OS entropy: the clock still makes ids differ per launch.
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or_default();
+            salt[..16].copy_from_slice(&nanos.to_le_bytes());
+        }
+        Self {
+            salt,
+            cache: std::sync::Mutex::new(FeedCache::with_cap(FEED_CACHE_CAP)),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, FeedCache> {
+        self.cache.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Forget everything cached for a brief's connection (token replaced,
+    /// metadata edited, connection removed).
+    pub fn evict_connection(&self, path: &str, id: &str) {
+        self.lock().evict_connection(path, id);
+    }
+}
+
+impl Default for FeedState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The host of a base URL (lowercased, no scheme/path); empty when unset.
+fn url_host(base: Option<&str>) -> String {
+    base.map(str::trim)
+        .unwrap_or_default()
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+}
+
+/// The host a connection's requests really go to, for credential identity and
+/// cache scope. GitHub ignores a `base_url` pointing at public GitHub (see
+/// `provider::github::api_base`), so that counts as the default host — the same
+/// PAT must share one budget however its base URL was typed.
+fn effective_host(conn: &Connection) -> String {
+    let base = conn.base_url.as_deref();
+    if conn.provider == provider::Provider::Github && base.is_some_and(provider::github::is_public_github) {
+        return String::new();
+    }
+    url_host(base)
+}
+
+/// What makes two connections the same credential for rate limiting: the Gmail
+/// account (one OAuth grant per address, however often its access token
+/// refreshes), otherwise the host + the secret itself. NeuroSkill has none.
+/// Never leaves the process — only its salted hash does.
+fn credential_identity(conn: &Connection, token: &str) -> Option<String> {
+    match conn.provider {
+        provider::Provider::Gmail => conn
+            .account
+            .as_deref()
+            .map(str::trim)
+            .filter(|a| !a.is_empty())
+            .map(str::to_ascii_lowercase),
+        provider::Provider::Neuroskill => None,
+        _ => (!token.is_empty())
+            .then(|| format!("{}|{}", effective_host(conn), token)),
+    }
+}
+
+/// First 8 hex of SHA-256(salt ‖ identity). The salt is per process and never
+/// persisted or logged, so the id says nothing about the token and changes
+/// every launch.
+fn credential_id(salt: &[u8; 32], identity: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(salt);
+    h.update(identity.as_bytes());
+    h.finalize()[..4].iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Connection fields that change a feed's result without changing its query:
+/// host, account (Asana workspace / Jira user) and the GitHub repo scope that
+/// `retain_by_repos` post-filters account-wide results with.
+fn cache_scope(conn: &Connection) -> String {
+    let mut repos: Vec<String> = conn
+        .repos
+        .iter()
+        .flatten()
+        .map(|r| r.trim().trim_matches('/').trim_end_matches(".git").to_ascii_lowercase())
+        .filter(|r| !r.is_empty())
+        .collect();
+    // Order doesn't matter while every repo fits in the search query; past the
+    // cap only the first few are sent, so the configured order is the feed.
+    if repos.len() <= provider::github::MAX_INJECTED_REPOS {
+        repos.sort();
+        repos.dedup();
+    }
+    format!(
+        "{}|{}|{}",
+        effective_host(conn),
+        conn.account.as_deref().map(str::trim).unwrap_or_default().to_ascii_lowercase(),
+        repos.join(",")
+    )
+}
+
+/// The cached auxiliary lookup a provider reuses, and how long it stays good.
+fn aux_spec(p: provider::Provider) -> Option<(&'static str, Duration)> {
+    const HOUR: Duration = Duration::from_secs(3_600);
+    match p {
+        provider::Provider::Slack => Some(("slack.users", HOUR)),
+        provider::Provider::Figma => Some(("figma.me", 24 * HOUR)),
+        provider::Provider::Asana => Some(("asana.workspace", 24 * HOUR)),
+        provider::Provider::Notion => Some(("notion.ds", 24 * HOUR)),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct CacheKey {
+    credential_id: String,
+    provider: provider::Provider,
+    kind: String,
+    query: Option<String>,
+    limit: Option<u32>,
+    scope: String,
+}
+
+impl CacheKey {
+    fn new(credential_id: &str, conn: &Connection, sel: &BriefIntegration) -> Self {
+        Self {
+            credential_id: credential_id.to_string(),
+            provider: conn.provider,
+            kind: sel.kind.clone(),
+            query: sel.query.as_deref().map(str::trim).filter(|q| !q.is_empty()).map(String::from),
+            limit: sel.limit,
+            scope: cache_scope(conn),
+        }
+    }
+}
+
+struct CacheEntry {
+    items: Vec<IntegrationItem>,
+    validators: Option<Validators>,
+    stored_at: std::time::Instant,
+    /// RFC3339 time of the request that produced (or last revalidated) the
+    /// items — what a cache hit reports as its `fetchedAt`.
+    fetched_at: String,
+    rate: Option<RateInfo>,
+}
+
+/// The response cache. Pure — every method takes `now`, so it's unit-tested
+/// without a clock.
+struct FeedCache {
+    entries: std::collections::HashMap<CacheKey, CacheEntry>,
+    aux: std::collections::HashMap<(String, &'static str), (serde_json::Value, std::time::Instant)>,
+    /// (brief path, connection id) → the credential id last fetched with it.
+    owners: std::collections::HashMap<(String, String), String>,
+    cap: usize,
+}
+
+impl FeedCache {
+    fn with_cap(cap: usize) -> Self {
+        Self {
+            entries: Default::default(),
+            aux: Default::default(),
+            owners: Default::default(),
+            cap,
+        }
+    }
+
+    /// An entry no older than `max_age`; a zero max age never hits.
+    fn get_fresh(&self, key: &CacheKey, max_age: Duration, now: std::time::Instant) -> Option<&CacheEntry> {
+        if max_age.is_zero() {
+            return None;
+        }
+        self.entries
+            .get(key)
+            .filter(|e| now.saturating_duration_since(e.stored_at) <= max_age)
+    }
+
+    fn validators(&self, key: &CacheKey) -> Option<&Validators> {
+        self.entries.get(key)?.validators.as_ref()
+    }
+
+    fn put(&mut self, key: CacheKey, entry: CacheEntry) {
+        self.entries.insert(key, entry);
+        self.trim();
+    }
+
+    /// A 304 confirmed the entry: restamp it and hand back its items and rate
+    /// info. A 304 that omits rate headers keeps the stored ones, so a server
+    /// poll floor (`X-Poll-Interval`) survives it.
+    fn revalidate(
+        &mut self,
+        key: &CacheKey,
+        now: std::time::Instant,
+        fetched_at: &str,
+        rate: Option<RateInfo>,
+    ) -> Option<(Vec<IntegrationItem>, Option<RateInfo>)> {
+        let e = self.entries.get_mut(key)?;
+        e.stored_at = now;
+        e.fetched_at = fetched_at.to_string();
+        if rate.is_some() {
+            e.rate = rate;
+        }
+        Some((e.items.clone(), e.rate.clone()))
+    }
+
+    fn aux_get(&self, cred: &str, tag: &'static str, ttl: Duration, now: std::time::Instant) -> Option<&serde_json::Value> {
+        self.aux
+            .get(&(cred.to_string(), tag))
+            .filter(|(_, at)| now.saturating_duration_since(*at) <= ttl)
+            .map(|(v, _)| v)
+    }
+
+    fn aux_put(&mut self, cred: &str, tag: &'static str, value: serde_json::Value, now: std::time::Instant) {
+        self.aux.insert((cred.to_string(), tag), (value, now));
+    }
+
+    fn note_owner(&mut self, path: &str, conn_id: &str, cred: &str) {
+        self.owners
+            .insert((path.to_string(), conn_id.to_string()), cred.to_string());
+    }
+
+    /// Drop a connection's cached responses and lookups — unless another
+    /// connection still fetches with the same credential.
+    fn evict_connection(&mut self, path: &str, conn_id: &str) {
+        let Some(cred) = self.owners.remove(&(path.to_string(), conn_id.to_string())) else {
+            return;
+        };
+        if self.owners.values().any(|c| *c == cred) {
+            return;
+        }
+        self.entries.retain(|k, _| k.credential_id != cred);
+        self.aux.retain(|(c, _), _| *c != cred);
+    }
+
+    /// Keep the newest `cap` entries.
+    fn trim(&mut self) {
+        if self.entries.len() <= self.cap {
+            return;
+        }
+        let mut by_age: Vec<(CacheKey, std::time::Instant)> = self
+            .entries
+            .iter()
+            .map(|(k, e)| (k.clone(), e.stored_at))
+            .collect();
+        by_age.sort_by_key(|(_, at)| *at);
+        let excess = self.entries.len() - self.cap;
+        for (k, _) in by_age.into_iter().take(excess) {
+            self.entries.remove(&k);
+        }
+    }
+}
+
+/// Fetch a feed through the cache: a hit within `max_age` costs nothing, a
+/// miss sends the stored validators (GitHub answers an unchanged feed with a
+/// free 304) and the cached aux lookup, and the result is stored for the next
+/// caller with the same credential and selector.
+async fn fetch_with_cache(
+    state: &FeedState,
+    brief_path: &str,
+    conn: &Connection,
+    sel: &BriefIntegration,
+    max_age: Duration,
+) -> Result<IntegrationFetch, FetchError> {
+    let out = fetch_with_cache_inner(state, brief_path, conn, sel, max_age).await;
+    if std::env::var("WAID_FEED_DEBUG").as_deref() == Ok("1") {
+        match &out {
+            Ok(f) => eprintln!(
+                "[feed] {:?} {} {:?} cred={} served_from={:?} cost={}",
+                conn.provider,
+                sel.kind,
+                sel.query,
+                f.credential_id.as_deref().unwrap_or("-"),
+                f.served_from,
+                f.cost
+            ),
+            Err(e) => eprintln!("[feed] {:?} {} {:?} error={:?}", conn.provider, sel.kind, sel.query, e),
+        }
+    }
+    out
+}
+
+async fn fetch_with_cache_inner(
+    state: &FeedState,
+    brief_path: &str,
+    conn: &Connection,
+    sel: &BriefIntegration,
+    max_age: Duration,
+) -> Result<IntegrationFetch, FetchError> {
+    let token = resolve_connection_token(conn, brief_path).await?;
+    let cred = credential_identity(conn, &token).map(|i| credential_id(&state.salt, &i));
+    let key = cred.as_deref().map(|c| CacheKey::new(c, conn, sel));
+    let aux_tag = aux_spec(conn.provider);
+    let fetched_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+
+    let (validators, aux) = match (&key, &cred) {
+        (Some(key), Some(cred)) => {
+            let mut cache = state.lock();
+            let now = std::time::Instant::now();
+            cache.note_owner(brief_path, &conn.id, cred);
+            if let Some(hit) = cache.get_fresh(key, max_age, now) {
+                return Ok(IntegrationFetch::new(
+                    hit.items.clone(),
+                    hit.fetched_at.clone(),
+                    Some(cred.clone()),
+                    0,
+                    ServedFrom::Cache,
+                    hit.rate.clone(),
+                ));
+            }
+            let aux = aux_tag.and_then(|(tag, ttl)| cache.aux_get(cred, tag, ttl, now).cloned());
+            (cache.validators(key).cloned(), aux)
+        }
+        _ => (None, None),
+    };
+
+    let ctx = FetchCtx {
+        validators: validators.as_ref(),
+        aux: aux.as_ref(),
+    };
+    let mut extra_cost = 0;
+    let outcome = match provider::fetch(conn, sel, &token, &ctx).await? {
+        FetchOutcome::NotModified { cost, rate } => {
+            let cached = key
+                .as_ref()
+                .and_then(|k| state.lock().revalidate(k, std::time::Instant::now(), &fetched_at, rate.clone()));
+            if let Some((items, rate)) = cached {
+                return Ok(IntegrationFetch::new(
+                    items,
+                    fetched_at,
+                    cred,
+                    cost,
+                    ServedFrom::NotModified,
+                    rate,
+                ));
+            }
+            // The entry was trimmed while the request was in flight: ask again,
+            // unconditionally.
+            extra_cost = cost;
+            let ctx = FetchCtx {
+                validators: None,
+                aux: aux.as_ref(),
+            };
+            provider::fetch(conn, sel, &token, &ctx).await?
+        }
+        fresh => fresh,
+    };
+    let FetchOutcome::Fresh {
+        items,
+        cost,
+        validators,
+        rate,
+        aux: new_aux,
+    } = outcome
+    else {
+        return Err("provider answered 304 to an unconditional request".into());
+    };
+    if let (Some(key), Some(cred)) = (key, cred.as_deref()) {
+        let mut cache = state.lock();
+        let now = std::time::Instant::now();
+        if let (Some((tag, _)), Some(v)) = (aux_tag, new_aux) {
+            cache.aux_put(cred, tag, v, now);
+        }
+        cache.put(
+            key,
+            CacheEntry {
+                items: items.clone(),
+                validators,
+                stored_at: now,
+                fetched_at: fetched_at.clone(),
+                rate: rate.clone(),
+            },
+        );
+    }
+    Ok(IntegrationFetch::new(
+        items,
+        fetched_at,
+        cred,
+        cost + extra_cost,
+        ServedFrom::Network,
+        rate,
+    ))
+}
+
 /// Fetch live items for one of a brief's integration selectors. Finds the
 /// connection in the brief, loads its token from the keyring internally (never
-/// passed from the frontend), and dispatches to the provider. Strictly additive:
-/// the caller renders a panel from the result and toasts on error — the brief
-/// itself is never written.
+/// passed from the frontend), and dispatches to the provider through the feed
+/// cache. `max_age_ms` is how stale a cached response may be (absent or 0 =
+/// always ask the provider; validators are still sent). Strictly additive: the
+/// caller renders a panel from the result and toasts on error — the brief
+/// itself is never written. Rejects with a typed `FetchError`.
 #[tauri::command]
 pub async fn fetch_integration(
+    state: tauri::State<'_, FeedState>,
     path: String,
     connection_id: String,
     kind: String,
     query: Option<String>,
     limit: Option<u32>,
-) -> Result<IntegrationFetch, String> {
+    max_age_ms: Option<u64>,
+) -> Result<IntegrationFetch, FetchError> {
     let (conns, _) = read_brief_lists(&path)?;
     let conn = conns
         .into_iter()
         .find(|c| c.id == connection_id)
         .ok_or_else(|| format!("brief has no connection \"{connection_id}\""))?;
-    let token = resolve_connection_token(&conn, &path).await?;
     let sel = BriefIntegration {
         connection: connection_id,
         kind,
         query,
         limit,
+        poll: None,
     };
-    let fetched_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    provider::fetch(&conn, &sel, &token, fetched_at).await
+    let max_age = Duration::from_millis(max_age_ms.unwrap_or(0));
+    fetch_with_cache(&state, &path, &conn, &sel, max_age).await
 }
 
 // --- NeuroSkill: `## Mind State` + labeled-session launch ------------------
@@ -5427,18 +5864,20 @@ mod tests {
 
     #[test]
     fn parses_integrations_frontmatter() {
-        let raw = "---\nname: P\nintegrations:\n  - connection: linear-personal\n    kind: tasks\n    query: \"assignee:me\"\n    limit: 10\n  - connection: jira-work\n---\nbody";
+        let raw = "---\nname: P\nintegrations:\n  - connection: linear-personal\n    kind: tasks\n    query: \"assignee:me\"\n    limit: 10\n    poll: false\n  - connection: jira-work\n---\nbody";
         let brief = parse_brief(&PathBuf::from("/tmp/p.md"), raw.to_string());
         assert_eq!(brief.integrations.len(), 2);
         assert_eq!(brief.integrations[0].connection, "linear-personal");
         assert_eq!(brief.integrations[0].kind, "tasks");
         assert_eq!(brief.integrations[0].query.as_deref(), Some("assignee:me"));
         assert_eq!(brief.integrations[0].limit, Some(10));
+        assert_eq!(brief.integrations[0].poll, Some(false));
         // kind defaults to "tasks" when omitted; optional fields are None.
         assert_eq!(brief.integrations[1].connection, "jira-work");
         assert_eq!(brief.integrations[1].kind, "tasks");
         assert_eq!(brief.integrations[1].query, None);
         assert_eq!(brief.integrations[1].limit, None);
+        assert_eq!(brief.integrations[1].poll, None);
     }
 
     #[test]
@@ -5556,6 +5995,7 @@ mod tests {
             kind: "tasks".into(),
             query: None,
             limit: Some(5),
+            poll: None,
         }];
         let brief = rewrite_brief_lists(&path_str, &conns, &integs).unwrap();
 
@@ -5724,6 +6164,7 @@ mod tests {
             kind: k.into(),
             query: Some(q.into()),
             limit: None,
+            poll: None,
         };
         save_brief_integration(path_str.clone(), feed("db-one", "tasks")).unwrap();
         save_brief_integration(path_str.clone(), feed("db-two", "tasks")).unwrap();
@@ -6050,5 +6491,257 @@ mod tests {
         );
         // Empty / blank input yields empty (the command turns this into an error).
         assert_eq!(sanitize_search_query("\n\n"), "");
+    }
+
+    // --- Auto-sync at scale: poll flag, credential ids, feed cache ---------
+
+    #[test]
+    fn poll_false_round_trips() {
+        let dir = scratch_dir("poll-flag");
+        let path = dir.join("p.md");
+        fs::write(
+            &path,
+            "---\nname: P\nstatus: active\ncustom_key: keep me\nconnections:\n  - id: gh\n    provider: github\n    label: GitHub\n---\nbody text\n",
+        )
+        .unwrap();
+        let path_str = path.to_string_lossy().to_string();
+        let feed = |poll: Option<bool>| BriefIntegration {
+            connection: "gh".into(),
+            kind: "pulls".into(),
+            query: None,
+            limit: None,
+            poll,
+        };
+
+        // Absent `poll` writes no key at all, so existing files stay untouched.
+        save_brief_integration(path_str.clone(), feed(None)).unwrap();
+        let before = fs::read_to_string(&path).unwrap();
+        assert!(!before.contains("poll:"));
+
+        let brief = save_brief_integration(path_str.clone(), feed(Some(false))).unwrap();
+        assert_eq!(brief.integrations.len(), 1, "same selector is updated in place");
+        assert_eq!(brief.integrations[0].poll, Some(false));
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("poll: false"));
+        // Every other key and the body survive the splice.
+        assert!(raw.contains("custom_key: keep me"));
+        assert!(raw.contains("status: active"));
+        assert!(raw.ends_with("body text\n"));
+        // The diff is exactly one added line.
+        assert_eq!(raw.lines().count(), before.lines().count() + 1);
+
+        // Turning it back on removes the key again.
+        save_brief_integration(path_str.clone(), feed(None)).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), before);
+    }
+
+    fn conn(provider: provider::Provider) -> Connection {
+        Connection {
+            id: "c".into(),
+            provider,
+            label: "C".into(),
+            base_url: None,
+            account: None,
+            repos: None,
+            ws_url: None,
+            data_dir: None,
+            token_path: None,
+        }
+    }
+
+    fn sel(kind: &str, query: Option<&str>) -> BriefIntegration {
+        BriefIntegration {
+            connection: "c".into(),
+            kind: kind.into(),
+            query: query.map(String::from),
+            limit: None,
+            poll: None,
+        }
+    }
+
+    #[test]
+    fn credential_id_is_salt_dependent_and_stable() {
+        let a = [1u8; 32];
+        let b = [2u8; 32];
+        let id = credential_id(&a, "|ghp_secret");
+        assert_eq!(id.len(), 8);
+        assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(id, credential_id(&a, "|ghp_secret"), "stable within a salt");
+        assert_ne!(id, credential_id(&b, "|ghp_secret"), "a new launch, a new id");
+        assert_ne!(id, credential_id(&a, "|ghp_other"));
+        assert!(!id.contains("secret"));
+    }
+
+    #[test]
+    fn github_identity_ignores_a_public_base_url() {
+        let plain = conn(provider::Provider::Github);
+        let mut web = conn(provider::Provider::Github);
+        web.base_url = Some("https://github.com/".into());
+        let mut api = conn(provider::Provider::Github);
+        api.base_url = Some("https://api.github.com".into());
+        let mut ghe = conn(provider::Provider::Github);
+        ghe.base_url = Some("https://ghe.example.com".into());
+        // github.com / api.github.com are ignored by api_base, so one PAT is one budget.
+        let id = credential_identity(&plain, "ghp_x");
+        assert_eq!(credential_identity(&web, "ghp_x"), id);
+        assert_eq!(credential_identity(&api, "ghp_x"), id);
+        assert_eq!(cache_scope(&web), cache_scope(&plain));
+        assert_ne!(credential_identity(&ghe, "ghp_x"), id, "Enterprise is a different host");
+    }
+
+    #[test]
+    fn gmail_identity_is_account_not_token() {
+        let mut g = conn(provider::Provider::Gmail);
+        g.account = Some("  Me@Example.com ".into());
+        // Access tokens refresh; the account (and so the budget) doesn't change.
+        assert_eq!(credential_identity(&g, "ya29.one"), credential_identity(&g, "ya29.two"));
+        assert_eq!(credential_identity(&g, "x").as_deref(), Some("me@example.com"));
+        g.account = None;
+        assert_eq!(credential_identity(&g, "x"), None);
+
+        assert_eq!(credential_identity(&conn(provider::Provider::Neuroskill), ""), None);
+
+        // Token providers: same token on one host = one identity; the host splits it.
+        let gh = conn(provider::Provider::Github);
+        let mut ghe = conn(provider::Provider::Github);
+        ghe.base_url = Some("https://GHE.acme.com/".into());
+        assert_eq!(credential_identity(&gh, "t").as_deref(), Some("|t"));
+        assert_eq!(credential_identity(&ghe, "t").as_deref(), Some("ghe.acme.com|t"));
+        assert_eq!(credential_identity(&gh, ""), None);
+    }
+
+    fn entry(items: usize, at: std::time::Instant) -> CacheEntry {
+        CacheEntry {
+            items: (0..items)
+                .map(|i| IntegrationItem {
+                    id: i.to_string(),
+                    title: format!("item {i}"),
+                    url: format!("https://x/{i}"),
+                    status: None,
+                    assignee: None,
+                    updated_at: None,
+                    kind: "task".into(),
+                    meta: Default::default(),
+                })
+                .collect(),
+            validators: Some(Validators {
+                etag: Some("\"v1\"".into()),
+                last_modified: None,
+            }),
+            stored_at: at,
+            fetched_at: "2026-01-01T00:00:00Z".into(),
+            rate: None,
+        }
+    }
+
+    #[test]
+    fn cache_serves_within_max_age_only() {
+        let t0 = std::time::Instant::now();
+        let mut cache = FeedCache::with_cap(8);
+        let key = CacheKey::new("abcd1234", &conn(provider::Provider::Github), &sel("pulls", None));
+        cache.put(key.clone(), entry(2, t0));
+
+        let later = t0 + Duration::from_secs(30);
+        let hit = cache.get_fresh(&key, Duration::from_secs(60), later).unwrap();
+        assert_eq!(hit.fetched_at, "2026-01-01T00:00:00Z", "a hit keeps the original fetch time");
+        assert!(cache.get_fresh(&key, Duration::from_secs(10), later).is_none(), "too old");
+        assert!(cache.get_fresh(&key, Duration::ZERO, t0).is_none(), "max age 0 never hits");
+        // Validators survive regardless of age, so a forced refresh is still conditional.
+        assert_eq!(cache.validators(&key).and_then(|v| v.etag.as_deref()), Some("\"v1\""));
+
+        // A 304 restamps the entry, including its reported fetch time.
+        let (items, _) = cache.revalidate(&key, later, "2026-01-01T00:00:30Z", None).unwrap();
+        assert_eq!(items.len(), 2);
+        let hit = cache.get_fresh(&key, Duration::from_secs(10), later).unwrap();
+        assert_eq!(hit.fetched_at, "2026-01-01T00:00:30Z");
+    }
+
+    #[test]
+    fn revalidate_keeps_the_stored_poll_floor() {
+        let t0 = std::time::Instant::now();
+        let mut cache = FeedCache::with_cap(8);
+        let key = CacheKey::new("abcd1234", &conn(provider::Provider::Github), &sel("notifications", None));
+        let floor = RateInfo {
+            min_interval_ms: Some(60_000),
+            ..Default::default()
+        };
+        cache.put(key.clone(), CacheEntry { rate: Some(floor), ..entry(1, t0) });
+        // A 304 without rate headers hands back the stored X-Poll-Interval.
+        let (_, rate) = cache.revalidate(&key, t0, "2026-01-01T00:01:00Z", None).unwrap();
+        assert_eq!(rate.and_then(|r| r.min_interval_ms), Some(60_000));
+    }
+
+    #[test]
+    fn cache_scope_separates_repo_lists() {
+        let mut a = conn(provider::Provider::Github);
+        a.repos = Some(vec!["Acme/WAID".into(), "acme/other".into()]);
+        let mut b = conn(provider::Provider::Github);
+        b.repos = Some(vec!["acme/other".into(), "acme/waid".into()]);
+        let mut c = conn(provider::Provider::Github);
+        c.repos = Some(vec!["acme/waid".into()]);
+        let s = sel("notifications", None);
+        // Same set in another order/case is the same feed; a different set isn't.
+        assert_eq!(CacheKey::new("id", &a, &s), CacheKey::new("id", &b, &s));
+        assert_ne!(CacheKey::new("id", &a, &s), CacheKey::new("id", &c, &s));
+        // Past the query's repo cap the order picks which repos are searched.
+        let many: Vec<String> = (0..=provider::github::MAX_INJECTED_REPOS).map(|i| format!("a/r{i}")).collect();
+        let mut fwd = conn(provider::Provider::Github);
+        fwd.repos = Some(many.clone());
+        let mut rev = conn(provider::Provider::Github);
+        rev.repos = Some(many.into_iter().rev().collect());
+        assert_ne!(CacheKey::new("id", &fwd, &s), CacheKey::new("id", &rev, &s));
+        // The credential, query and kind are part of the key too.
+        assert_ne!(CacheKey::new("id", &a, &s), CacheKey::new("other", &a, &s));
+        assert_ne!(
+            CacheKey::new("id", &a, &sel("pulls", Some("is:open"))),
+            CacheKey::new("id", &a, &sel("pulls", Some("is:closed")))
+        );
+    }
+
+    #[test]
+    fn cache_trims_to_cap() {
+        let t0 = std::time::Instant::now();
+        let mut cache = FeedCache::with_cap(2);
+        let g = conn(provider::Provider::Github);
+        let k = |q: &str| CacheKey::new("id", &g, &sel("pulls", Some(q)));
+        cache.put(k("a"), entry(1, t0));
+        cache.put(k("b"), entry(1, t0 + Duration::from_secs(1)));
+        cache.put(k("c"), entry(1, t0 + Duration::from_secs(2)));
+        assert_eq!(cache.entries.len(), 2);
+        assert!(cache.validators(&k("a")).is_none(), "oldest dropped");
+        assert!(cache.validators(&k("c")).is_some());
+    }
+
+    #[test]
+    fn aux_expires() {
+        let t0 = std::time::Instant::now();
+        let mut cache = FeedCache::with_cap(8);
+        let ttl = Duration::from_secs(3_600);
+        cache.aux_put("id", "slack.users", serde_json::json!({"U1": "dana"}), t0);
+        assert!(cache.aux_get("id", "slack.users", ttl, t0 + Duration::from_secs(60)).is_some());
+        assert!(cache.aux_get("id", "slack.users", ttl, t0 + Duration::from_secs(3_601)).is_none());
+        assert!(cache.aux_get("other", "slack.users", ttl, t0).is_none(), "per credential");
+    }
+
+    #[test]
+    fn evict_connection_keeps_shared_credentials() {
+        let t0 = std::time::Instant::now();
+        let mut cache = FeedCache::with_cap(8);
+        let g = conn(provider::Provider::Github);
+        let key = CacheKey::new("shared", &g, &sel("pulls", None));
+        cache.put(key.clone(), entry(1, t0));
+        cache.aux_put("shared", "slack.users", serde_json::json!({}), t0);
+        cache.note_owner("/a.md", "gh", "shared");
+        cache.note_owner("/b.md", "gh", "shared");
+
+        // Another brief still uses the credential: keep its entries.
+        cache.evict_connection("/a.md", "gh");
+        assert!(cache.validators(&key).is_some());
+        // The last user goes: drop entries and lookups.
+        cache.evict_connection("/b.md", "gh");
+        assert!(cache.validators(&key).is_none());
+        assert!(cache.aux.is_empty());
+        // Unknown connections are a no-op.
+        cache.evict_connection("/c.md", "gh");
     }
 }

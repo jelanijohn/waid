@@ -82,6 +82,8 @@ export interface BriefIntegration {
   kind: string;
   query?: string | null;
   limit?: number | null;
+  /** `false` opts the feed out of background auto-sync; absent means on. */
+  poll?: boolean | null;
 }
 
 /** A normalized task / notification from any provider (see fetch_integration). */
@@ -109,11 +111,31 @@ export interface IntegrationSummary {
   updatedRecently?: number | null;
 }
 
-/** What fetch_integration returns: normalized items + when + the rollup. */
+/** Rate-limit state a provider reported on its last response. */
+export interface RateInfo {
+  remaining?: number | null;
+  /** RFC3339. */
+  resetAt?: string | null;
+  /** Server-requested minimum poll interval (GitHub `X-Poll-Interval`). */
+  minIntervalMs?: number | null;
+}
+
+/** Where a fetch's items came from: a real request, the backend's in-memory
+ *  feed cache, or a 304 that re-served the cached items. */
+export type ServedFrom = "network" | "cache" | "notModified";
+
+/** What fetch_integration returns: normalized items + when + the rollup, plus
+ *  the bookkeeping auto-sync budgets with. */
 export interface IntegrationFetch {
   items: IntegrationItem[];
   fetchedAt: string;
   summary: IntegrationSummary;
+  /** Session-salted hash of the credential; feeds sharing a token share it. */
+  credentialId?: string | null;
+  /** Requests actually made (0 for a cache hit). */
+  cost?: number;
+  servedFrom?: ServedFrom;
+  rate?: RateInfo | null;
 }
 
 export interface Brief {

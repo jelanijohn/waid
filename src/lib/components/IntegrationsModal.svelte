@@ -3,6 +3,7 @@
   import { projects } from "$lib/stores/projects.svelte";
   import { toasts } from "$lib/stores/toasts.svelte";
   import { integrations } from "$lib/stores/integrations.svelte";
+  import { SKIP_KINDS as NEVER_POLLED } from "$lib/feedSync";
   import { PROVIDERS, PROVIDER_ORDER, kindIcon, kindLabel } from "$lib/providers";
   import {
     saveBriefConnection,
@@ -49,6 +50,8 @@
   let kind = $state<string>("tasks");
   let query = $state("");
   let limit = $state("20");
+  // Auto-sync: unchecked writes `poll: false` (manual refresh only).
+  let pollBg = $state(true);
   // NeuroSkill `mind` feed: a rolling-window segmented control + optional slug
   // override, encoded into the selector's `query` ("14d" / "14d slug:alt").
   let mindWindow = $state("14d");
@@ -251,6 +254,7 @@
           : "";
     aiPrompt = "";
     limit = "20";
+    pollBg = true;
     mindWindow = "14d";
     mindSlug = "";
     chooseReturn = ret;
@@ -355,6 +359,8 @@
         query: feedQuery,
         // A Notion "page" feed and a NeuroSkill "mind" feed have no item cap.
         limit: k === "page" || isMind ? null : limitStr ? Number(limitStr) : null,
+        // Written only when off, so existing-style files stay untouched.
+        ...(pollBg ? {} : { poll: false }),
       };
       const updated = await saveBriefIntegration(brief.path, integration);
       projects.upsert(updated);
@@ -447,6 +453,7 @@
         kind: f.kind,
         query: nextQuery,
         limit: f.limit ?? null,
+        poll: f.poll ?? null,
       });
       projects.upsert(updated);
       editingFeedKey = null;
@@ -457,6 +464,19 @@
         .catch(() => {});
     } catch (e) {
       toasts.error(`Could not update filter: ${e}`);
+    }
+  }
+
+  // Opt a feed in/out of background auto-sync. Same selector identity, so
+  // save_brief_integration updates it in place; `poll` is only written when off.
+  async function togglePoll(f: BriefIntegration) {
+    const off = f.poll !== false;
+    try {
+      const updated = await saveBriefIntegration(brief.path, { ...f, poll: off ? false : null });
+      projects.upsert(updated);
+      toasts.success(off ? "Background checks off for this feed" : "Background checks on for this feed");
+    } catch (e) {
+      toasts.error(`Could not update feed: ${e}`);
     }
   }
 
@@ -664,8 +684,26 @@
                     {#if f.query}
                       <span class="truncate rounded-[5px] bg-[var(--code-bg)] px-[6px] py-px font-mono text-[10.5px] text-[var(--fg3)]">{f.query}</span>
                     {/if}
+                    {#if !NEVER_POLLED.has(f.kind)}
+                      <button
+                        class="ml-auto grid h-[24px] w-[24px] shrink-0 place-items-center rounded-md transition-colors hover:text-[var(--fg)] {f.poll ===
+                        false
+                          ? 'text-[var(--fg4)]'
+                          : 'text-[var(--fg3)]'}"
+                        title={f.poll === false
+                          ? "Not checked in the background — click to include in auto-sync"
+                          : "Checked in the background by auto-sync — click to refresh manually only"}
+                        aria-label={f.poll === false ? "Turn on background checks" : "Turn off background checks"}
+                        aria-pressed={f.poll !== false}
+                        onclick={() => togglePoll(f)}
+                      >
+                        <Icon name={f.poll === false ? "sync_disabled" : "sync"} size={14} />
+                      </button>
+                    {/if}
                     <button
-                      class="ml-auto grid h-[24px] w-[24px] shrink-0 place-items-center rounded-md text-[var(--fg3)] transition-colors hover:text-[var(--fg)]"
+                      class="{NEVER_POLLED.has(f.kind)
+                        ? 'ml-auto '
+                        : ''}grid h-[24px] w-[24px] shrink-0 place-items-center rounded-md text-[var(--fg3)] transition-colors hover:text-[var(--fg)]"
                       title="Edit filter"
                       aria-label="Edit filter"
                       onclick={() => startEditFeed(f)}
@@ -1028,6 +1066,13 @@
             </label>
           {/if}
         </div>
+        {#if !isNotionPage}
+          <label class="mt-[10px] flex cursor-pointer items-center gap-[7px] text-[11.5px] text-[var(--fg2)]">
+            <input type="checkbox" class="accent-[var(--accent)]" bind:checked={pollBg} />
+            Poll in background
+            <span class="text-[10.5px] text-[var(--fg3)]">— when Auto-sync is on; off means manual refresh only</span>
+          </label>
+        {/if}
         {#if isGmail || isSlack}
           <div class="mt-[10px] flex flex-col gap-[6px]">
             <span class="text-[10.5px] text-[var(--fg3)]">Templates — click to use, then tweak</span>

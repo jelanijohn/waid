@@ -98,8 +98,14 @@ async fn fetch_emails(sel: &BriefIntegration, token: &str) -> Result<FetchOutcom
         ])
         .send()
         .await
-        .map_err(FetchError::network)?;
-        let msg = super::read_response(resp, "Gmail").await?.json("Gmail")?;
+        .map_err(FetchError::network);
+        // The list call, the messages read so far, and this one.
+        let spent = 2 + items.len() as u32;
+        let msg = match resp {
+            Ok(resp) => super::read_response(resp, "Gmail").await.and_then(|r| r.json("Gmail")),
+            Err(e) => Err(e),
+        }
+        .map_err(|e| e.with_cost(spent))?;
         items.push(map_message(&msg));
     }
     let cost = 1 + items.len() as u32;

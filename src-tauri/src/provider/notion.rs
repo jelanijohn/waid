@@ -96,6 +96,24 @@ async fn fetch_database(
             (ds, Some(serde_json::Value::Object(map)))
         }
     };
+    let spent = 1 + fresh_aux.is_some() as u32;
+    query_data_source(&client, token, &ds_id, sel)
+        .await
+        .map(|(items, meta)| {
+            FetchOutcome::fresh(items, spent)
+                .with_meta(&meta)
+                .with_aux(fresh_aux)
+        })
+        .map_err(|e| e.with_cost(spent))
+}
+
+/// Query a data source's rows, newest-edited first (one request).
+async fn query_data_source(
+    client: &reqwest::Client,
+    token: &str,
+    ds_id: &str,
+    sel: &BriefIntegration,
+) -> Result<(Vec<IntegrationItem>, super::ResponseMeta), FetchError> {
     let max = sel.limit.unwrap_or(25).clamp(1, 100);
 
     let body = serde_json::json!({
@@ -117,10 +135,7 @@ async fn fetch_database(
         .get("results")
         .and_then(|v| v.as_array())
         .ok_or("unexpected Notion response (no results)")?;
-    let cost = 1 + fresh_aux.is_some() as u32;
-    Ok(FetchOutcome::fresh(results.iter().map(map_page).collect(), cost)
-        .with_meta(&meta)
-        .with_aux(fresh_aux))
+    Ok((results.iter().map(map_page).collect(), meta))
 }
 
 /// Resolve a database id to its first data source's id (2025-09-03 model). Falls

@@ -64,7 +64,11 @@ copy the User OAuth Token from your app's OAuth & Permissions page."
     } else {
         FetchErrorKind::Other
     };
-    Err(FetchError { message: msg, kind })
+    Err(FetchError {
+        message: msg,
+        kind,
+        cost: None,
+    })
 }
 
 /// Cheap credential check: hit `auth.test` with the bearer token. (It succeeds

@@ -16,7 +16,7 @@
 // only (never in localStorage).
 
 import type { BriefIntegration, IntegrationFetch, IntegrationItem } from "$lib/types";
-import { fetchIntegration, digestIntegrations } from "$lib/tauri";
+import { fetchIntegration, digestIntegrations, IntegrationFetchError } from "$lib/tauri";
 import { settings } from "$lib/stores/settings.svelte";
 import { projects } from "$lib/stores/projects.svelte";
 import {
@@ -87,11 +87,15 @@ class IntegrationStore {
     return this.credentialIds.get(`${path}\n${connection}`) ?? null;
   }
 
-  /** Drain the ledger: requests per domain since the last call. */
+  /** Drain the ledger: requests per domain since the last call, skipping
+   *  entries past SPEND_TTL_MS (e.g. left over from before auto-sync was
+   *  turned off, which would otherwise debit a fresh bucket). */
   takeSpend(): Map<string, number> {
+    const now = Date.now();
     const out = new Map<string, number>();
     for (const [domain, entries] of this.spend) {
-      out.set(domain, entries.reduce((n, e) => n + e.cost, 0));
+      const live = entries.filter((e) => now - e.at < SPEND_TTL_MS);
+      if (live.length) out.set(domain, live.reduce((n, e) => n + e.cost, 0));
     }
     this.spend.clear();
     return out;
@@ -115,11 +119,20 @@ class IntegrationStore {
     return domainKey(budgetClass(provider, kind), this.credentialIdFor(path, connection));
   }
 
-  /** Shared by `fetch` and `poll`: learn the credential id, then debit. */
-  private account(path: string, connection: string, kind: string, data: IntegrationFetch | null): void {
+  /** Shared by `fetch` and `poll`: learn the credential id, then debit.
+   *  `failure` is the rejection when the fetch failed. */
+  private account(
+    path: string,
+    connection: string,
+    kind: string,
+    data: IntegrationFetch | null,
+    failure?: unknown,
+  ): void {
     if (data?.credentialId) this.credentialIds.set(`${path}\n${connection}`, data.credentialId);
-    // A failed fetch still spent (at least) one request.
-    this.recordSpend(this.domainFor(path, connection, kind), data ? (data.cost ?? 1) : 1);
+    // A failed fetch still spent at least one request — more if it got partway
+    // through a multi-request fetch (Gmail's per-message reads).
+    const cost = data ? (data.cost ?? 1) : failure instanceof IntegrationFetchError ? (failure.cost ?? 1) : 1;
+    this.recordSpend(this.domainFor(path, connection, kind), cost);
   }
 
   private keyFor(path: string, connection: string, kind: string, query?: string | null): string {
@@ -164,7 +177,7 @@ class IntegrationStore {
       this.applyResult(key, kind, data);
       return data;
     } catch (e) {
-      this.account(path, connection, kind, null);
+      this.account(path, connection, kind, null, e);
       this.cache = {
         ...this.cache,
         [key]: { loading: false, error: String(e), data: existing?.data ?? null },
@@ -199,7 +212,7 @@ class IntegrationStore {
       this.applyResult(key, kind, data);
       return { ok: true, data };
     } catch (e) {
-      this.account(path, connection, kind, null);
+      this.account(path, connection, kind, null, e);
       const prev = this.cache[key];
       this.cache = {
         ...this.cache,

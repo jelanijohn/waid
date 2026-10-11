@@ -224,6 +224,8 @@ export class IntegrationFetchError extends Error {
   kind: "rateLimited" | "auth" | "http" | "network" | "other";
   retryAfterMs?: number;
   status?: number;
+  /** Requests spent before a multi-request fetch failed (absent = 1). */
+  cost?: number;
 
   constructor(raw: unknown) {
     const o = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
@@ -234,6 +236,7 @@ export class IntegrationFetchError extends Error {
       kind === "rateLimited" || kind === "auth" || kind === "http" || kind === "network" ? kind : "other";
     if (typeof o?.retryAfterMs === "number") this.retryAfterMs = o.retryAfterMs;
     if (typeof o?.status === "number") this.status = o.status;
+    if (typeof o?.cost === "number") this.cost = o.cost;
   }
 
   toString(): string {

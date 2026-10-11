@@ -32,6 +32,22 @@ pub async fn fetch(
         (Some(w), _) | (None, Some(w)) => (w.to_string(), false),
         (None, None) => (first_workspace(&client, token).await?, true),
     };
+    let spent = 1 + looked_up as u32;
+    let (items, meta) = my_tasks(&client, token, &workspace, sel)
+        .await
+        .map_err(|e| e.with_cost(spent))?;
+    Ok(FetchOutcome::fresh(items, spent)
+        .with_meta(&meta)
+        .with_aux(looked_up.then(|| serde_json::Value::String(workspace))))
+}
+
+/// The user's incomplete tasks in one workspace (one request).
+async fn my_tasks(
+    client: &reqwest::Client,
+    token: &str,
+    workspace: &str,
+    sel: &BriefIntegration,
+) -> Result<(Vec<IntegrationItem>, super::ResponseMeta), FetchError> {
     let max = sel.limit.unwrap_or(20).clamp(1, 100);
 
     // `completed_since=now` returns only incomplete tasks.
@@ -52,10 +68,7 @@ pub async fn fetch(
         .get("data")
         .and_then(|v| v.as_array())
         .ok_or("unexpected Asana response (no data)")?;
-    let items = data.iter().map(map_task).collect();
-    Ok(FetchOutcome::fresh(items, 1 + looked_up as u32)
-        .with_meta(&meta)
-        .with_aux(looked_up.then(|| serde_json::Value::String(workspace))))
+    Ok((data.iter().map(map_task).collect(), meta))
 }
 
 pub async fn validate(_conn: &Connection, token: &str) -> Result<(), String> {

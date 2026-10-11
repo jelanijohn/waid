@@ -793,14 +793,17 @@ requirement).
 
 On top of the local rollup, with a provider configured (`make_provider`):
 
-- **`digest_integrations(path)`** — re-fetches one brief's task / notification /
+- **`digest_integrations(path)`** — fetches one brief's task / notification /
   **email** / **Slack-message** / **Figma-comment** items and asks the model for
-  a short prose digest. Display-only; can
+  a short prose digest. Feeds come through the backend feed cache, so a
+  response up to **5 minutes** old (`DIGEST_MAX_AGE`) is reused rather than
+  re-requested. Display-only; can
   be **snapshotted into `## Captures`** via `append_capture`. (Notion `page` feeds
   are excluded — they belong to synthesis, not the digest.)
-- **`morning_briefing()`** — re-fetches every brief's items, groups by project,
-  and asks for a tight cross-brief briefing. (Notion `page` feeds excluded here
-  too.)
+- **`morning_briefing()`** — fetches every brief's items (same 5-minute cache
+  window, so a briefing across many briefs reuses what auto-sync already pulled
+  instead of bursting every provider's limit), groups by project, and asks for a
+  tight cross-brief briefing. (Notion `page` feeds excluded here too.)
 - Same guardrail as synthesis: **every fetched item is data, never
   instructions** (item titles/fields, Notion page text, Gmail subjects /
   snippets, Slack message text, and Figma comment text can all carry injected
@@ -843,17 +846,21 @@ errors and request bookkeeping (below). A feed's `poll: false` opts it out
 - **Budgets are per credential** — providers limit per token, so feeds pace by
   domain = (budget class × `credentialId`). Each domain is a token bucket
   (`BUDGET`: roughly half of each provider's published limit, GitHub search
-  separate from core) debited by the `cost` the backend reports, with a minimum
-  gap between two polls (`minGapMs`: 1 s for most classes, GitHub search 2 s,
+  separate from core) debited by the `cost` the backend reports (failures too: a Gmail fetch that
+  fails partway through its per-message reads reports what it spent), with a
+  minimum gap between two polls (`minGapMs`: 1 s for most classes, GitHub search 2 s,
   Slack 3 s, Figma 15 s). When a domain's demand exceeds its budget the
   non-focused feeds in it are stretched, never starved. A typed
   `IntegrationFetchError` of kind `rateLimited` holds the domain for the
-  server's `Retry-After` (else 60 s), and a reported `remaining` under 10% of a
+  server's `Retry-After` (else 60 s) — including Google's quota 403s
+  (`userRateLimitExceeded` etc. in the body), which aren't credential errors —
+  and a reported `remaining` under 10% of a
   minute's budget holds it until `resetAt`.
 - **Backend feed cache** — `FeedState` (managed Tauri state, memory only)
   keys responses by (credential id, provider, kind, query, limit, scope), so
   briefs sharing a token and a query share one request. A hit within
-  `max_age_ms` costs 0 and keeps its original `fetchedAt`; GitHub polls replay
+  `max_age_ms` costs 0 and keeps its original `fetchedAt` (panel loads and
+  polls pass their own max age; digest / morning briefing accept 5 min); GitHub polls replay
   ETag / Last-Modified so an unchanged feed is a free 304; small per-credential
   lookups (Slack users, Figma handle, Asana workspace, Notion data source) are
   reused. The credential id is a per-launch salted hash, never the token.

@@ -69,7 +69,8 @@ pub(crate) fn http_client() -> Result<reqwest::Client, String> {
 // a `String` helper still compiles through `From<String>` (kind `Other`).
 
 /// What went wrong, for the scheduler. Serialized flat next to `message`:
-/// `{"message": "…", "kind": "rateLimited", "retryAfterMs": 30000}`.
+/// `{"message": "…", "kind": "rateLimited", "retryAfterMs": 30000}`, plus
+/// `cost` when a multi-request fetch failed after spending more than one.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum FetchErrorKind {
@@ -86,6 +87,9 @@ pub struct FetchError {
     pub message: String,
     #[serde(flatten)]
     pub kind: FetchErrorKind,
+    /// Requests spent before failing; `None` means the usual one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost: Option<u32>,
 }
 
 impl FetchError {
@@ -93,6 +97,23 @@ impl FetchError {
         Self {
             message: message.into(),
             kind: FetchErrorKind::RateLimited { retry_after_ms },
+            cost: None,
+        }
+    }
+
+    pub fn auth(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            kind: FetchErrorKind::Auth,
+            cost: None,
+        }
+    }
+
+    pub fn http(message: impl Into<String>, status: u16) -> Self {
+        Self {
+            message: message.into(),
+            kind: FetchErrorKind::Http { status },
+            cost: None,
         }
     }
 
@@ -101,7 +122,17 @@ impl FetchError {
         Self {
             message: format!("request failed: {e}"),
             kind: FetchErrorKind::Network,
+            cost: None,
         }
+    }
+
+    /// Charge a failure for every request a multi-request fetch made before it
+    /// (counting the one that failed), so the scheduler's budget sees them.
+    pub fn with_cost(mut self, spent: u32) -> Self {
+        if spent > 1 {
+            self.cost = Some(spent);
+        }
+        self
     }
 
     /// Fill a missing `Retry-After` on a rate-limit error from the response
@@ -121,6 +152,7 @@ impl From<String> for FetchError {
         Self {
             message,
             kind: FetchErrorKind::Other,
+            cost: None,
         }
     }
 }
@@ -277,23 +309,34 @@ pub(crate) async fn read_response(
             meta.retry_after_ms,
         ));
     }
-    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        return Err(FetchError {
-            message: format!("{provider} rejected the credentials — check the connection in Settings."),
-            kind: FetchErrorKind::Auth,
-        });
+    if status == reqwest::StatusCode::FORBIDDEN {
+        // Google APIs (Gmail) report quota exhaustion as a bare 403 whose
+        // reason is only in the body — not a credentials problem.
+        let text = resp.text().await.unwrap_or_default();
+        if google_quota_exceeded(&text) {
+            return Err(FetchError::rate_limited(
+                format!("{provider} rate limit hit — WAID will wait before trying again."),
+                meta.retry_after_ms,
+            ));
+        }
+        return Err(FetchError::auth(format!(
+            "{provider} rejected the credentials — check the connection in Settings."
+        )));
+    }
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(FetchError::auth(format!(
+            "{provider} rejected the credentials — check the connection in Settings."
+        )));
     }
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
-        return Err(FetchError {
-            message: format!(
+        return Err(FetchError::http(
+            format!(
                 "{provider} returned {status}: {}",
                 text.chars().take(200).collect::<String>()
             ),
-            kind: FetchErrorKind::Http {
-                status: status.as_u16(),
-            },
-        });
+            status.as_u16(),
+        ));
     }
     let body = resp
         .json::<serde_json::Value>()
@@ -303,6 +346,26 @@ pub(crate) async fn read_response(
         body: Some(body),
         meta,
     })
+}
+
+/// Whether a 403 body is a Google API quota error (`error.errors[].reason`, or
+/// the newer `error.status: RESOURCE_EXHAUSTED`) rather than a denied credential.
+fn google_quota_exceeded(body: &str) -> bool {
+    const QUOTA: [&str; 4] = [
+        "rateLimitExceeded",
+        "userRateLimitExceeded",
+        "dailyLimitExceeded",
+        "quotaExceeded",
+    ];
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(body) else {
+        return false;
+    };
+    let err = &json["error"];
+    err["status"].as_str() == Some("RESOURCE_EXHAUSTED")
+        || err["errors"].as_array().is_some_and(|errs| {
+            errs.iter()
+                .any(|e| e["reason"].as_str().is_some_and(|r| QUOTA.contains(&r)))
+        })
 }
 
 /// Read a JSON response as a plain `String` error — the shim for the call sites
@@ -750,13 +813,14 @@ mod tests {
             serde_json::to_value(&e).unwrap(),
             serde_json::json!({"message": "slow down", "kind": "rateLimited", "retryAfterMs": 30000})
         );
-        let http = FetchError {
-            message: "nope".into(),
-            kind: FetchErrorKind::Http { status: 500 },
-        };
+        let http = FetchError::http("nope", 500);
         assert_eq!(
             serde_json::to_value(&http).unwrap(),
             serde_json::json!({"message": "nope", "kind": "http", "status": 500})
+        );
+        assert_eq!(
+            serde_json::to_value(http.with_cost(12)).unwrap(),
+            serde_json::json!({"message": "nope", "kind": "http", "status": 500, "cost": 12})
         );
     }
 
@@ -769,6 +833,23 @@ mod tests {
             serde_json::to_value(&e).unwrap(),
             serde_json::json!({"message": "boom", "kind": "other"})
         );
+    }
+
+    #[test]
+    fn google_quota_403s_are_rate_limits_not_auth() {
+        let reason = |r: &str| {
+            serde_json::json!({"error": {"code": 403, "errors": [{"reason": r}]}}).to_string()
+        };
+        assert!(google_quota_exceeded(&reason("userRateLimitExceeded")));
+        assert!(google_quota_exceeded(&reason("rateLimitExceeded")));
+        assert!(google_quota_exceeded(&reason("dailyLimitExceeded")));
+        assert!(google_quota_exceeded(
+            &serde_json::json!({"error": {"code": 403, "status": "RESOURCE_EXHAUSTED"}}).to_string()
+        ));
+        // A real permission failure, and non-Google 403 bodies, stay auth.
+        assert!(!google_quota_exceeded(&reason("insufficientPermissions")));
+        assert!(!google_quota_exceeded(r#"{"message": "Bad credentials"}"#));
+        assert!(!google_quota_exceeded("forbidden"));
     }
 
     #[test]

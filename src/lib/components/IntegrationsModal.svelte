@@ -359,8 +359,10 @@
         query: feedQuery,
         // A Notion "page" feed and a NeuroSkill "mind" feed have no item cap.
         limit: k === "page" || isMind ? null : limitStr ? Number(limitStr) : null,
-        // Written only when off, so existing-style files stay untouched.
-        ...(pollBg ? {} : { poll: false }),
+        // Written only when off, so existing-style files stay untouched — and
+        // never for a kind that isn't polled at all (the checkbox is hidden,
+        // but `pollBg` may still hold an earlier kind's choice).
+        ...(pollBg || NEVER_POLLED.has(k) ? {} : { poll: false }),
       };
       const updated = await saveBriefIntegration(brief.path, integration);
       projects.upsert(updated);

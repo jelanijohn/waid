@@ -4402,17 +4402,19 @@ impl Default for FeedState {
     }
 }
 
-/// A base URL split into its authority (lowercased host, plus a non-default
-/// port) and its path (no trailing slash); both empty when unset. A value that
-/// won't parse is kept whole as the authority, so distinct typos never collide.
+/// A base URL split into its origin (scheme + lowercased host, plus a
+/// non-default port — the scheme matters because each one's default port is
+/// dropped, so `http://h:80` and `https://h:443` would otherwise collide) and
+/// its path (no trailing slash); both empty when unset. A value that won't
+/// parse is kept whole as the origin, so distinct typos never collide.
 fn url_parts(base: Option<&str>) -> (String, String) {
     let raw = base.map(str::trim).unwrap_or_default();
     match provider::parse_base_url(raw) {
         Some(u) => {
-            let host = u.host_str().unwrap_or_default();
+            let (scheme, host) = (u.scheme(), u.host_str().unwrap_or_default());
             let authority = match u.port() {
-                Some(port) => format!("{host}:{port}"),
-                None => host.to_string(),
+                Some(port) => format!("{scheme}://{host}:{port}"),
+                None => format!("{scheme}://{host}"),
             };
             (authority, u.path().trim_end_matches('/').to_string())
         }
@@ -4420,8 +4422,8 @@ fn url_parts(base: Option<&str>) -> (String, String) {
     }
 }
 
-/// Where a connection's requests really go — `(authority, base path)` — for
-/// credential identity (authority) and cache scope (both). GitHub ignores a
+/// Where a connection's requests really go — `(origin, base path)` — for
+/// credential identity (origin) and cache scope (both). GitHub ignores a
 /// `base_url` pointing at public GitHub (see `provider::github::api_base`), so
 /// that counts as the default host — the same PAT must share one budget however
 /// its base URL was typed.
@@ -6621,6 +6623,10 @@ mod tests {
         assert_ne!(cache_scope(&one), cache_scope(&two));
         assert_eq!(credential_identity(&one, "t"), credential_identity(&two, "t"));
         assert_ne!(cache_scope(&jira("https://jira.example.com:8443")), cache_scope(&root));
+        // Each scheme's default port is dropped, so the scheme must still split them.
+        let (plain, tls) = (jira("http://jira.example.com:80"), jira("https://jira.example.com:443"));
+        assert_ne!(cache_scope(&plain), cache_scope(&tls));
+        assert_ne!(credential_identity(&plain, "t"), credential_identity(&tls, "t"));
     }
 
     #[test]
@@ -6640,7 +6646,7 @@ mod tests {
         let mut ghe = conn(provider::Provider::Github);
         ghe.base_url = Some("https://GHE.acme.com/".into());
         assert_eq!(credential_identity(&gh, "t").as_deref(), Some("|t"));
-        assert_eq!(credential_identity(&ghe, "t").as_deref(), Some("ghe.acme.com|t"));
+        assert_eq!(credential_identity(&ghe, "t").as_deref(), Some("https://ghe.acme.com|t"));
         assert_eq!(credential_identity(&gh, ""), None);
     }
 

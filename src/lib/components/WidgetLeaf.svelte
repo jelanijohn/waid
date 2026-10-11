@@ -3,10 +3,10 @@
   // chips, session control and "Open brief". `accordion` renders as a band
   // under the row; `side` fills the panel beside the roster. Peeking never
   // selects the brief (no last_opened write); launching does.
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import type { Brief, BriefIntegration, IntegrationItem } from "$lib/types";
   import { projects, isSyncableBrief } from "$lib/stores/projects.svelte";
-  import { integrations } from "$lib/stores/integrations.svelte";
+  import { integrations, type Highlights } from "$lib/stores/integrations.svelte";
   import { session } from "$lib/stores/session.svelte";
   import { toasts } from "$lib/stores/toasts.svelte";
   import { widget } from "$lib/stores/widget.svelte";
@@ -36,6 +36,23 @@
   }
   function feedKey(ig: BriefIntegration): string {
     return ig.connection + ig.kind + (ig.query ?? "");
+  }
+
+  // Auto-sync: a leaf is only mounted while open, so the brief's new items are
+  // in front of the user — mark them seen and keep them highlighted here.
+  let highlight = $state<Highlights>(new Map());
+  $effect(() => {
+    if (integrations.freshCount(brief.path) === 0) return;
+    untrack(() => {
+      highlight = integrations.takeFresh(brief.path, highlight);
+    });
+  });
+  function isNew(ig: BriefIntegration, item: IntegrationItem): boolean {
+    return integrations.isHighlighted(highlight, brief.path, ig, item);
+  }
+  function newCount(ig: BriefIntegration): number {
+    if (!highlight.size) return 0;
+    return entryFor(ig)?.data?.items.filter((it) => isNew(ig, it)).length ?? 0;
   }
 
   /** Oldest fetch time across the feeds that have data. */
@@ -154,12 +171,13 @@
           <span class="flabel">{kindLabel(ig.kind, conn?.provider)}</span>
           <span class="flex-1"></span>
           <span class="count" title={entry?.error && !entry.data ? entry.error : undefined}>
-            {feedCountText(ig, entry)}
+            {feedCountText(ig, entry)}{#if newCount(ig)}<span class="new"> · {newCount(ig)} new</span>{/if}
           </span>
         </div>
         {#if side && entry?.data}
           {#each entry.data.items.slice(0, 2) as item (item.id)}
             <button type="button" class="item" title={item.title} onclick={() => openItem(item)}>
+              {#if isNew(ig, item)}<span class="idot" aria-label="new"></span>{/if}
               <span class="ititle">{item.title}</span>
               {#if item.updatedAt}<span class="itime">{relativeTime(item.updatedAt)}</span>{/if}
             </button>
@@ -340,6 +358,19 @@
   }
   .item:hover {
     background: var(--hover);
+  }
+  .new {
+    color: var(--accent);
+    font-weight: 600;
+  }
+  /* Sits in the row's left padding so the title doesn't shift. */
+  .idot {
+    flex-shrink: 0;
+    width: 6px;
+    height: 6px;
+    margin-left: -14px;
+    border-radius: 50%;
+    background: var(--accent);
   }
   .ititle {
     flex: 1;

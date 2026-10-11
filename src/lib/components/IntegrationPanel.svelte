@@ -1,8 +1,11 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import type { Brief, BriefIntegration, IntegrationFetch, IntegrationItem } from "$lib/types";
-  import { integrations } from "$lib/stores/integrations.svelte";
+  import { integrations, type Highlights } from "$lib/stores/integrations.svelte";
   import { projects } from "$lib/stores/projects.svelte";
+  import { widget } from "$lib/stores/widget.svelte";
+  import { autosync } from "$lib/stores/autosync.svelte";
+  import { approxEvery, clockTime } from "$lib/feedSync";
   import { openExternal, appendCapture } from "$lib/tauri";
   import { toasts } from "$lib/stores/toasts.svelte";
   import { PROVIDERS, PROVIDER_ORDER, kindLabel } from "$lib/providers";
@@ -10,6 +13,7 @@
   import MarkdownView from "./MarkdownView.svelte";
   import ProviderTile from "./ProviderTile.svelte";
   import Icon from "./Icon.svelte";
+  import FreshDot from "./FreshDot.svelte";
 
   let {
     brief,
@@ -70,6 +74,26 @@
       integrations.fetch(brief.path, ig.connection, ig.kind, ig.query, ig.limit).catch(() => {});
     }
   });
+
+  // Auto-sync "new" items: when this brief's feeds are in front of the user,
+  // mark them seen and keep the rows highlighted until the brief is left (the
+  // panel remounts per brief, so `highlight` resets on its own). Gated on
+  // dashboard mode: in widget mode the dashboard stays mounted but hidden, and
+  // a hidden panel must not clear the badge the widget is showing.
+  let highlight = $state<Highlights>(new Map());
+  $effect(() => {
+    if (widget.mode !== "dashboard" || integrations.freshCount(brief.path) === 0) return;
+    untrack(() => {
+      highlight = integrations.takeFresh(brief.path, highlight);
+    });
+  });
+  function isNew(ig: BriefIntegration, item: IntegrationItem): boolean {
+    return integrations.isHighlighted(highlight, brief.path, ig, item);
+  }
+  function newCount(ig: BriefIntegration, f: IntegrationFetch | null | undefined): number {
+    if (!highlight.size || !f) return 0;
+    return f.items.filter((it) => isNew(ig, it)).length;
+  }
 
   // NeuroSkill `mind` feeds sync a deterministic body region instead of caching
   // items — track per-feed sync state and call the dedicated command.
@@ -154,6 +178,7 @@
                 {kindLabel(ig.kind, conn?.provider).toLowerCase()}
               {/if}
             </span>
+            <FreshDot count={newCount(ig, entry?.data)} showCount={false} />
           </button>
         {/each}
       </div>
@@ -261,7 +286,17 @@
                   </span>
                 </div>
                 {#if entry?.data}
-                  <div class="mt-px truncate text-[11px] text-[var(--fg3)]">{summaryLine(entry.data)}</div>
+                  {@const fresh = newCount(ig, entry.data)}
+                  <!-- Auto-sync cadence, only when it differs from the tier: a busy
+                       shared key stretches it, a rate limit pauses it. -->
+                  {@const cad = autosync.cadenceFor(brief.path, ig.connection, ig.kind, ig.query)}
+                  <div class="mt-px truncate text-[11px] text-[var(--fg3)]">
+                    {summaryLine(entry.data)}{#if fresh}<span class="font-semibold text-[var(--accent)]"> · {fresh} new</span>{/if}{#if cad?.holdUntil}<span
+                        title="The provider asked WAID to slow down"> · paused until {clockTime(cad.holdUntil)}</span
+                      >{:else if cad?.stretched}<span
+                        title="Feeds sharing this API key share its rate limit, so each is checked less often"
+                      > · checks every {approxEvery(cad.everyMs)}</span>{/if}
+                  </div>
                 {/if}
               </div>
               <button
@@ -307,6 +342,9 @@
                         <span class="max-w-[40%] shrink-0 truncate text-[12px] font-semibold text-[var(--fg)]">{item.assignee}</span>
                       {/if}
                       <span class="min-w-0 flex-1 truncate text-[12px] text-[var(--fg-body)]">{item.title}</span>
+                      {#if isNew(ig, item)}
+                        <span class="h-[6px] w-[6px] shrink-0 rounded-full bg-[var(--accent)]" aria-label="new"></span>
+                      {/if}
                       {#if item.updatedAt}
                         <span class="shrink-0 text-[10px] tabular-nums text-[var(--fg4)]">{relativeTime(item.updatedAt)}</span>
                       {/if}

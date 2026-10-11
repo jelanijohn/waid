@@ -7,10 +7,12 @@
   import { createBrief, pickDirectory, setBriefsDir } from "$lib/tauri";
   import { settings } from "$lib/stores/settings.svelte";
   import { widget } from "$lib/stores/widget.svelte";
+  import { integrations } from "$lib/stores/integrations.svelte";
   import { STATUS_ORDER, STATUS_LABEL, statusColor } from "$lib/status";
   import StatusPill from "./StatusPill.svelte";
   import Icon from "./Icon.svelte";
   import BrandMark from "./BrandMark.svelte";
+  import FreshDot from "./FreshDot.svelte";
 
   let creating = $state(false);
   let newName = $state("");
@@ -315,6 +317,7 @@
           >
             <div class="flex items-center gap-2">
               <span class="flex-1 truncate text-[13px] text-[var(--fg)] {sel ? 'font-semibold' : 'font-medium'}">{brief.name}</span>
+              <FreshDot count={integrations.freshCount(brief.path)} />
               <StatusPill status={brief.status} />
             </div>
             {#if brief.description}
@@ -358,6 +361,7 @@
             >
               <span class="sdot h-[6px] w-[6px]" style="--sc: {statusColor(brief.status)};"></span>
               <span class="flex-1 truncate text-[12.5px] text-[var(--fg)] {sel ? 'font-semibold' : 'font-[450]'}">{brief.name}</span>
+              <FreshDot count={integrations.freshCount(brief.path)} />
               <span class="text-[10px] tabular-nums text-[var(--fg4)]">{relativeTime(brief.lastOpened)}</span>
             </button>
           </div>
@@ -407,6 +411,7 @@
                   <BrandMark size={12} color={pc} />
                 </span>
                 <span class="flex-1 truncate text-[12.5px] font-semibold text-[var(--fg)]">{brief.name}</span>
+                <FreshDot count={integrations.freshCount(brief.path)} />
                 <span class="text-[10px] text-[var(--fg4)]">{relativeTime(brief.lastOpened)}</span>
               </div>
               {#if brief.description}

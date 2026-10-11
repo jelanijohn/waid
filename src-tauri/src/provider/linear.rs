@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use super::{BriefIntegration, Connection, IntegrationItem};
+use super::{BriefIntegration, Connection, FetchError, FetchOutcome, IntegrationItem};
 
 const ENDPOINT: &str = "https://api.linear.app/graphql";
 
@@ -43,30 +43,31 @@ pub async fn fetch(
     _conn: &Connection,
     sel: &BriefIntegration,
     token: &str,
-) -> Result<Vec<IntegrationItem>, String> {
+) -> Result<FetchOutcome, FetchError> {
     if sel.kind != "tasks" {
         return Err(format!(
             "Linear supports kind: tasks (got \"{}\"). Notifications come in a later phase.",
             sel.kind
-        ));
+        )
+        .into());
     }
     let first = sel.limit.unwrap_or(20).clamp(1, 100);
     let body = serde_json::json!({
         "query": ASSIGNED_ISSUES_QUERY,
         "variables": { "first": first },
     });
-    let json = post(token, &body).await?;
+    let (json, meta) = post(token, &body).await?;
     let nodes = json
         .pointer("/data/viewer/assignedIssues/nodes")
         .and_then(|v| v.as_array())
         .ok_or("unexpected Linear response shape (no assignedIssues.nodes)")?;
-    Ok(nodes.iter().map(map_issue).collect())
+    Ok(FetchOutcome::fresh(nodes.iter().map(map_issue).collect(), 1).with_meta(&meta))
 }
 
 /// Cheap auth check: ask for the viewer's id.
 pub async fn validate(_conn: &Connection, token: &str) -> Result<(), String> {
     let body = serde_json::json!({ "query": "query { viewer { id } }" });
-    post(token, &body).await.map(|_| ())
+    post(token, &body).await.map(|_| ()).map_err(|e| e.message)
 }
 
 /// Map one Linear issue node into a normalized `IntegrationItem`. Pulled out so
@@ -107,7 +108,10 @@ fn map_issue(node: &serde_json::Value) -> IntegrationItem {
 /// POST a GraphQL body and return the parsed JSON, surfacing auth failures and
 /// GraphQL-level `errors` as clear messages. Builds its own short-timeout client
 /// so a dead network fails fast instead of hanging the UI.
-async fn post(token: &str, body: &serde_json::Value) -> Result<serde_json::Value, String> {
+async fn post(
+    token: &str,
+    body: &serde_json::Value,
+) -> Result<(serde_json::Value, super::ResponseMeta), FetchError> {
     let resp = super::http_client()?
         .post(ENDPOINT)
         .header(reqwest::header::AUTHORIZATION, token)
@@ -115,21 +119,36 @@ async fn post(token: &str, body: &serde_json::Value) -> Result<serde_json::Value
         .json(body)
         .send()
         .await
-        .map_err(|e| format!("request failed: {e}"))?;
+        .map_err(FetchError::network)?;
 
-    let json = super::read_json(resp, "Linear").await?;
+    // Linear answers an exhausted limit with a 400 whose body carries the
+    // `RATELIMITED` code; promote it to a typed rate limit.
+    let read = match super::read_response(resp, "Linear").await {
+        Err(e) if e.message.contains("RATELIMITED") => {
+            return Err(FetchError::rate_limited("Linear rate limit hit — WAID will wait before trying again.", None))
+        }
+        other => other?,
+    };
+    let meta = read.meta.clone();
+    let json = read.json("Linear")?;
 
     // GraphQL reports errors in-band with a 200; surface the first one.
     if let Some(errors) = json.get("errors").and_then(|e| e.as_array()) {
-        if !errors.is_empty() {
-            let msg = errors[0]
+        if let Some(first) = errors.first() {
+            if first.pointer("/extensions/code").and_then(|c| c.as_str()) == Some("RATELIMITED") {
+                return Err(FetchError::rate_limited(
+                    "Linear rate limit hit — WAID will wait before trying again.",
+                    meta.retry_after_ms,
+                ));
+            }
+            let msg = first
                 .get("message")
                 .and_then(|m| m.as_str())
                 .unwrap_or("unknown error");
-            return Err(format!("Linear API error: {msg}"));
+            return Err(format!("Linear API error: {msg}").into());
         }
     }
-    Ok(json)
+    Ok((json, meta))
 }
 
 #[cfg(test)]

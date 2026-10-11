@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use super::{BriefIntegration, Connection, IntegrationItem};
+use super::{BriefIntegration, Connection, FetchError, FetchOutcome, IntegrationItem};
 
 /// Open issues assigned to the caller, freshest first.
 const DEFAULT_JQL: &str =
@@ -36,9 +36,9 @@ pub async fn fetch(
     conn: &Connection,
     sel: &BriefIntegration,
     token: &str,
-) -> Result<Vec<IntegrationItem>, String> {
+) -> Result<FetchOutcome, FetchError> {
     if sel.kind != "tasks" {
-        return Err(format!("Jira supports kind: tasks (got \"{}\").", sel.kind));
+        return Err(format!("Jira supports kind: tasks (got \"{}\").", sel.kind).into());
     }
     let (base, email) = config(conn)?;
     let jql = sel
@@ -62,13 +62,16 @@ pub async fn fetch(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("request failed: {e}"))?;
-    let json = super::read_json(resp, "Jira").await?;
+        .map_err(FetchError::network)?;
+    let read = super::read_response(resp, "Jira").await?;
+    let meta = read.meta.clone();
+    let json = read.json("Jira")?;
     let issues = json
         .get("issues")
         .and_then(|v| v.as_array())
         .ok_or("unexpected Jira response (no issues)")?;
-    Ok(issues.iter().map(|i| map_issue(i, &base)).collect())
+    let items = issues.iter().map(|i| map_issue(i, &base)).collect();
+    Ok(FetchOutcome::fresh(items, 1).with_meta(&meta))
 }
 
 pub async fn validate(conn: &Connection, token: &str) -> Result<(), String> {

@@ -3,6 +3,8 @@
 // `dark` class lives on <html> (Tailwind's dark variant); accent + density are
 // applied on the app shell in +page.svelte and read reactively by components.
 
+import { DEFAULT_DORMANT_DAYS, DORMANT_DAYS_MIN, DORMANT_DAYS_MAX } from "$lib/feedSync";
+
 export type SidebarStyle = "rows" | "compact" | "rocks";
 export type Density = "comfortable" | "compact";
 /** Where a brief's live state sits relative to its body (see ProjectDetail). */
@@ -41,6 +43,10 @@ interface Persisted {
   briefLayout: BriefLayout;
   density: Density;
   autoSyncOnOpen: boolean;
+  /** Background feed polling + "new" markers (see stores/autosync.svelte.ts). */
+  autoSyncFeeds: boolean;
+  /** Auto-sync: briefs not opened for this many days poll every 30 min. */
+  dormantAfterDays: number;
   railWidth: number;
   widgetLeaf: WidgetLeaf;
   /** Widget mode: whole-widget opacity, `WIDGET_OPACITY_MIN..1` (1 = opaque).
@@ -58,6 +64,13 @@ function validPos(v: unknown): { x: number; y: number } | null {
   return typeof x === "number" && Number.isFinite(x) && typeof y === "number" && Number.isFinite(y)
     ? { x, y }
     : null;
+}
+
+/** Whole days within the setting's range; junk falls back to the default. */
+function clampDays(n: unknown): number {
+  const v = typeof n === "number" ? n : Number(n);
+  if (!Number.isFinite(v)) return DEFAULT_DORMANT_DAYS;
+  return Math.min(DORMANT_DAYS_MAX, Math.max(DORMANT_DAYS_MIN, Math.round(v)));
 }
 
 function applyDark(dark: boolean): void {
@@ -80,6 +93,11 @@ class Settings {
   /** Opt-in: auto-refresh a brief's sync block when it's opened. Off by
    *  default — sync is manual unless the user turns this on. */
   autoSyncOnOpen = $state(false);
+  /** Opt-in: poll connected feeds in the background and mark new items. Off
+   *  by default; off means zero background requests. */
+  autoSyncFeeds = $state(false);
+  /** Briefs unopened this long drop to the dormant auto-sync tier. */
+  dormantAfterDays = $state(DEFAULT_DORMANT_DAYS);
   railWidth = $state(RAIL_WIDTH_DEFAULT);
   widgetLeaf = $state<WidgetLeaf>("accordion");
   widgetOpacity = $state(1);
@@ -105,6 +123,8 @@ class Settings {
     this.briefLayout = saved.briefLayout ?? "two-col";
     this.density = saved.density ?? "comfortable";
     this.autoSyncOnOpen = saved.autoSyncOnOpen ?? false;
+    this.autoSyncFeeds = saved.autoSyncFeeds ?? false;
+    this.dormantAfterDays = clampDays(saved.dormantAfterDays ?? DEFAULT_DORMANT_DAYS);
     this.railWidth =
       typeof saved.railWidth === "number" && Number.isFinite(saved.railWidth)
         ? Math.max(RAIL_WIDTH_MIN, Math.round(saved.railWidth))
@@ -125,6 +145,8 @@ class Settings {
       briefLayout: this.briefLayout,
       density: this.density,
       autoSyncOnOpen: this.autoSyncOnOpen,
+      autoSyncFeeds: this.autoSyncFeeds,
+      dormantAfterDays: this.dormantAfterDays,
       railWidth: this.railWidth,
       widgetLeaf: this.widgetLeaf,
       widgetOpacity: this.widgetOpacity,
@@ -171,6 +193,16 @@ class Settings {
 
   setAutoSyncOnOpen(on: boolean): void {
     this.autoSyncOnOpen = on;
+    this.persist();
+  }
+
+  setAutoSyncFeeds(on: boolean): void {
+    this.autoSyncFeeds = on;
+    this.persist();
+  }
+
+  setDormantAfterDays(n: number): void {
+    this.dormantAfterDays = clampDays(n);
     this.persist();
   }
 

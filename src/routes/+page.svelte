@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { projects } from "$lib/stores/projects.svelte";
   import { settings } from "$lib/stores/settings.svelte";
   import { widget } from "$lib/stores/widget.svelte";
+  import { autosync } from "$lib/stores/autosync.svelte";
   import { paintsOwnFrame } from "$lib/platform";
   import Titlebar from "$lib/components/Titlebar.svelte";
   import ResizeHandles from "$lib/components/ResizeHandles.svelte";
@@ -21,6 +22,15 @@
     if (widget.mode === "widget") widget.requestCaptureFocus();
     else captureOpen = true;
   }
+
+  // Auto-sync feeds: the background poller runs only while the setting is on.
+  $effect(() => {
+    if (!settings.autoSyncFeeds) return;
+    // untrack: start() runs a first tick that reads the brief list; that must
+    // not make this effect restart the poller on every list change.
+    untrack(() => autosync.start());
+    return () => autosync.stop();
+  });
 
   onMount(() => {
     projects.load();

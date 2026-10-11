@@ -840,7 +840,8 @@ errors and request bookkeeping (below). A feed's `poll: false` opts it out
   `messages` 30 s, others 20 s; a server `X-Poll-Interval` replaces the floor).
   Each consecutive failure doubles the interval until it reaches the 1 h cap
   (`BACKOFF_CAP_MS`), so a failing feed settles at hourly retries. 5 s tick,
-  ≤ 3 polls per tick, attention brief first, then comms kinds, then most
+  ≤ 3 polls per tick (one credential can take several, spaced by its
+  `minGapMs`), attention brief first, then comms kinds, then most
   overdue. Kicked on window focus / online / visible; skipped while hidden or
   offline. `mind` and `page` feeds are never polled.
 - **Budgets are per credential** — providers limit per token, so feeds pace by

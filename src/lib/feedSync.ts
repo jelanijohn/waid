@@ -12,7 +12,8 @@ import type { IntegrationItem, Provider } from "$lib/types";
 export const TICK_MS = 5_000;
 /** Feeds polled per tick. */
 export const MAX_PER_TICK = 3;
-/** Pause between two fetches in the same budget domain inside a tick. */
+/** Least pause between two fetches in the same budget domain inside a tick
+ *  (a class's larger `minGapMs` wins). */
 export const GAP_MS = 1_000;
 /** Debounce for `kick()` (focus / online / visible). */
 export const KICK_DEBOUNCE_MS = 5_000;

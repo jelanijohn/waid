@@ -342,6 +342,8 @@ class AutoSync {
       // then the most starved. One domain can't use up the tick.
       const order = [...queues.keys()].sort((a, b) => rank(queues.get(a)![0], queues.get(b)![0]));
       const picks: Feed[] = [];
+      /** domain → planned dispatch time of its latest pick this tick. */
+      const planned = new Map<string, number>();
       let progressed = true;
       while (picks.length < MAX_PER_TICK && progressed) {
         progressed = false;
@@ -352,24 +354,36 @@ class AutoSync {
           const f = head.f;
           const { burst, minGapMs } = BUDGET[f.cls];
           if ((this.holds.get(d) ?? 0) > now) continue;
-          if (now - (this.lastDomainPoll.get(d) ?? 0) < minGapMs) continue;
+          // The first pick needs `minGapMs` since the last real poll; a later
+          // one in the same tick is planned `minGapMs` after the previous pick
+          // and taken only if that still falls inside this tick.
+          const prevAt = planned.get(d);
+          const at = prevAt === undefined ? now : prevAt + Math.max(minGapMs, GAP_MS);
+          if (prevAt === undefined && now - (this.lastDomainPoll.get(d) ?? 0) < minGapMs) continue;
+          if (at - now >= TICK_MS) continue;
           const b = this.bucket(d, now);
           // A fetch costlier than the whole burst (a big Gmail limit) runs on a
           // full bucket and leaves it in debt.
           if (b.tokens < Math.min(f.estCost, burst)) continue;
           b.tokens -= f.estCost;
-          this.lastDomainPoll.set(d, now);
+          planned.set(d, at);
+          this.lastDomainPoll.set(d, at);
           picks.push(f);
           queues.get(d)!.shift();
           progressed = true;
         }
       }
 
-      let prev: string | null = null;
+      /** domain → when its last pick this tick was actually dispatched. */
+      const dispatched = new Map<string, number>();
       for (const f of picks) {
-        if (prev === f.domain) await sleep(GAP_MS);
+        const sent = dispatched.get(f.domain);
+        if (sent !== undefined) {
+          const wait = sent + Math.max(BUDGET[f.cls].minGapMs, GAP_MS) - Date.now();
+          if (wait > 0) await sleep(wait);
+        }
         if (gen !== this.generation) break;
-        prev = f.domain;
+        dispatched.set(f.domain, Date.now());
         // Selection reserved the domain; restamp at dispatch so `minGapMs` runs
         // from the real request, not from a pick made before slower fetches.
         this.lastDomainPoll.set(f.domain, Date.now());

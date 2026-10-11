@@ -419,6 +419,21 @@ pub struct Connection {
     pub token_path: Option<String>,
 }
 
+/// A connection `base_url` parsed as an http(s) URL: scheme optional and
+/// case-insensitive (`https` assumed when missing), host lowercased. `None`
+/// when blank or unparseable.
+pub(crate) fn parse_base_url(base: &str) -> Option<reqwest::Url> {
+    let s = base.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let web = |u: &reqwest::Url| u.has_host() && matches!(u.scheme(), "http" | "https");
+    reqwest::Url::parse(s)
+        .ok()
+        .filter(web)
+        .or_else(|| reqwest::Url::parse(&format!("https://{s}")).ok().filter(web))
+}
+
 /// A brief's reference to a connection plus a provider-specific selector. Parsed
 /// from frontmatter alongside `links` / `webhooks`, and round-tripped via the
 /// brief's `raw` on save — no special write handling needed.

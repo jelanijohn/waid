@@ -4402,28 +4402,35 @@ impl Default for FeedState {
     }
 }
 
-/// The host of a base URL (lowercased, no scheme/path); empty when unset.
-fn url_host(base: Option<&str>) -> String {
-    base.map(str::trim)
-        .unwrap_or_default()
-        .trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .split('/')
-        .next()
-        .unwrap_or_default()
-        .to_ascii_lowercase()
+/// A base URL split into its authority (lowercased host, plus a non-default
+/// port) and its path (no trailing slash); both empty when unset. A value that
+/// won't parse is kept whole as the authority, so distinct typos never collide.
+fn url_parts(base: Option<&str>) -> (String, String) {
+    let raw = base.map(str::trim).unwrap_or_default();
+    match provider::parse_base_url(raw) {
+        Some(u) => {
+            let host = u.host_str().unwrap_or_default();
+            let authority = match u.port() {
+                Some(port) => format!("{host}:{port}"),
+                None => host.to_string(),
+            };
+            (authority, u.path().trim_end_matches('/').to_string())
+        }
+        None => (raw.to_ascii_lowercase(), String::new()),
+    }
 }
 
-/// The host a connection's requests really go to, for credential identity and
-/// cache scope. GitHub ignores a `base_url` pointing at public GitHub (see
-/// `provider::github::api_base`), so that counts as the default host — the same
-/// PAT must share one budget however its base URL was typed.
-fn effective_host(conn: &Connection) -> String {
+/// Where a connection's requests really go — `(authority, base path)` — for
+/// credential identity (authority) and cache scope (both). GitHub ignores a
+/// `base_url` pointing at public GitHub (see `provider::github::api_base`), so
+/// that counts as the default host — the same PAT must share one budget however
+/// its base URL was typed.
+fn effective_base(conn: &Connection) -> (String, String) {
     let base = conn.base_url.as_deref();
     if conn.provider == provider::Provider::Github && base.is_some_and(provider::github::is_public_github) {
-        return String::new();
+        return Default::default();
     }
-    url_host(base)
+    url_parts(base)
 }
 
 /// What makes two connections the same credential for rate limiting: the Gmail
@@ -4440,7 +4447,7 @@ fn credential_identity(conn: &Connection, token: &str) -> Option<String> {
             .map(str::to_ascii_lowercase),
         provider::Provider::Neuroskill => None,
         _ => (!token.is_empty())
-            .then(|| format!("{}|{}", effective_host(conn), token)),
+            .then(|| format!("{}|{}", effective_base(conn).0, token)),
     }
 }
 
@@ -4456,8 +4463,8 @@ fn credential_id(salt: &[u8; 32], identity: &str) -> String {
 }
 
 /// Connection fields that change a feed's result without changing its query:
-/// host, account (Asana workspace / Jira user) and the GitHub repo scope that
-/// `retain_by_repos` post-filters account-wide results with.
+/// host + base path, account (Asana workspace / Jira user) and the GitHub repo
+/// scope that `retain_by_repos` post-filters account-wide results with.
 fn cache_scope(conn: &Connection) -> String {
     let mut repos: Vec<String> = conn
         .repos
@@ -4472,9 +4479,11 @@ fn cache_scope(conn: &Connection) -> String {
         repos.sort();
         repos.dedup();
     }
+    let (host, path) = effective_base(conn);
     format!(
-        "{}|{}|{}",
-        effective_host(conn),
+        "{}{}|{}|{}",
+        host,
+        path,
         conn.account.as_deref().map(str::trim).unwrap_or_default().to_ascii_lowercase(),
         repos.join(",")
     )
@@ -6587,6 +6596,31 @@ mod tests {
         assert_eq!(credential_identity(&api, "ghp_x"), id);
         assert_eq!(cache_scope(&web), cache_scope(&plain));
         assert_ne!(credential_identity(&ghe, "ghp_x"), id, "Enterprise is a different host");
+        let mut shouted = conn(provider::Provider::Github);
+        shouted.base_url = Some("HTTPS://GitHub.com".into());
+        assert_eq!(credential_identity(&shouted, "ghp_x"), id, "scheme/host case is ignored");
+    }
+
+    #[test]
+    fn cache_scope_normalizes_host_and_keeps_base_path() {
+        let jira = |base: &str| {
+            let mut c = conn(provider::Provider::Jira);
+            c.base_url = Some(base.into());
+            c
+        };
+        let root = jira("https://jira.example.com");
+        // Case, a missing scheme, a default port and a trailing slash are the same endpoint.
+        for same in ["HTTPS://Jira.Example.com/", "jira.example.com", "https://jira.example.com:443"] {
+            assert_eq!(cache_scope(&jira(same)), cache_scope(&root), "base={same}");
+            assert_eq!(credential_identity(&jira(same), "t"), credential_identity(&root, "t"), "base={same}");
+        }
+        // Distinct hosts must not collapse to the scheme (the old `HTTPS:` bug).
+        assert_ne!(cache_scope(&jira("HTTPS://a.example.com")), cache_scope(&jira("HTTPS://b.example.com")));
+        // Context roots on one host share a budget but never cached items.
+        let (one, two) = (jira("https://host.example.com/jira1"), jira("https://host.example.com/jira2"));
+        assert_ne!(cache_scope(&one), cache_scope(&two));
+        assert_eq!(credential_identity(&one, "t"), credential_identity(&two, "t"));
+        assert_ne!(cache_scope(&jira("https://jira.example.com:8443")), cache_scope(&root));
     }
 
     #[test]

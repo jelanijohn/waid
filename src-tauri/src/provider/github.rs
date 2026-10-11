@@ -49,18 +49,12 @@ fn api_base(conn: &Connection) -> String {
 /// Whether a `base_url` is really public github.com (or its API host) — in which
 /// case there's no Enterprise instance and the default API base applies.
 pub(crate) fn is_public_github(base: &str) -> bool {
-    let host = base
-        .trim()
-        .trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    matches!(
-        host.as_str(),
-        "github.com" | "www.github.com" | "api.github.com"
-    )
+    super::parse_base_url(base).is_some_and(|u| {
+        matches!(
+            u.host_str(),
+            Some("github.com" | "www.github.com" | "api.github.com")
+        )
+    })
 }
 
 pub async fn fetch(

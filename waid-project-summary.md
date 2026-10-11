@@ -835,10 +835,11 @@ errors and request bookkeeping (below). A feed's `poll: false` opts it out
   `dormant` at 30 min, `archived` never. Per-kind floors from provider rate
   limits apply in every tier (`notifications` / `comments` 60 s, `email` /
   `messages` 30 s, others 20 s; a server `X-Poll-Interval` replaces the floor).
-  Failures back off ×2 up to 1 h. 5 s tick, ≤ 3 polls per tick, attention brief
-  first, then comms kinds, then most overdue. Kicked on window focus / online /
-  visible; skipped while hidden or offline. `mind` and `page` feeds are never
-  polled.
+  Failures double the interval for the first five (at most ×32, never past
+  1 h), so a failing feed keeps retrying on a steady slow cadence. 5 s tick,
+  ≤ 3 polls per tick, attention brief first, then comms kinds, then most
+  overdue. Kicked on window focus / online / visible; skipped while hidden or
+  offline. `mind` and `page` feeds are never polled.
 - **Budgets are per credential** — providers limit per token, so feeds pace by
   domain = (budget class × `credentialId`). Each domain is a token bucket
   (`BUDGET`: roughly half of each provider's published limit, GitHub search

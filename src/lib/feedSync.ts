@@ -218,13 +218,13 @@ export function tierFor(
   return "active";
 }
 
-/** max(tier, floor) × 2^min(failures, 5), capped. The floor is the server's
+/** max(tier, floor) × 2^failures, capped. The floor is the server's
  *  requested interval when known, else the kind's. Infinity for archived. */
 export function effectiveInterval(tier: Tier, kind: string, failures: number, serverFloorMs?: number | null): number {
   if (tier === "archived") return Infinity;
   const floor = serverFloorMs ?? KIND_FLOOR_MS[kind] ?? TIER_MS.focused;
   const base = Math.max(TIER_MS[tier], floor);
-  return Math.min(base * 2 ** Math.min(failures, 5), BACKOFF_CAP_MS);
+  return Math.min(base * 2 ** Math.max(0, failures), BACKOFF_CAP_MS);
 }
 
 /** A ±10 % multiplier, drawn once per feed per cycle. */

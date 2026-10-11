@@ -838,8 +838,8 @@ errors and request bookkeeping (below). A feed's `poll: false` opts it out
   `dormant` at 30 min, `archived` never. Per-kind floors from provider rate
   limits apply in every tier (`notifications` / `comments` 60 s, `email` /
   `messages` 30 s, others 20 s; a server `X-Poll-Interval` replaces the floor).
-  Failures double the interval for the first five (at most ×32, never past
-  1 h), so a failing feed keeps retrying on a steady slow cadence. 5 s tick,
+  Each consecutive failure doubles the interval until it reaches the 1 h cap
+  (`BACKOFF_CAP_MS`), so a failing feed settles at hourly retries. 5 s tick,
   ≤ 3 polls per tick, attention brief first, then comms kinds, then most
   overdue. Kicked on window focus / online / visible; skipped while hidden or
   offline. `mind` and `page` feeds are never polled.

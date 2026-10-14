@@ -28,6 +28,7 @@
   } from "$lib/stores/settings.svelte";
   import { autosync } from "$lib/stores/autosync.svelte";
   import { pollingRatesSummary, DORMANT_DAYS_MIN, DORMANT_DAYS_MAX } from "$lib/feedSync";
+  import { platform } from "$lib/platform";
   import Icon from "./Icon.svelte";
   import CredentialHelp from "./CredentialHelp.svelte";
 
@@ -603,6 +604,55 @@
             <p class="mb-4 text-[11.5px] text-[var(--fg3)]">
               Lets the desktop show through the widget. Lower is more see-through; 100% is solid.
             </p>
+
+            <!-- Applied when widget mode is entered (Settings can't be open
+                 while the widget is on screen). Exit always clears both. -->
+            <div class="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--fg3)]">
+              Widget window
+            </div>
+            <button
+              class="mb-3 flex w-full max-w-[340px] items-center justify-between gap-2 text-left"
+              onclick={() => settings.setWidgetAlwaysOnTop(!settings.widgetAlwaysOnTop)}
+              aria-pressed={settings.widgetAlwaysOnTop}
+            >
+              <span class="text-[12px] text-[var(--fg2)]">
+                Always on top
+                <span class="block text-[10.5px] text-[var(--fg3)]">Keep the widget above other windows</span>
+              </span>
+              <span
+                class="relative h-[18px] w-[30px] shrink-0 rounded-full transition-colors"
+                style="background: {settings.widgetAlwaysOnTop ? 'var(--accent)' : 'var(--border)'};"
+              >
+                <span
+                  class="absolute top-[2px] h-[14px] w-[14px] rounded-full bg-white transition-[left]"
+                  style="left: {settings.widgetAlwaysOnTop ? '14px' : '2px'};"
+                ></span>
+              </span>
+            </button>
+            <button
+              class="mb-4 flex w-full max-w-[340px] items-center justify-between gap-2 text-left disabled:opacity-50"
+              onclick={() => settings.setWidgetAlwaysPresent(!settings.widgetAlwaysPresent)}
+              aria-pressed={settings.widgetAlwaysPresent}
+              disabled={platform === "windows"}
+            >
+              <span class="text-[12px] text-[var(--fg2)]">
+                Always present
+                <span class="block text-[10.5px] text-[var(--fg3)]">
+                  {platform === "windows"
+                    ? "Not supported on Windows"
+                    : "Keep the widget in view when you switch virtual desktops"}
+                </span>
+              </span>
+              <span
+                class="relative h-[18px] w-[30px] shrink-0 rounded-full transition-colors"
+                style="background: {settings.widgetAlwaysPresent ? 'var(--accent)' : 'var(--border)'};"
+              >
+                <span
+                  class="absolute top-[2px] h-[14px] w-[14px] rounded-full bg-white transition-[left]"
+                  style="left: {settings.widgetAlwaysPresent ? '14px' : '2px'};"
+                ></span>
+              </span>
+            </button>
 
             <div class="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--fg3)]">
               Accent

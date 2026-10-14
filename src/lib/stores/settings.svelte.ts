@@ -53,6 +53,11 @@ interface Persisted {
    *  A constant, user-set value — never adaptive — applied as CSS `opacity`
    *  on the widget panels; the dashboard is unaffected. */
   widgetOpacity: number;
+  /** Widget mode: float above other windows. */
+  widgetAlwaysOnTop: boolean;
+  /** Widget mode: visible on every virtual desktop / workspace (macOS and
+   *  Linux only). */
+  widgetAlwaysPresent: boolean;
   /** Widget mode: where the roster's top-left was last left (logical px). */
   widgetPos: { x: number; y: number } | null;
 }
@@ -101,6 +106,8 @@ class Settings {
   railWidth = $state(RAIL_WIDTH_DEFAULT);
   widgetLeaf = $state<WidgetLeaf>("accordion");
   widgetOpacity = $state(1);
+  widgetAlwaysOnTop = $state(true);
+  widgetAlwaysPresent = $state(false);
   widgetPos = $state<{ x: number; y: number } | null>(null);
 
   /** Resolve saved prefs (or sensible defaults) and apply the dark class. */
@@ -131,6 +138,9 @@ class Settings {
         : RAIL_WIDTH_DEFAULT;
     this.widgetLeaf = saved.widgetLeaf === "side" ? "side" : "accordion";
     this.widgetOpacity = clampWidgetOpacity(saved.widgetOpacity);
+    // Blobs saved before this setting existed lack the key: read as on.
+    this.widgetAlwaysOnTop = saved.widgetAlwaysOnTop ?? true;
+    this.widgetAlwaysPresent = saved.widgetAlwaysPresent === true;
     this.widgetPos = validPos(saved.widgetPos);
     applyDark(this.dark);
     applyAccent(this.accent);
@@ -150,6 +160,8 @@ class Settings {
       railWidth: this.railWidth,
       widgetLeaf: this.widgetLeaf,
       widgetOpacity: this.widgetOpacity,
+      widgetAlwaysOnTop: this.widgetAlwaysOnTop,
+      widgetAlwaysPresent: this.widgetAlwaysPresent,
       widgetPos: this.widgetPos,
     };
     localStorage.setItem(KEY, JSON.stringify(data));
@@ -224,6 +236,16 @@ class Settings {
   setWidgetOpacity(v: number, save = true): void {
     this.widgetOpacity = clampWidgetOpacity(v);
     if (save) this.persist();
+  }
+
+  setWidgetAlwaysOnTop(on: boolean): void {
+    this.widgetAlwaysOnTop = on;
+    this.persist();
+  }
+
+  setWidgetAlwaysPresent(on: boolean): void {
+    this.widgetAlwaysPresent = on;
+    this.persist();
   }
 
   setWidgetPos(pos: { x: number; y: number } | null): void {

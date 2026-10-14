@@ -14,6 +14,7 @@ import {
   PhysicalPosition,
 } from "@tauri-apps/api/window";
 import { platform, paintsOwnFrame } from "$lib/platform";
+import { settings } from "$lib/stores/settings.svelte";
 
 export const ROSTER_W = 300;
 export const LEAF_W = 340;
@@ -85,6 +86,15 @@ async function attempt(fn: () => Promise<unknown>): Promise<void> {
   }
 }
 
+/** Apply the user's widget window flags (Settings → Widget window). */
+async function applyWidgetFlags(win: ReturnType<typeof getCurrentWindow>): Promise<void> {
+  await attempt(() => win.setAlwaysOnTop(settings.widgetAlwaysOnTop));
+  // No-op on Windows by platform design; skip the call rather than rely on it.
+  if (platform !== "windows") {
+    await attempt(() => win.setVisibleOnAllWorkspaces(settings.widgetAlwaysPresent));
+  }
+}
+
 /** Move to a physical position and confirm it took (poll the read-back, since
  *  some backends apply the move asynchronously). A move that never lands marks
  *  the platform as unpositionable for the rest of this widget session. */
@@ -145,7 +155,7 @@ export function reapplyWidgetSize(): Promise<void> {
 }
 
 /** Enter widget geometry: un-maximize, remember the dashboard rect, drop the
- *  minimum, go always-on-top, size to the already-measured content, place it.
+ *  minimum, apply the widget window flags, size to the already-measured content, place it.
  *  Returns the geometry to restore later (null if it couldn't be read). */
 export async function enterWidgetWindow(
   anchor: { x: number; y: number } | null,
@@ -183,7 +193,7 @@ export async function enterWidgetWindow(
   await attempt(() =>
     win.setMinSize(new LogicalSize(ROSTER_W + 2 * GUTTER, MIN_CONTENT_H + 2 * GUTTER)),
   );
-  await attempt(() => win.setAlwaysOnTop(true));
+  await applyWidgetFlags(win);
   await setWidgetSize(contentW, contentH);
 
   // Placement: the remembered roster anchor if it's still on a monitor, else
@@ -217,7 +227,7 @@ export async function enterWidgetWindow(
   return saved;
 }
 
-/** Restore the dashboard: always-on-top off, size, position, the 720×480
+/** Restore the dashboard: window flags off, size, position, the 720×480
  *  minimum (last, to avoid GTK's double jump), then re-maximize if it was. */
 export async function exitWidgetWindow(saved: SavedGeometry | null): Promise<void> {
   let win;
@@ -228,7 +238,9 @@ export async function exitWidgetWindow(saved: SavedGeometry | null): Promise<voi
   }
   lastRequested = null;
   lastContent = null;
+  // Cleared unconditionally: the dashboard never floats or follows desktops.
   await attempt(() => win.setAlwaysOnTop(false));
+  if (platform !== "windows") await attempt(() => win.setVisibleOnAllWorkspaces(false));
   if (saved) {
     await attempt(() => win.setSize(new LogicalSize(saved.w, saved.h)));
     if (canPosition) await attempt(() => win.setPosition(new LogicalPosition(saved.x, saved.y)));

@@ -1,6 +1,6 @@
 <script lang="ts">
-  // One widget-mode roster row: name · status · last opened · chevron, plus the
-  // lead brief's Activity line. A button that toggles the brief's leaf; at rest
+  // One widget-mode roster row: name · (pin) · new-count or status · last
+  // opened · chevron, plus the lead brief's Activity line. A button that toggles the brief's leaf; at rest
   // (`still`) it renders as plain content inside the rest panel's one button.
   import type { Brief } from "$lib/types";
   import { statusColor, STATUS_LABEL } from "$lib/status";
@@ -17,6 +17,8 @@
     side = null,
     still = false,
     fresh = 0,
+    pinned = false,
+    showStatus = true,
     onToggle,
   }: {
     brief: Brief;
@@ -29,6 +31,10 @@
     still?: boolean;
     /** Auto-sync: new items across this brief's feeds (0 hides the dot). */
     fresh?: number;
+    /** Pinned in widget mode: shows the pin glyph after the name. */
+    pinned?: boolean;
+    /** False when Auto-sync is on: the status label is replaced by the new-count. */
+    showStatus?: boolean;
     onToggle?: () => void;
   } = $props();
 
@@ -42,12 +48,15 @@
 {#snippet content()}
   <span class="line">
     <span class="name" class:lead>{brief.name}</span>
+    {#if pinned}
+      <span class="pin" title="Pinned" aria-label="Pinned" role="img"><Icon name="keep" size={12} fill={1} /></span>
+    {/if}
     {#if lead && inSession}
       <span class="session">· in session</span>
     {/if}
     <span class="spacer"></span>
     <FreshDot count={fresh} />
-    {#if status}
+    {#if showStatus && status}
       <span class="status">
         <span class="dot" style="background: {statusColor(status)};"></span>
         {STATUS_LABEL[status.toLowerCase()] ?? status}
@@ -118,6 +127,11 @@
   .name.lead {
     font-weight: 600;
     color: var(--fg);
+  }
+  .pin {
+    display: inline-flex;
+    flex-shrink: 0;
+    color: var(--fg2);
   }
   .session {
     flex-shrink: 0;

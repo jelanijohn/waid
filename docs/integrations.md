@@ -45,7 +45,10 @@ new items show up without opening the brief:
   "· N new" on the feed line. Opening the brief (or its widget leaf) marks the
   items seen; the new rows stay highlighted until you leave it.
 - **How often** — per brief: the one you're viewing every 20 s, other active
-  or blocked briefs every 60 s, paused every 10 min, archived never. Slower
+  or blocked briefs every 60 s, paused every 10 min, archived never. A brief
+  pinned in the widget is checked every 60 s while the widget is showing,
+  even if it's paused or you haven't opened it lately (archived still means
+  never). Slower
   kinds are capped by provider rate limits (email and Slack 30 s, GitHub
   notifications and Figma comments 60 s), each provider is spaced out, and
   errors or rate limits back off automatically. Hover the ⓘ next to the

@@ -1,11 +1,12 @@
-// Widget mode: a small always-on-top roster presentation of the same `main`
-// window. The dashboard stays mounted but hidden while
+// Widget mode: a small roster (always-on-top by default) presentation of the
+// same `main` window. The dashboard stays mounted but hidden while
 // this is on; every store is shared, so nothing needs syncing across modes.
 
 import { tick } from "svelte";
 import type { Brief } from "$lib/types";
 import { projects } from "$lib/stores/projects.svelte";
 import { settings } from "$lib/stores/settings.svelte";
+import { hash } from "$lib/feedSync";
 import {
   ROSTER_W,
   LEAF_W,
@@ -23,6 +24,22 @@ export type WidgetMode = "dashboard" | "widget";
 
 /** Blur → rest collapse grace, so a refocus inside the window cancels it. */
 const BLUR_GRACE_MS = 200;
+
+/** localStorage key for widget pins: `{ v: 1, pins: hash(path)[] }`. Hashes
+ *  only, never a path (same rule as auto-sync's seen-state). */
+const PINS_KEY = "waid-widget-pins";
+
+function loadPins(): Set<string> {
+  try {
+    const raw = localStorage.getItem(PINS_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw) as { v?: number; pins?: unknown };
+    if (parsed?.v !== 1 || !Array.isArray(parsed.pins)) return new Set();
+    return new Set(parsed.pins.filter((p): p is string => typeof p === "string"));
+  } catch {
+    return new Set();
+  }
+}
 
 function isArchived(b: Brief): boolean {
   return (b.status ?? "").toLowerCase() === "archived";
@@ -54,19 +71,62 @@ class WidgetStore {
   private saved: SavedGeometry | null = null;
   private blurTimer: ReturnType<typeof setTimeout> | null = null;
   private busy = false;
+  /** Pinned briefs, as `hash(path)`. Reassigned (never mutated) on change. */
+  private pinSet = $state<Set<string>>(loadPins());
 
-  /** The brief shown at rest and pinned first: the dashboard's selection,
+  /** The brief shown at rest and listed first: the dashboard's selection,
    *  else the first non-archived brief. */
   get lead(): Brief | null {
     return projects.selected ?? projects.briefs.find((b) => !isArchived(b)) ?? null;
   }
 
-  /** Lead first, then the rest in store order, archived dropped (unless it's
-   *  the lead). Sidebar search / status filter don't apply. */
-  get roster(): Brief[] {
+  /** Whether this brief is pinned in widget mode. */
+  isPinned(path: string): boolean {
+    return this.pinSet.has(hash(path));
+  }
+
+  /** Pin or unpin. Persists. Also drops hashes that match no current brief,
+   *  but only when the brief list is loaded and non-empty (a transient empty
+   *  list must not wipe the pins). */
+  togglePin(path: string): void {
+    const next = new Set(this.pinSet);
+    const h = hash(path);
+    if (next.has(h)) next.delete(h);
+    else next.add(h);
+    if (!projects.loading && projects.briefs.length) {
+      const live = new Set(projects.briefs.map((b) => hash(b.path)));
+      for (const p of next) if (!live.has(p)) next.delete(p);
+    }
+    this.pinSet = next;
+    try {
+      localStorage.setItem(PINS_KEY, JSON.stringify({ v: 1, pins: [...next] }));
+    } catch {
+      // In-memory pins still work for this session.
+    }
+  }
+
+  /** Non-archived pinned briefs, in store order, the lead excluded. An
+   *  archived brief keeps its pin, so un-archiving brings it back pinned. */
+  get pinned(): Brief[] {
+    const leadPath = this.lead?.path;
+    return projects.briefs.filter((b) => b.path !== leadPath && !isArchived(b) && this.isPinned(b.path));
+  }
+
+  /** What the widget shows at rest: the lead, then the pinned briefs. */
+  get restRows(): Brief[] {
     const lead = this.lead;
     if (!lead) return [];
-    return [lead, ...projects.briefs.filter((b) => b.path !== lead.path && !isArchived(b))];
+    return [lead, ...this.pinned];
+  }
+
+  /** Lead, then pinned, then the rest in store order, archived dropped
+   *  (unless it's the lead), so rows never move when the widget wakes.
+   *  Sidebar search / status filter don't apply. */
+  get roster(): Brief[] {
+    const rest = this.restRows;
+    if (!rest.length) return [];
+    const shown = new Set(rest.map((b) => b.path));
+    return [...rest, ...projects.briefs.filter((b) => !shown.has(b.path) && !isArchived(b))];
   }
 
   get openBrief(): Brief | null {

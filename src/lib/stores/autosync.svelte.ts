@@ -208,7 +208,8 @@ class AutoSync {
     const out: Feed[] = [];
     for (const b of projects.briefs) {
       const isAttention = b.path === attention;
-      const tier = tierFor(b.status, isAttention, b.lastOpened, dormantAfterMs, now);
+      const watched = widget.mode === "widget" && widget.isPinned(b.path);
+      const tier = tierFor(b.status, isAttention, b.lastOpened, dormantAfterMs, now, watched);
       for (const ig of b.integrations) {
         if (SKIP_KINDS.has(ig.kind)) continue;
         const conn = b.connections.find((c) => c.id === ig.connection);

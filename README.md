@@ -97,8 +97,10 @@ Full frontmatter reference (webhook headers, `{{secret}}`, app-owned regions):
   timestamped note under a project's `## Captures`.
 - **Widget mode** — the titlebar's widget button shrinks the window to a small
   roster that floats above other windows (the *Always on top* and *Always
-  present* settings control that): at rest it shows one line for your current project,
-  on focus every non-archived brief. Open a row for its Current State, feed
+  present* settings control that): at rest it shows your current project and
+  any you've pinned, on focus every non-archived brief. Pin a brief from its
+  leaf to keep it in view. With Auto-sync on, each row shows its count of new
+  feed items in place of the status. Open a row for its Current State, feed
   counts, launch chips, and NeuroSkill session control — inline under the row
   or as a side leaf (the *Widget detail* setting). Quick capture goes to the
   roster's own field; *Expand* or *Open brief* returns to the dashboard. The
@@ -116,7 +118,8 @@ Full frontmatter reference (webhook headers, `{{secret}}`, app-owned regions):
   and WAID re-checks every brief's feeds in the background, marking new items
   with an accent dot and count in the sidebar, the widget, and the feed panel.
   The brief you're viewing is checked about every 20 s, other active briefs
-  every 60 s, paused every 10 min, archived never (the ⓘ next to the toggle
+  every 60 s, pinned briefs every 60 s while the widget is showing, paused
+  every 10 min, archived never (the ⓘ next to the toggle
   lists the rates). Read-only: no writes, no LLM, no toasts.
   [docs/integrations.md](docs/integrations.md#auto-sync).
 - **Mind State** — connect a local

@@ -1,6 +1,6 @@
 <script lang="ts">
   // A widget-mode leaf: one brief's Current State, a count per feed, its launch
-  // chips, session control and "Open brief". `accordion` renders as a band
+  // chips, session control, the widget pin toggle and "Open brief". `accordion` renders as a band
   // under the row; `side` fills the panel beside the roster. Peeking never
   // selects the brief (no last_opened write); launching does.
   import { onMount, untrack } from "svelte";
@@ -124,6 +124,19 @@
   </button>
 {/snippet}
 
+{#snippet pinToggle()}
+  <button
+    type="button"
+    class="pin"
+    aria-pressed={widget.isPinned(brief.path)}
+    title={widget.isPinned(brief.path) ? "Unpin from the widget" : "Keep visible when the widget is at rest"}
+    onclick={() => widget.togglePin(brief.path)}
+  >
+    <Icon name="keep" size={12} fill={widget.isPinned(brief.path) ? 1 : 0} />
+    {widget.isPinned(brief.path) ? "Pinned" : "Pin"}
+  </button>
+{/snippet}
+
 <div class="leaf {variant} {side ? '' : 'scroll-thin'}">
   {#if side}
     <div class="block">
@@ -131,6 +144,7 @@
         <span class="tdot" style="background: {statusColor(brief.status)};"></span>
         <span class="tname">{brief.name}</span>
         <span class="flex-1"></span>
+        {@render pinToggle()}
         {@render openBrief()}
       </div>
       {#if brief.description}
@@ -224,7 +238,12 @@
         {/if}
       {/if}
       <span class="flex-1"></span>
-      {#if !side}{@render openBrief()}{/if}
+      {#if !side}
+        <span class="acts">
+          {@render pinToggle()}
+          {@render openBrief()}
+        </span>
+      {/if}
     </div>
   {/if}
 </div>
@@ -437,6 +456,29 @@
   }
   .sess:hover {
     color: var(--fg);
+  }
+  .acts {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .pin {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 4px;
+    border: none;
+    background: transparent;
+    font-size: 12px;
+    color: var(--fg-body);
+    cursor: pointer;
+    padding: 0;
+  }
+  .pin:hover {
+    color: var(--fg);
+  }
+  .pin[aria-pressed="true"] {
+    color: var(--accent);
   }
   .open {
     display: inline-flex;

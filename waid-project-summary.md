@@ -835,7 +835,9 @@ errors and request bookkeeping (below). A feed's `poll: false` opts it out
   attention brief (dashboard selection; widget open leaf, else lead row) is
   `focused` at 20 s, `active` / `blocked` / custom statuses 60 s, `paused`
   10 min, briefs not opened for `dormantAfterDays` (Settings, default 3)
-  `dormant` at 30 min, `archived` never. Per-kind floors from provider rate
+  `dormant` at 30 min, `archived` never. In widget mode a pinned brief
+  (`tierFor`'s `watched` flag) counts as `active` unless it is archived or is
+  the attention brief. Per-kind floors from provider rate
   limits apply in every tier (`notifications` / `comments` 60 s, `email` /
   `messages` 30 s, others 20 s; a server `X-Poll-Interval` replaces the floor).
   Each consecutive failure doubles the interval until it reaches the 1 h cap
@@ -966,13 +968,18 @@ errors and request bookkeeping (below). A feed's `poll: false` opts it out
   window call, all errors swallowed so `vite dev` no-ops). The dashboard stays
   **mounted but hidden** (unsaved edits and sessions survive) and every store
   is shared, so nothing syncs across modes. **At rest** (window blurred, 200ms
-  grace) it shows one row — the dashboard's selection, else the first
-  non-archived brief — plus a status tally; **on focus** the full roster
-  (lead first, archived dropped, sidebar filters ignored), Sync all, Expand,
+  grace) it shows the lead row — the dashboard's selection, else the first
+  non-archived brief — plus every **pinned** brief, and a status tally; **on
+  focus** the full roster (lead, then pinned, then the rest in store order, so
+  rows never move on wake; archived dropped, sidebar filters ignored), Sync all, Expand,
   and a capture field (`⌘/Ctrl+K` and the global hotkey focus it instead of
   opening the modal). A row opens a **leaf**: Current State excerpt (plain
   text from the `waid:state` region), a count per feed (lazy cached fetch, per-
-  feed refresh), launch chips, NeuroSkill start/end session, and *Open brief*.
+  feed refresh), launch chips, NeuroSkill start/end session, a *Pin* toggle, and *Open
+  brief*. Pins are view state, not project data: `hash(path)`s in
+  `localStorage` (`waid-widget-pins`), never written to a `.md`; rows show a
+  pin glyph. With Auto-sync on, a row's status label is replaced by its
+  new-item count (status stays in the tally and the side leaf's title).
   Peeking never stamps `last_opened`; launching does. The leaf opens inline
   (**accordion**) or as a **side leaf** beside the roster (the *Widget detail*
   setting) — on the left the window shifts left so the roster stays put. A
@@ -1106,8 +1113,8 @@ The visual layer has a named theme and shares branding with What's Next.
   project → append a timestamped note under its `## Captures` heading.
 - **Widget mode** — a compact roster of the same window that floats above
   other windows (*Always on top*, default on; *Always present* on every
-  virtual desktop, macOS/Linux, default off): one
-  line at rest, every brief on focus, a per-brief leaf (Current State, feed
+  virtual desktop, macOS/Linux, default off): the
+  current project plus any pinned at rest, every brief on focus, a per-brief leaf (Current State, feed
   counts, launch chips, session control) inline or to the side, its own
   capture field, and remembered position. *(See §5 UI.)*
 - **Search & status filtering** — text filter (`⌘/Ctrl+F`) + status filter;

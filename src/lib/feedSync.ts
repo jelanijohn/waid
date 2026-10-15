@@ -199,9 +199,9 @@ export const COMMS_KINDS = new Set(["notifications", "email", "messages", "comme
 /** Most fingerprints remembered per feed. */
 export const SEEN_CAP = 300;
 
-/** A brief's tier. Archived → never; the attention brief → focused; paused →
- *  paused; not opened within `dormantAfterMs` (or never) → dormant; else
- *  active. Unknown/custom statuses poll like `active` (status is a free
+/** A brief's tier. Archived → never; the attention brief → focused; a
+ *  `watched` brief (pinned, in widget mode) → active; paused → paused; not
+ *  opened within `dormantAfterMs` (or never) → dormant; else active. Unknown/custom statuses poll like `active` (status is a free
  *  string). Opening a brief stamps `lastOpened`, which promotes it. */
 export function tierFor(
   status: string | null | undefined,
@@ -209,10 +209,12 @@ export function tierFor(
   lastOpened?: string | null,
   dormantAfterMs: number = DEFAULT_DORMANT_DAYS * DAY_MS,
   now: number = Date.now(),
+  watched = false,
 ): Tier {
   const s = (status ?? "").trim().toLowerCase();
   if (s === "archived") return "archived";
   if (isAttention) return "focused";
+  if (watched) return "active";
   if (s === "paused") return "paused";
   const opened = lastOpened ? Date.parse(lastOpened) : NaN;
   if (!Number.isFinite(opened) || now - opened > dormantAfterMs) return "dormant";
@@ -316,6 +318,7 @@ export function pollingRatesSummary(dormantDays: number, live: DomainStatus[] = 
     "Polling rates (while on)",
     `Brief you're viewing: every ${fmt(TIER_MS.focused)}${slower ? ` — ${slower}` : ""}`,
     `Active & blocked briefs: every ${fmt(TIER_MS.active)}`,
+    `Pinned briefs (widget mode): every ${fmt(TIER_MS.active)}`,
     `Paused briefs: every ${fmt(TIER_MS.paused)}`,
     `Dormant briefs (not opened in ${days}): every ${fmt(TIER_MS.dormant)}`,
     "Archived briefs: never",

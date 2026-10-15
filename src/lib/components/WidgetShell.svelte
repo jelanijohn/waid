@@ -246,19 +246,22 @@
       {#if !widget.focused}
         <!-- Rest: the lead plus pinned briefs, as one button that brings the roster back. -->
         <button type="button" class="rest" aria-label="Show all projects" onclick={() => widget.setFocused(true)}>
-          {#each widget.restRows as b, i (b.path)}
-            <WidgetRow
-              brief={b}
-              lead={i === 0}
-              still
-              pinned={widget.isPinned(b.path)}
-              showStatus={!settings.autoSyncFeeds}
-              inSession={session.isActive(b.path)}
-              fresh={integrations.freshCount(b.path)}
-            />
-          {:else}
-            <span class="empty">No briefs yet</span>
-          {/each}
+          <!-- Same cap as the focused list, so many pins can't push rows off-screen. -->
+          <div class={widget.restRows.length > 8 ? "capped scroll-thin" : ""}>
+            {#each widget.restRows as b, i (b.path)}
+              <WidgetRow
+                brief={b}
+                lead={i === 0}
+                still
+                pinned={widget.isPinned(b.path)}
+                showStatus={!settings.autoSyncFeeds}
+                inSession={session.isActive(b.path)}
+                fresh={integrations.freshCount(b.path)}
+              />
+            {:else}
+              <span class="empty">No briefs yet</span>
+            {/each}
+          </div>
         </button>
       {:else}
         <div class="list {roster.length > 8 ? 'capped scroll-thin' : ''}">
@@ -431,7 +434,8 @@
   .list {
     padding-bottom: 4px;
   }
-  .list.capped {
+  .list.capped,
+  .rest .capped {
     max-height: 240px;
     overflow-y: auto;
     transform: translateZ(0);

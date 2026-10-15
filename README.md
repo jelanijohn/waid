@@ -96,7 +96,8 @@ Full frontmatter reference (webhook headers, `{{secret}}`, app-owned regions):
 - **Quick capture** — **⌘/Ctrl+K** (or global **Ctrl+Shift+Space**) appends a
   timestamped note under a project's `## Captures`.
 - **Widget mode** — the titlebar's widget button shrinks the window to a small
-  always-on-top roster: at rest it shows one line for your current project,
+  roster that floats above other windows (the *Always on top* and *Always
+  present* settings control that): at rest it shows one line for your current project,
   on focus every non-archived brief. Open a row for its Current State, feed
   counts, launch chips, and NeuroSkill session control — inline under the row
   or as a side leaf (the *Widget detail* setting). Quick capture goes to the

@@ -945,7 +945,8 @@ errors and request bookkeeping (below). A feed's `poll: false` opts it out
   style, project-order reset, the **Brief layout** and **Widget detail**
   segmented controls, the **Widget opacity** slider (30–100%, with an inline
   mock-panel preview over a desktop-like backdrop since the widget itself is
-  never on screen while Settings is open; saved on release), accent, density.
+  never on screen while Settings is open; saved on release), the **Widget
+  window** toggles (*Always on top*, *Always present*), accent, density.
   **Sync & GitHub**: *Sync on open*, the opt-in *Auto-sync* toggle (with an ⓘ
   polling-rates tooltip) and its dormant-after-days input, and the GitHub
   token. **Gmail**: the **bring-your-own Google OAuth client**
@@ -955,10 +956,13 @@ errors and request bookkeeping (below). A feed's `poll: false` opts it out
   optional key). Token fields here carry the same **`CredentialHelp`** icons as
   the integrations modal.
 - **Widget mode (`WidgetShell` / `WidgetRow` / `WidgetLeaf`, `stores/widget.svelte.ts`)**
-  — a small always-on-top roster presentation of the **same `main` window**
-  (no second window). Entering un-maximizes, saves the dashboard rect, drops
-  the 720×480 minimum, sets always-on-top, and sizes the window to the
-  measured content; exiting restores all of it (`widgetWindow.ts` owns every
+  — a small roster presentation of the **same `main` window** (no second
+  window) that floats above other windows by default. Entering un-maximizes,
+  saves the dashboard rect, drops the 720×480 minimum, applies the widget
+  window flags (`widgetAlwaysOnTop`, default on; `widgetAlwaysPresent` —
+  visible on all workspaces via `setVisibleOnAllWorkspaces`, default off,
+  macOS/Linux only, skipped on Windows), and sizes the window to the
+  measured content; exiting clears both flags unconditionally and restores the rest (`widgetWindow.ts` owns every
   window call, all errors swallowed so `vite dev` no-ops). The dashboard stays
   **mounted but hidden** (unsaved edits and sessions survive) and every store
   is shared, so nothing syncs across modes. **At rest** (window blurred, 200ms
@@ -983,7 +987,8 @@ errors and request bookkeeping (below). A feed's `poll: false` opts it out
   the side leaf always opens right and position memory is skipped. On Linux,
   Tauri's monitor getters are avoided (they corrupt the X connection) and the
   screen is read from the DOM instead. Needs `core:window:allow-set-size` /
-  `allow-set-min-size` / `allow-set-position` / `allow-set-always-on-top` in
+  `allow-set-min-size` / `allow-set-position` / `allow-set-always-on-top` /
+  `allow-set-visible-on-all-workspaces` in
   `capabilities/default.json`. Launch, webhook and sync-all logic moved to
   `actions.ts`, and NeuroSkill session state to `stores/session.svelte.ts`, so
   dashboard and widget share one implementation.
@@ -1099,7 +1104,9 @@ The visual layer has a named theme and shares branding with What's Next.
   not currently surfaced in the UI.)*
 - **Quick capture** — `⌘/Ctrl+K` (or global `Ctrl+Shift+Space`) → modal → pick a
   project → append a timestamped note under its `## Captures` heading.
-- **Widget mode** — a compact always-on-top roster of the same window: one
+- **Widget mode** — a compact roster of the same window that floats above
+  other windows (*Always on top*, default on; *Always present* on every
+  virtual desktop, macOS/Linux, default off): one
   line at rest, every brief on focus, a per-brief leaf (Current State, feed
   counts, launch chips, session control) inline or to the side, its own
   capture field, and remembered position. *(See §5 UI.)*
@@ -1158,7 +1165,9 @@ The visual layer has a named theme and shares branding with What's Next.
   Rocks), alternate row shading, density, project-order reset, and the
   **Brief layout** control (two-column rail / body-first / quiet-top, with a
   resizable rail), plus **Widget detail** (accordion / side leaf) and
-  **Widget opacity** (30–100%, desktop shows through the widget), all in
+  **Widget opacity** (30–100%, desktop shows through the widget) and the
+  **Widget window** toggles (*Always on top*, default on; *Always present* —
+  on every virtual desktop, macOS/Linux only, default off), all in
   the **Settings** dialog's Appearance section (titlebar `tune` button).
 
 ### Keyboard / shortcuts
